@@ -18,6 +18,7 @@
 !.env.example
 *.log
 *.rs.bk
+__pycache__/
 .DS_Store
 Thumbs.db
 /.idea/

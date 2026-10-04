@@ -1,0 +1,160 @@
+name: Client releases
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Optional full SHA from main to build again (defaults to main head)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Do not cancel builds on later pushes: every new first-parent main commit gets
+# its own four-platform release. Only the short publication jobs are serialized.
+jobs:
+  prepare:
+    name: Select every new main commit
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      commits: ${{ steps.plan.outputs.commits }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Test package validation and publication ordering
+        run: python -m unittest discover -s scripts/release -v
+      - name: Plan commit and platform matrix
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          COMMIT: ${{ inputs.commit }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: python scripts/release/plan.py --event "$EVENT" --before "$BEFORE" --after "$AFTER" --commit "$COMMIT" --repository "$GITHUB_REPOSITORY"
+
+  build:
+    name: ${{ matrix.target }} at ${{ matrix.commit }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      TARGET: ${{ matrix.target }}
+      COMMIT: ${{ matrix.commit }}
+      # The explicit target prevents this flag from affecting host build tools.
+      RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.commit }}
+          persist-credentials: false
+          lfs: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Cache Rust build dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: client-release-v1-${{ matrix.target }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}-${{ matrix.commit }}
+          restore-keys: |
+            client-release-v1-${{ matrix.target }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}-
+            client-release-v1-${{ matrix.target }}-rust-1.98.1-
+      - name: Linux windowing dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libegl1-mesa-dev libgl1-mesa-dev
+      - name: Test the release configuration
+        run: cargo test --workspace --release --locked --target "$TARGET"
+      - name: Build client and standalone launcher
+        run: cargo build --release --locked --target "$TARGET" -p rubblekin_client -p rubblekin_launcher
+      - name: Log Linux runtime requirements
+        if: runner.os == 'Linux'
+        run: |
+          ldd "target/$TARGET/release/rubblekin"
+          ldd "target/$TARGET/release/rubblekin-launcher"
+          readelf --version-info "target/$TARGET/release/rubblekin" | grep GLIBC_
+      - name: Package native applications
+        run: python scripts/release/package.py package --target "$TARGET" --binary-dir "target/$TARGET/release" --output-dir dist --commit "$COMMIT"
+      - name: Verify extracted packages start
+        run: python scripts/release/smoke.py --target "$TARGET" --directory dist
+      - name: Verify launcher installs and starts the native client
+        env:
+          RUBBLEKIN_TEST_CLIENT_ARCHIVE: ${{ github.workspace }}/dist/rubblekin-client-${{ matrix.target }}.zip
+        run: cargo test --release --locked --target "$TARGET" -p rubblekin_launcher --lib tests::installs_packaged_client_and_starts_help -- --ignored --exact
+      - uses: actions/upload-artifact@v7
+        with:
+          name: client-${{ matrix.commit }}-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Release ${{ matrix.commit }}
+    needs: [prepare, build]
+    # A failed build for one commit must not discard other complete commits.
+    # A missing platform fails manifest assembly for that commit only.
+    if: always() && !cancelled() && needs.prepare.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        commit: ${{ fromJSON(needs.prepare.outputs.commits) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    concurrency:
+      group: client-release-publication
+      queue: max
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: client-${{ matrix.commit }}-*
+          path: dist
+          merge-multiple: true
+      - name: Publish complete release and promote newest main commit
+        env:
+          # An optional repository-scoped token permits historical releases whose
+          # workflow files differ from main (Contents + Workflows write).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          COMMIT: ${{ matrix.commit }}
+        run: python scripts/release/publish.py --directory dist --commit "$COMMIT" --repository "$GITHUB_REPOSITORY"

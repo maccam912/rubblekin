@@ -6,6 +6,8 @@
 !crates/
 !crates/client/
 !crates/client/Cargo.toml
+!crates/launcher/
+!crates/launcher/Cargo.toml
 !crates/core/
 !crates/core/**
 !crates/server/

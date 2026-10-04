@@ -7,6 +7,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 # Cargo resolves the workspace, but the server does not compile Bevy or need assets.
 COPY crates/client/Cargo.toml ./crates/client/Cargo.toml
+COPY crates/launcher/Cargo.toml ./crates/launcher/Cargo.toml
 COPY crates/core ./crates/core
 COPY crates/server ./crates/server
 RUN cargo test --locked -p rubblekin_core -p rubblekin_server \

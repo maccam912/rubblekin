@@ -1,0 +1,25 @@
+[package]
+name = "rubblekin_launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rubblekin-launcher"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+dirs = "7"
+eframe = { version = "=0.36.2", default-features = false, features = ["accesskit", "glow", "x11", "wayland"] }
+sha2 = "0.11"
+tempfile = "3.27"
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }

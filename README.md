@@ -6,7 +6,47 @@ A first playable voxel valley: walk through editable terrain, build with a creat
 
 This is a working prototype for trusted cooperative play. It has no accounts, public-server authentication, TLS, ownership claims, quests, combat, or complete economy.
 
-## Run locally
+## Download and play
+
+Download a **rubblekin-launcher** ZIP from [the latest release](https://github.com/maccam912/rubblekin/releases/latest), extract it, and open the launcher. No Rust installation is needed. Keep the launcher: it checks GitHub on each start, downloads the newest complete client release, and opens the game automatically. Its window shows update progress and offers Retry or **Play installed version** if an update fails and a verified client is installed. The first launch needs internet access.
+
+| Computer | Launcher archive |
+| --- | --- |
+| Windows x64 | `rubblekin-launcher-x86_64-pc-windows-msvc.zip` |
+| Linux x64 | `rubblekin-launcher-x86_64-unknown-linux-gnu.zip` |
+| Apple Silicon Mac | `rubblekin-launcher-aarch64-apple-darwin.zip` |
+| Intel Mac | `rubblekin-launcher-x86_64-apple-darwin.zip` |
+
+On macOS, move **Rubblekin Launcher.app** to Applications. Bundles are ad-hoc signed but not Developer ID signed or notarized; the first browser-downloaded launch may require **System Settings → Privacy & Security → Open Anyway**. Windows builds are unsigned and may show SmartScreen. On Linux, use `chmod +x rubblekin-launcher` if your archive tool drops executable permissions. Linux builds use Ubuntu 22.04 and need desktop X11/Wayland libraries, OpenGL for the launcher, and a working Vulkan driver for the game. Native playtests on Windows/Linux and representative integrated graphics remain necessary.
+
+| OS | Data directory |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\rubblekin` |
+| Linux | `$XDG_DATA_HOME/rubblekin`, default `~/.local/share/rubblekin` |
+| macOS | `~/Library/Application Support/rubblekin` |
+
+Local worlds remain in `game/saves/valley.json` through updates; screenshots use `game/artifacts`, and the latest client log is `logs/client.log`. Downloads use `clients/<target>/<commit>`, retaining the current and previous installed version for each architecture. Updates verify SHA-256, stage a complete installation, then atomically change the selected version. They do not modify saves. Existing checkout saves are not moved automatically; with the game stopped, copy one into `game/saves/valley.json` if desired.
+
+```sh
+rubblekin-launcher --headless -- --low --connect 147.224.165.110:7878
+rubblekin-launcher --offline
+rubblekin-launcher --data-dir /path/to/rubblekin-data
+cargo run --locked -p rubblekin_launcher
+```
+
+Client arguments go after `--`; relative client paths resolve inside `game`. Headless mode fails visibly when an update cannot complete; `--offline` explicitly chooses the installed client. The launcher updates the client, not itself; manifest format 1 must remain compatible with previously downloaded launchers. Client ZIPs are also available for direct use without automatic updates.
+
+## Automatic client releases
+
+[Client releases](.github/workflows/client-release.yml) builds/tests all four platforms for every new first-parent commit pushed to `main`, including multiple commits per push and documentation changes. Merge commits represent their merged branches; branch/PR commits do not publish. Commits predating the release tooling are skipped. A push supports at most 64 releasable commits (GitHub's 256-job matrix limit); larger batches and non-fast-forward pushes fail explicitly and can be released individually with **Run workflow → commit**. GitHub's explicit `[skip ci]` commit directive also skips this workflow.
+
+Each complete build publishes `client-<full SHA>` with four client ZIPs, four launcher ZIPs, `client-manifest.json`, and `SHA256SUMS`. Drafts stay hidden until every file is uploaded. Publication is serialized; commit order on `main`, rather than completion time, determines **Latest**. A failed platform cannot publish a partial release, and a failed commit does not block other complete commits. Reruns resume drafts and preserve published assets. Players read the public latest-manifest download and need no GitHub credentials.
+
+The workflow normally uses `GITHUB_TOKEN`, granting contents write only to planning/publication jobs. Tags are reserved before the long builds. GitHub can require **Workflows: write** for historical commits whose workflow files differ from current `main`. If such a rerun is rejected, create/push the exact lightweight `client-<SHA>` tag at that SHA with an authorized account, or configure an optional repository `RELEASE_TOKEN` secret with **Contents: write** and **Workflows: write**. That token is used only after an ordinary mutating request is rejected. Normal current-main publication needs no extra token.
+
+Run tooling tests with Python 3.11+ using `python3 -m unittest discover -s scripts/release -v`. `package.py` packages native binaries; `smoke.py` verifies extracted applications. Mac bundles must be packaged on macOS. The workflow uses GitHub's documented `concurrency.queue: max`; older Actionlint versions may not recognize it.
+
+## Run from source
 
 Use Rust/Cargo compatible with the workspace's Rust 1.95 minimum, then run from the repository root:
 
@@ -167,7 +207,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Tests include real localhost sockets, so the test environment must permit local networking. All 45 tests pass locally on macOS: 13 core, 16 client, and 16 server. Join-screen tests cover validation, failed connections, rapid text entry, and join/leave/rejoin/disconnect cleanup. They cover core geometry and physics, terrain meshing and client handshake, multiplayer edits and reconnects, saves, autonomous behavior, and graceful server shutdown. Movement regressions cover delayed stop acknowledgments, uneven-frame stairs/cliffs, real localhost prediction, exact-once execution, and server time/sequence validation. Terrain regressions also check corner shading, face winding, and affected chunks after edits. macOS/Linux shutdown tests send signals to child server processes they create. Workspace Clippy with warnings denied and formatting checks pass. The [Linux/Windows/macOS CI matrix](.github/workflows/ci.yml) is running on GitHub; live rendering and platform performance still require native playtests on each target.
+Tests include real localhost sockets, so the test environment must permit local networking. All 57 ordinary tests pass locally on macOS: 13 core, 16 client, 16 server, and 12 launcher. Another native package integration test is run explicitly after packaging; on macOS it verified a real client ZIP download, installation, bundle signature, and child process startup. The 22 Python release-tooling tests also pass. Join-screen tests cover validation, failed connections, rapid text entry, and join/leave/rejoin/disconnect cleanup. They cover core geometry and physics, terrain meshing and client handshake, multiplayer edits and reconnects, saves, autonomous behavior, and graceful server shutdown. Movement regressions cover delayed stop acknowledgments, uneven-frame stairs/cliffs, real localhost prediction, exact-once execution, and server time/sequence validation. Terrain regressions also check corner shading, face winding, and affected chunks after edits. macOS/Linux shutdown tests send signals to child server processes they create. Workspace Clippy with warnings denied and formatting checks pass. The [Linux/Windows/macOS CI matrix](.github/workflows/ci.yml) and client release workflow check pushed changes. Live rendering and platform performance still require native playtests on each target.
 
 Capture a reproducible initial scene:
 
