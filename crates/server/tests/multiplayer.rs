@@ -11,7 +11,7 @@ use std::{
 use rubblekin_core::{
     physics::{MoveInput, move_character},
     protocol::*,
-    world::{Block, BlockPos, CELL_SIZE, World},
+    world::{Block, BlockPos, CELL_SIZE, World, WorldGeneration},
 };
 use rubblekin_server::{ServerConfig, spawn};
 
@@ -140,10 +140,18 @@ fn nearby_air() -> BlockPos {
 
 #[test]
 fn geographic_world_replicates_edits_and_preserves_its_generator_across_restart() {
-    use rubblekin_core::world::WorldGeneration;
+    assert_geographic_world_restart(WorldGeneration::GeographyV1);
+}
+
+#[test]
+fn geography_v2_replicates_edits_and_preserves_its_generator_across_restart() {
+    assert_geographic_world_restart(WorldGeneration::GeographyV2);
+}
+
+fn assert_geographic_world_restart(world_generation: WorldGeneration) {
     let save = TestSave::new();
     let mut config = save.config(true);
-    config.generation = WorldGeneration::GeographyV1;
+    config.generation = world_generation;
     let server = spawn(config.clone()).unwrap();
     let (mut builder, welcome) = Client::connect(server.addr, "Island builder");
     let (seed, body) = match welcome {
@@ -154,7 +162,7 @@ fn geographic_world_replicates_edits_and_preserves_its_generator_across_restart(
             players,
             ..
         } => {
-            assert_eq!(generation, WorldGeneration::GeographyV1);
+            assert_eq!(generation, world_generation);
             (
                 seed,
                 players
@@ -166,7 +174,7 @@ fn geographic_world_replicates_edits_and_preserves_its_generator_across_restart(
         }
         _ => unreachable!(),
     };
-    let world = World::generate(seed, WorldGeneration::GeographyV1);
+    let world = World::generate(seed, world_generation);
     assert!(
         (body.position[1] - world.surface_height(body.position[0], body.position[2])).abs() < 0.1
     );
@@ -175,9 +183,9 @@ fn geographic_world_replicates_edits_and_preserves_its_generator_across_restart(
     assert!(matches!(
         welcome,
         ServerMessage::Welcome {
-            generation: WorldGeneration::GeographyV1,
+            generation,
             ..
-        }
+        } if generation == world_generation
     ));
     let position = BlockPos::new(
         (body.position[0] / CELL_SIZE).floor() as i32 + 4,
@@ -219,7 +227,11 @@ fn geographic_world_replicates_edits_and_preserves_its_generator_across_restart(
         .unwrap(),
     );
     fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
-    config.generation = WorldGeneration::ValleyV1;
+    config.generation = match world_generation {
+        WorldGeneration::GeographyV1 => WorldGeneration::GeographyV2,
+        WorldGeneration::GeographyV2 => WorldGeneration::ValleyV1,
+        WorldGeneration::ValleyV1 => unreachable!(),
+    };
     config.seed = 999;
     let restarted = spawn(config).unwrap();
     let (client, welcome) = Client::connect(restarted.addr, "Returning");
@@ -230,7 +242,7 @@ fn geographic_world_replicates_edits_and_preserves_its_generator_across_restart(
             edits,
             ..
         } => {
-            assert_eq!(generation, WorldGeneration::GeographyV1);
+            assert_eq!(generation, world_generation);
             assert_eq!(restored_seed, seed);
             assert!(
                 edits
@@ -399,17 +411,19 @@ fn observer_admission_and_old_protocol_fail_with_notices_before_disconnect() {
     assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("disabled")));
     denied.until_disconnected(0);
 
-    // Actual protocol-v2 clients omit mode; deserialize that shape far enough
-    // to explain the required update instead of silently dropping the socket.
-    let mut outdated = Client::open(server.addr);
-    outdated
-        .writer
-        .write_all(b"{\"Hello\":{\"version\":2,\"name\":\"Old client\"}}\n")
-        .unwrap();
-    let notice = outdated.until(|message| matches!(message, ServerMessage::Notice { .. }));
-    assert!(matches!(notice, ServerMessage::Notice { text }
-        if text.contains("version mismatch") && text.contains(&format!("server uses {PROTOCOL_VERSION}"))));
-    outdated.until_disconnected(0);
+    // Protocol-v2 clients omit mode. Protocol-v4 clients know GeographyV1 but
+    // cannot generate V2. Both receive an update notice before disconnecting.
+    for hello in [
+        "{\"Hello\":{\"version\":2,\"name\":\"Old client\"}}\n",
+        "{\"Hello\":{\"version\":4,\"name\":\"Old island client\",\"mode\":\"Player\"}}\n",
+    ] {
+        let mut outdated = Client::open(server.addr);
+        outdated.writer.write_all(hello.as_bytes()).unwrap();
+        let notice = outdated.until(|message| matches!(message, ServerMessage::Notice { .. }));
+        assert!(matches!(notice, ServerMessage::Notice { text }
+            if text.contains("version mismatch") && text.contains(&format!("server uses {PROTOCOL_VERSION}"))));
+        outdated.until_disconnected(0);
+    }
 
     let (mut player, welcome) = Client::connect(server.addr, "Still available");
     assert!(matches!(welcome, ServerMessage::Welcome { players, .. } if players.len() == 1));

@@ -2,6 +2,7 @@
 //! cargo run --release -p rubblekin_core --example geography -- 42 /tmp/geography.ppm
 //! PPM is deliberately dependency-free; open or convert it with an image viewer.
 use rubblekin_core::geography::{GRID_SIDE, GRID_SPACING, Geography, WORLD_SIZE};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
@@ -11,18 +12,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed: u32 = arguments.get(1).map_or(Ok(42), |s| s.parse())?;
     let output = arguments.get(2).map_or("geography.ppm", String::as_str);
     let started = Instant::now();
-    let geography = Geography::generate(seed);
+    let version = arguments.get(3).map_or("v2", String::as_str);
+    let geography = match version {
+        "v1" => Geography::generate(seed),
+        "v2" => Geography::generate_v2(seed),
+        _ => return Err("generation must be v1 or v2".into()),
+    };
     let generated = started.elapsed();
     let side = 1537;
     let mut file = BufWriter::new(File::create(output)?);
     write!(file, "P6\n{side} {side}\n255\n")?;
     let spawn = geography.spawn();
     let mut pixels = Vec::with_capacity(side * side * 3);
+    let mut biomes = BTreeMap::<&str, usize>::new();
     for row in 0..side {
         for col in 0..side {
             let x = (col as f32 / (side - 1) as f32 - 0.5) * WORLD_SIZE;
             let z = (row as f32 / (side - 1) as f32 - 0.5) * WORLD_SIZE;
             let sample = geography.sample(x, z);
+            *biomes.entry(sample.biome.name()).or_default() += 1;
             let [mut red, mut green, mut blue, _] = sample.biome.color();
             let left = geography.sample(x - 24.0, z).height;
             let right = geography.sample(x + 24.0, z).height;
@@ -82,5 +90,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Spawn [{:.1}, {:.1}, {:.1}] m; map cross marks spawn",
         spawn[0], spawn[1], spawn[2]
     );
+    println!("Generation {version}; sampled biome coverage:");
+    for (name, count) in biomes {
+        println!(
+            "  {name}: {:.2}%",
+            count as f32 * 100.0 / (side * side) as f32
+        );
+    }
     Ok(())
 }

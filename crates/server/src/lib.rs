@@ -52,7 +52,7 @@ impl Default for ServerConfig {
             bind_addr: "127.0.0.1:7878".into(),
             save_path: "saves/world.json".into(),
             seed: 42,
-            generation: WorldGeneration::GeographyV1,
+            generation: WorldGeneration::GeographyV2,
             allow_admin: false,
         }
     }

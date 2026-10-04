@@ -14,6 +14,8 @@
 !/artifacts/observer-native.png
 !/artifacts/geography-map.png
 !/artifacts/geography-ground.png
+!/artifacts/island-biomes-v2.png
+!/artifacts/island-detail-ground.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

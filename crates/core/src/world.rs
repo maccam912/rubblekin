@@ -26,6 +26,7 @@ pub enum WorldGeneration {
     #[default]
     ValleyV1,
     GeographyV1,
+    GeographyV2,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -129,6 +130,70 @@ struct GeographicColumn {
     leaves: Option<(i32, i32)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeKind {
+    Broadleaf,
+    Conifer,
+    Scrub,
+}
+
+impl TreeKind {
+    pub fn leaf_color(self) -> [f32; 4] {
+        match self {
+            Self::Broadleaf => Block::Leaves.color(),
+            Self::Conifer => [0.18, 0.34, 0.25, 1.0],
+            Self::Scrub => [0.46, 0.48, 0.23, 1.0],
+        }
+    }
+}
+
+/// One deterministic tree, shared by editable columns and distant scenery.
+/// Positions, heights, and crown radii are in voxel cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeneratedTree {
+    pub base: BlockPos,
+    pub trunk_height: i32,
+    pub kind: TreeKind,
+    pub crown_radius: i32,
+}
+
+impl GeneratedTree {
+    pub fn crown_y(self) -> i32 {
+        self.base.y + self.trunk_height - 1
+    }
+
+    pub fn leaf_bounds(self, dx: i32, dz: i32) -> Option<(i32, i32)> {
+        let horizontal = dx * dx + dz * dz;
+        let (bottom, top) = match self.kind {
+            TreeKind::Broadleaf => (-4, 4),
+            TreeKind::Conifer => (-8, 2),
+            TreeKind::Scrub => (-2, 2),
+        };
+        let mut low = i32::MAX;
+        let mut high = i32::MIN;
+        for dy in bottom..=top {
+            let covered = match self.kind {
+                TreeKind::Broadleaf => horizontal + dy * dy * 2 <= 24,
+                TreeKind::Scrub => horizontal + dy * dy <= 5,
+                TreeKind::Conifer => {
+                    let radius = match dy {
+                        ..=-5 => 4,
+                        -4..=-2 => 3,
+                        -1..=0 => 2,
+                        _ => 1,
+                    };
+                    horizontal <= radius * radius
+                }
+            };
+            if covered {
+                low = low.min(self.crown_y() + dy);
+                high = high.max(self.crown_y() + dy);
+            }
+        }
+        (low <= high).then_some((low, high))
+    }
+}
+
 impl GeographicColumn {
     fn top(self) -> i32 {
         self.height
@@ -183,10 +248,14 @@ impl World {
     pub fn generate(seed: u32, generation: WorldGeneration) -> Self {
         match generation {
             WorldGeneration::ValleyV1 => Self::new(seed),
-            WorldGeneration::GeographyV1 => Self {
+            WorldGeneration::GeographyV1 | WorldGeneration::GeographyV2 => Self {
                 seed,
                 generation,
-                geography: Some(Arc::new(Geography::generate(seed))),
+                geography: Some(Arc::new(match generation {
+                    WorldGeneration::GeographyV1 => Geography::generate(seed),
+                    WorldGeneration::GeographyV2 => Geography::generate_v2(seed),
+                    WorldGeneration::ValleyV1 => unreachable!(),
+                })),
                 geographic_columns: Arc::new(RwLock::new(HashMap::new())),
                 edited_columns: HashMap::new(),
                 heights: Vec::new(),
@@ -677,57 +746,23 @@ impl World {
             leaves: None,
         };
 
-        // Each twelve-meter square owns one possible tree. Its crown stays
-        // inside the square, so querying a column needs no global tree array.
+        // Query only the tree owned by this twelve-meter square. Every crown
+        // stays inside its square, including on negative coordinates.
         let grid_x = x.div_euclid(24);
         let grid_z = z.div_euclid(24);
-        let tree_hash = hash(grid_x, grid_z, self.seed.wrapping_add(817));
-        let tree_x = grid_x * 24 + 6 + ((tree_hash >> 4) % 12) as i32;
-        let tree_z = grid_z * 24 + 6 + ((tree_hash >> 12) % 12) as i32;
+        let (_, tree_x, tree_z) = self.tree_anchor(grid_x, grid_z);
         let dx = x - tree_x;
         let dz = z - tree_z;
-        if dx * dx + dz * dz <= 24 {
-            let tree_mx = (tree_x as f32 + 0.5) * CELL_SIZE;
-            let tree_mz = (tree_z as f32 + 0.5) * CELL_SIZE;
-            let tree_sample = geography.sample(tree_mx, tree_mz);
-            let density = match tree_sample.biome {
-                Biome::Forest => 75,
-                Biome::Rainforest => 95,
-                Biome::Grassland => 16,
-                Biome::Tundra => 5,
-                _ => 0,
-            };
-            let spawn = geography.spawn();
-            let outside_clearing =
-                (tree_mx - spawn[0]).powi(2) + (tree_mz - spawn[2]).powi(2) > 12.0 * 12.0;
-            let above_water = tree_sample
-                .water
-                .is_none_or(|water| water < tree_sample.height);
-            let gentle_slope = [(2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0)]
-                .into_iter()
-                .all(|(ox, oz)| {
-                    (geography.sample(tree_mx + ox, tree_mz + oz).height - tree_sample.height).abs()
-                        < 1.5
-                });
-            if tree_hash % 100 < density && outside_clearing && above_water && gentle_slope {
-                let bottom = (tree_sample.height / CELL_SIZE).floor() as i32 + 1;
-                let trunk_height = 10 + ((tree_hash >> 20) % 7) as i32;
-                let crown = bottom + trunk_height - 1;
-                if dx == 0 && dz == 0 {
-                    column.wood = Some((bottom.max(height + 1), crown));
-                }
-                let horizontal = dx * dx + dz * dz;
-                let mut low = i32::MAX;
-                let mut high = i32::MIN;
-                for dy in -4_i32..=4 {
-                    if horizontal + dy * dy * 2 <= 24 && crown + dy > height {
-                        low = low.min(crown + dy);
-                        high = high.max(crown + dy);
-                    }
-                }
-                if low <= high {
-                    column.leaves = Some((low, high));
-                }
+        if dx * dx + dz * dz <= 24
+            && let Some(tree) = self.tree_at(grid_x, grid_z)
+        {
+            if dx == 0 && dz == 0 {
+                column.wood = Some((tree.base.y.max(height + 1), tree.crown_y()));
+            }
+            if let Some((low, high)) = tree.leaf_bounds(dx, dz)
+                && high > height
+            {
+                column.leaves = Some((low.max(height + 1), high));
             }
         }
         let mut cached = self
@@ -741,6 +776,73 @@ impl World {
         }
         cached.insert((x, z), column);
         Some(column)
+    }
+
+    fn tree_anchor(&self, grid_x: i32, grid_z: i32) -> (u32, i32, i32) {
+        let tree_hash = hash(grid_x, grid_z, self.seed.wrapping_add(817));
+        (
+            tree_hash,
+            grid_x * 24 + 6 + ((tree_hash >> 4) % 12) as i32,
+            grid_z * 24 + 6 + ((tree_hash >> 12) % 12) as i32,
+        )
+    }
+
+    /// The same candidate is used at every level of detail. No tree collection
+    /// for the whole island is allocated, and this never consumes saved edits.
+    pub fn tree_at(&self, grid_x: i32, grid_z: i32) -> Option<GeneratedTree> {
+        let geography = self.geography()?;
+        let (tree_hash, tree_x, tree_z) = self.tree_anchor(grid_x, grid_z);
+        if !self.contains_block(BlockPos::new(tree_x, self.min_y(), tree_z)) {
+            return None;
+        }
+        let tree_mx = (tree_x as f32 + 0.5) * CELL_SIZE;
+        let tree_mz = (tree_z as f32 + 0.5) * CELL_SIZE;
+        let sample = geography.sample(tree_mx, tree_mz);
+        let refined = self.generation == WorldGeneration::GeographyV2;
+        let (density, kind) = match sample.biome {
+            Biome::Forest => (75, TreeKind::Broadleaf),
+            Biome::Rainforest => (95, TreeKind::Broadleaf),
+            Biome::PineForest => (72, TreeKind::Conifer),
+            Biome::Shrubland => (18, TreeKind::Scrub),
+            Biome::Grassland => (if refined { 5 } else { 16 }, TreeKind::Broadleaf),
+            Biome::Tundra if !refined => (5, TreeKind::Broadleaf),
+            _ => return None,
+        };
+        if tree_hash % 100 >= density {
+            return None;
+        }
+        let spawn = geography.spawn();
+        if (tree_mx - spawn[0]).powi(2) + (tree_mz - spawn[2]).powi(2) <= 12.0 * 12.0
+            || sample.water.is_some_and(|water| water >= sample.height)
+        {
+            return None;
+        }
+        let slope_limit = if kind == TreeKind::Conifer { 2.5 } else { 1.5 };
+        let gentle_slope = [(2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0)]
+            .into_iter()
+            .all(|(ox, oz)| {
+                let nearby = geography.sample(tree_mx + ox, tree_mz + oz);
+                (nearby.height - sample.height).abs() < slope_limit
+                    && (!refined || nearby.water.is_none())
+            });
+        if !gentle_slope {
+            return None;
+        }
+        let trunk_height = match kind {
+            TreeKind::Broadleaf => 10 + ((tree_hash >> 20) % 7) as i32,
+            TreeKind::Conifer => 18 + ((tree_hash >> 20) % 7) as i32,
+            TreeKind::Scrub => 3 + ((tree_hash >> 20) % 3) as i32,
+        };
+        Some(GeneratedTree {
+            base: BlockPos::new(
+                tree_x,
+                (sample.height / CELL_SIZE).floor() as i32 + 1,
+                tree_z,
+            ),
+            trunk_height,
+            kind,
+            crown_radius: if kind == TreeKind::Scrub { 2 } else { 4 },
+        })
     }
 
     fn generate_trees(&mut self) {
@@ -855,6 +957,73 @@ fn value_noise(x: f32, z: f32, seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_tree_shapes_have_distinct_bounded_canopies() {
+        for (kind, trunk_height, low, high) in [
+            (TreeKind::Broadleaf, 12, -3, 3),
+            (TreeKind::Conifer, 20, -8, 2),
+            (TreeKind::Scrub, 4, -2, 2),
+        ] {
+            let tree = GeneratedTree {
+                base: BlockPos::new(-19, 100, -7),
+                trunk_height,
+                kind,
+                crown_radius: if kind == TreeKind::Scrub { 2 } else { 4 },
+            };
+            assert_eq!(
+                tree.leaf_bounds(0, 0),
+                Some((tree.crown_y() + low, tree.crown_y() + high))
+            );
+            for dx in -6..=6 {
+                for dz in -6..=6 {
+                    if let Some((bottom, top)) = tree.leaf_bounds(dx, dz) {
+                        assert!(dx.abs() <= tree.crown_radius && dz.abs() <= tree.crown_radius);
+                        assert!(bottom >= tree.base.y && top < tree.base.y + 30);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_trees_match_editable_voxels_across_biomes_and_negative_grids() {
+        let world = World::generate(42, WorldGeneration::GeographyV2);
+        let mut found = [false; 3];
+        for gx in (-1_100..1_100).step_by(9) {
+            for gz in (-1_100..1_100).step_by(9) {
+                let Some(tree) = world.tree_at(gx, gz) else {
+                    continue;
+                };
+                let index = match tree.kind {
+                    TreeKind::Broadleaf => 0,
+                    TreeKind::Conifer => 1,
+                    TreeKind::Scrub => 2,
+                };
+                if found[index] {
+                    continue;
+                }
+                assert!(tree.base.x.div_euclid(24) == gx && tree.base.z.div_euclid(24) == gz);
+                assert_eq!(world.block(tree.base), Block::Wood);
+                let dx = tree.crown_radius;
+                let (low, high) = tree.leaf_bounds(dx, 0).unwrap();
+                for y in low..=high {
+                    let pos = BlockPos::new(tree.base.x + dx, y, tree.base.z);
+                    assert_eq!(world.block(pos), Block::Leaves);
+                }
+                let outside = BlockPos::new(tree.base.x + 5, tree.crown_y() + 2, tree.base.z);
+                assert_ne!(world.block(outside), Block::Leaves);
+                found[index] = true;
+            }
+            if found.into_iter().all(|value| value) {
+                break;
+            }
+        }
+        assert_eq!(
+            found, [true; 3],
+            "seed 42 must visibly contain woods, pine, and scrub"
+        );
+    }
 
     fn geographic_world() -> World {
         static WORLD: std::sync::OnceLock<World> = std::sync::OnceLock::new();

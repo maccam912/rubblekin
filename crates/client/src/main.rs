@@ -182,7 +182,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .save
                 .unwrap_or_else(|| PathBuf::from("saves/geography.json")),
             seed: options.seed.unwrap_or(42),
-            generation: rubblekin_core::world::WorldGeneration::GeographyV1,
+            generation: rubblekin_core::world::WorldGeneration::GeographyV2,
             allow_admin: true,
         },
         options.graphics,

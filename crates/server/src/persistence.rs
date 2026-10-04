@@ -163,18 +163,22 @@ fn invalid(message: impl Into<String>) -> io::Error {
 mod tests {
     use super::*;
     use rubblekin_core::world::{Block, BlockPos};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
 
     struct TestPath(std::path::PathBuf);
 
     impl TestPath {
         fn new() -> Self {
             Self(std::env::temp_dir().join(format!(
-                "rubblekin-generation-save-{}-{}.json",
+                "rubblekin-generation-save-{}-{}-{}.json",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT_PATH.fetch_add(1, Ordering::Relaxed)
             )))
         }
     }
@@ -206,7 +210,7 @@ mod tests {
         old["npc"].as_object_mut().unwrap().remove("home");
         fs::write(&path.0, serde_json::to_vec(&old).unwrap()).unwrap();
 
-        let loaded = Simulation::load(&path.0, 999, WorldGeneration::GeographyV1).unwrap();
+        let loaded = Simulation::load(&path.0, 999, WorldGeneration::GeographyV2).unwrap();
         assert_eq!(loaded.world.generation(), WorldGeneration::ValleyV1);
         assert_eq!(loaded.world.seed, 42);
         assert_eq!(loaded.world.block(position), Block::Brick);
@@ -217,9 +221,86 @@ mod tests {
         let updated: serde_json::Value =
             serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
         assert_eq!(updated["version"], 2);
-        let again = Simulation::load(&path.0, 999, WorldGeneration::GeographyV1).unwrap();
+        let again = Simulation::load(&path.0, 999, WorldGeneration::GeographyV2).unwrap();
         assert_eq!(again.world.generation(), WorldGeneration::ValleyV1);
         assert_eq!(again.world.edits(), sim.world.edits());
+    }
+
+    #[test]
+    fn geography_v1_save_keeps_original_columns_trees_and_edits_with_v2_default() {
+        let path = TestPath::new();
+        let mut world = World::generate(42, WorldGeneration::GeographyV1);
+        let trunk = BlockPos::new(5023, 410, -3594);
+        let crown = BlockPos::new(5023, 420, -3594);
+        let cut = BlockPos::new(6000, 374, -7000);
+        let placed = BlockPos::new(10000, 300, -12000);
+        // Captured from the original GeographyV1 generator, before V2. These
+        // samples catch a terrain or tree change hidden behind stable metadata.
+        assert_eq!(world.block(trunk), Block::Wood);
+        assert_eq!(world.block(crown), Block::Leaves);
+        assert_eq!(world.block(cut), Block::Stone);
+        world.set_block(trunk, Block::Air).unwrap();
+        world.set_block(cut, Block::Air).unwrap();
+        world.set_block(placed, Block::Brick).unwrap();
+        let sim = Simulation {
+            npc: Forager::new(&world),
+            world,
+            world_time: 217.5,
+        };
+        sim.save(&path.0).unwrap();
+
+        let loaded = Simulation::load(&path.0, 999, WorldGeneration::GeographyV2).unwrap();
+        assert_eq!(loaded.world.generation(), WorldGeneration::GeographyV1);
+        assert_eq!(loaded.world.seed, 42);
+        assert_eq!(loaded.world.edits(), sim.world.edits());
+        assert_eq!(loaded.world_time, 217.5);
+        assert_eq!(loaded.npc.snapshot.position, sim.npc.snapshot.position);
+        for (x, z, height, surface) in [
+            (0, 0, 458, Block::Grass),
+            (6000, -7000, 384, Block::Sand),
+            (10000, -12000, 269, Block::Sand),
+            (-16000, 10000, 245, Block::Grass),
+            (12000, 16000, 1587, Block::Sand),
+            (5023, -3594, 409, Block::Grass),
+        ] {
+            assert_eq!(loaded.world.height_at(x, z), height, "column {x},{z}");
+            assert_eq!(loaded.world.surface_block(x, z), surface, "column {x},{z}");
+        }
+        assert_eq!(loaded.world.block(trunk), Block::Air);
+        assert_eq!(loaded.world.block(crown), Block::Leaves);
+        assert_eq!(loaded.world.block(cut), Block::Air);
+        assert_eq!(loaded.world.block(placed), Block::Brick);
+        loaded.save(&path.0).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        assert_eq!(saved["version"], 2);
+        assert_eq!(saved["generation"], "GeographyV1");
+    }
+
+    #[test]
+    fn new_geography_v2_save_roundtrips_generator_seed_and_far_edits() {
+        let path = TestPath::new();
+        let mut sim = Simulation::load(&path.0, 42, WorldGeneration::GeographyV2).unwrap();
+        assert_eq!(sim.world.generation(), WorldGeneration::GeographyV2);
+        let height = sim.world.height_at(10000, -12000);
+        let cut = BlockPos::new(10000, height - 8, -12000);
+        let placed = BlockPos::new(10000, height + 30, -12000);
+        sim.world.set_block(cut, Block::Air).unwrap();
+        sim.world.set_block(placed, Block::Glass).unwrap();
+        sim.world_time = 412.5;
+        sim.save(&path.0).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        assert_eq!(saved["version"], 2);
+        assert_eq!(saved["generation"], "GeographyV2");
+
+        let loaded = Simulation::load(&path.0, 999, WorldGeneration::ValleyV1).unwrap();
+        assert_eq!(loaded.world.generation(), WorldGeneration::GeographyV2);
+        assert_eq!(loaded.world.seed, 42);
+        assert_eq!(loaded.world.height_at(10000, -12000), height);
+        assert_eq!(loaded.world.edits(), sim.world.edits());
+        assert_eq!(loaded.world.block(cut), Block::Air);
+        assert_eq!(loaded.world.block(placed), Block::Glass);
+        assert_eq!(loaded.world_time, 412.5);
+        assert_eq!(loaded.npc.snapshot.position, sim.npc.snapshot.position);
     }
 
     #[test]
@@ -242,7 +323,7 @@ mod tests {
             }
             let bytes = serde_json::to_vec(&value).unwrap();
             fs::write(&path.0, &bytes).unwrap();
-            assert!(Simulation::load(&path.0, 42, WorldGeneration::GeographyV1).is_err());
+            assert!(Simulation::load(&path.0, 42, WorldGeneration::GeographyV2).is_err());
             assert_eq!(fs::read(&path.0).unwrap(), bytes);
         }
     }

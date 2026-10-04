@@ -31,9 +31,27 @@ pub enum Biome {
     Tundra,
     Alpine,
     Snow,
+    PineForest,
+    Shrubland,
 }
 
 impl Biome {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Ocean => "Ocean",
+            Self::Beach => "Beach",
+            Self::Grassland => "Meadow",
+            Self::Forest => "Broadleaf woods",
+            Self::Rainforest => "Wet forest",
+            Self::Desert => "Desert",
+            Self::Tundra => "Tundra",
+            Self::Alpine => "Alpine",
+            Self::Snow => "Snow",
+            Self::PineForest => "Pine forest",
+            Self::Shrubland => "Dry scrub",
+        }
+    }
+
     /// Surface colors in sRGB; exposed for detailed and distant terrain alike.
     pub fn color(self) -> [f32; 4] {
         match self {
@@ -46,6 +64,8 @@ impl Biome {
             Self::Tundra => [0.55, 0.57, 0.40, 1.0],
             Self::Alpine => [0.54, 0.55, 0.53, 1.0],
             Self::Snow => [0.87, 0.91, 0.92, 1.0],
+            Self::PineForest => [0.31, 0.43, 0.34, 1.0],
+            Self::Shrubland => [0.59, 0.57, 0.31, 1.0],
         }
     }
 }
@@ -64,6 +84,7 @@ pub struct GeoSample {
 #[derive(Clone)]
 pub struct Geography {
     seed: u32,
+    version: u32,
     heights: Vec<f32>,
     filled: Vec<f32>,
     water: Vec<f32>,
@@ -77,6 +98,14 @@ pub struct Geography {
 
 impl Geography {
     pub fn generate(seed: u32) -> Self {
+        Self::generate_version(seed, 1)
+    }
+
+    pub fn generate_v2(seed: u32) -> Self {
+        Self::generate_version(seed, 2)
+    }
+
+    fn generate_version(seed: u32, version: u32) -> Self {
         let count = GRID_SIDE * GRID_SIDE;
         let mut heights = Vec::with_capacity(count);
         let mut moisture = Vec::with_capacity(count);
@@ -107,9 +136,12 @@ impl Geography {
             // coarse prevailing-wind approximation, not atmospheric physics.
             let west = i.saturating_sub(12).max(i / GRID_SIDE * GRID_SIDE);
             let shadow = ((heights[west] - heights[i]) / 1_100.0).clamp(0.0, 0.35);
-            moisture[i] = (moisture[i] - shadow
-                + (drainage.flow[i].max(1.0).ln() * 0.035).min(0.25))
-            .clamp(0.0, 1.0);
+            moisture[i] = if version >= 2 {
+                refined_moisture(x, z, heights[i], heights[west], seed, drainage.flow[i])
+            } else {
+                (moisture[i] - shadow + (drainage.flow[i].max(1.0).ln() * 0.035).min(0.25))
+                    .clamp(0.0, 1.0)
+            };
             if heights[i] < SEA_LEVEL
                 || drainage.filled[i] > heights[i] + 0.6
                 || drainage.flow[i] >= RIVER_CATCHMENT
@@ -119,6 +151,7 @@ impl Geography {
         }
         let mut geography = Self {
             seed,
+            version,
             heights,
             filled: drainage.filled,
             water,
@@ -179,7 +212,18 @@ impl Geography {
             ];
             for i in corners {
                 let level = self.filled[i];
-                if level > self.heights[i] + 0.6 && base < level {
+                if level > self.heights[i] + 0.6
+                    && base < level
+                    && (self.version == 1 || filled > base + 0.6)
+                {
+                    // A lake corner can border a lower downstream valley.
+                    // Its level belongs to the flooded basin, and must not
+                    // extend above that valley's interpolated spill surface.
+                    let level = if self.version >= 2 {
+                        level.min(filled)
+                    } else {
+                        level
+                    };
                     water = Some(water.map_or(level, |other| other.min(level)));
                 }
             }
@@ -191,6 +235,7 @@ impl Geography {
             + value_noise(x / 11.0, z / 11.0, self.seed.wrapping_add(82)) * 0.22;
         let mut height = base + detail * if water.is_some() { detail_amount } else { 1.0 };
         let mut nearest_river = None::<(f32, f32)>;
+        let mut owned_river = None::<(f32, f32, f32)>;
         // Only adjacent cells can contain a segment close enough to affect
         // this sample. River widths remain below half the grid spacing.
         for cz in iz.saturating_sub(1)..=(iz + 2).min(GRID_SIDE - 1) {
@@ -213,14 +258,45 @@ impl Geography {
                     continue;
                 }
                 let surface = lerp(self.filled[i], self.filled[next], t).max(SEA_LEVEL);
+                let surface = if self.version >= 2 {
+                    surface.min(filled.max(SEA_LEVEL))
+                } else {
+                    surface
+                };
                 let depth = (width * 0.10).clamp(0.75, 2.6);
                 let bed = surface - depth;
-                let blend = 1.0 - smoothstep(width * 0.65, width * 2.5, distance);
-                height = height.min(lerp(height, bed, blend));
-                moisture = moisture.max(0.72 * blend);
-                if distance < width && nearest_river.is_none_or(|(nearest, _)| distance < nearest) {
-                    nearest_river = Some((distance, surface));
+                if self.version >= 2 {
+                    let relative_distance = distance / width;
+                    let blend = 1.0 - smoothstep(0.65, 1.0, relative_distance);
+                    let carved = height.min(lerp(height, bed, blend));
+                    if blend > 0.0 && owned_river.is_none_or(|(lowest, _, _)| carved < lowest) {
+                        owned_river = Some((carved, relative_distance, surface));
+                    }
+                } else {
+                    let blend = 1.0 - smoothstep(width * 0.65, width * 2.5, distance);
+                    height = height.min(lerp(height, bed, blend));
+                    moisture = moisture.max(0.72 * blend);
+                    if distance < width
+                        && nearest_river.is_none_or(|(nearest, _)| distance < nearest)
+                    {
+                        nearest_river = Some((distance, surface));
+                    }
                 }
+            }
+        }
+        if let Some((carved, distance, surface)) = owned_river {
+            // Terrain and water share one channel owner. Carving every nearby
+            // tributary while retaining a higher channel's water cuts away its
+            // banks, leaving an opaque elevated slab. The bed reaches the
+            // untouched bank at the same width where the water ends.
+            let blend = 1.0 - smoothstep(0.65, 1.0, distance);
+            height = carved;
+            moisture = moisture.max(0.72 * blend);
+            if distance < 1.0 && water.is_none() {
+                // Lakes and ocean already own their flooded footprint. A
+                // neighboring outlet cannot replace that continuous surface
+                // with a lower river endpoint and open a dry hole in a basin.
+                water = Some(surface);
             }
         }
         if let Some((_, surface)) = nearest_river {
@@ -234,7 +310,11 @@ impl Geography {
         {
             water = None;
         }
-        let biome = biome(height, moisture, temperature, water);
+        let biome = if self.version >= 2 {
+            refined_biome(height, moisture, temperature, water)
+        } else {
+            biome(height, moisture, temperature, water)
+        };
         GeoSample {
             height,
             water,
@@ -347,6 +427,44 @@ fn biome(height: f32, moisture: f32, temperature: f32, water: Option<f32>) -> Bi
     } else if moisture > 0.70 && temperature > 0.66 {
         Biome::Rainforest
     } else if moisture > 0.47 {
+        Biome::Forest
+    } else {
+        Biome::Grassland
+    }
+}
+
+/// Version 2 uses broader dry/wet climate regions without changing the rain
+/// used by erosion. The island's established landforms and drainage stay put.
+fn refined_moisture(x: f32, z: f32, height: f32, west_height: f32, seed: u32, flow: f32) -> f32 {
+    let shadow = ((west_height - height) / 1_100.0).clamp(0.0, 0.35);
+    (0.46 - x / WORLD_SIZE * 0.52
+        + value_noise(x / 4_800.0, z / 4_800.0, seed.wrapping_add(41)) * 0.38
+        + value_noise(x / 1_600.0, z / 1_600.0, seed.wrapping_add(42)) * 0.08
+        - shadow
+        + (flow.max(1.0).ln() * 0.012).min(0.12))
+    .clamp(0.08, 0.95)
+}
+
+fn refined_biome(height: f32, moisture: f32, temperature: f32, water: Option<f32>) -> Biome {
+    if height < SEA_LEVEL {
+        Biome::Ocean
+    } else if height < 4.0 || water.is_some() {
+        Biome::Beach
+    } else if temperature < 0.10 || height > 1_850.0 {
+        Biome::Snow
+    } else if height > 1_350.0 {
+        Biome::Alpine
+    } else if temperature < 0.28 {
+        Biome::Tundra
+    } else if moisture < 0.28 && temperature > 0.50 {
+        Biome::Desert
+    } else if moisture < 0.40 {
+        Biome::Shrubland
+    } else if moisture > 0.74 && temperature > 0.66 {
+        Biome::Rainforest
+    } else if moisture > 0.45 && temperature < 0.46 {
+        Biome::PineForest
+    } else if moisture > 0.54 {
         Biome::Forest
     } else {
         Biome::Grassland
@@ -704,6 +822,127 @@ mod tests {
     fn geography() -> &'static Geography {
         static WORLD: OnceLock<Geography> = OnceLock::new();
         WORLD.get_or_init(|| Geography::generate(42))
+    }
+
+    fn revised_geography() -> &'static Geography {
+        static WORLD: OnceLock<Geography> = OnceLock::new();
+        WORLD.get_or_init(|| Geography::generate_v2(42))
+    }
+
+    fn planned_sample(field: &[f32], x: f32, z: f32) -> f32 {
+        let gx = (x + HALF_WORLD) / GRID_SPACING;
+        let gz = (z + HALF_WORLD) / GRID_SPACING;
+        let ix = (gx.floor() as usize).min(GRID_SIDE - 2);
+        let iz = (gz.floor() as usize).min(GRID_SIDE - 2);
+        let i = iz * GRID_SIDE + ix;
+        lerp(
+            lerp(field[i], field[i + 1], gx - ix as f32),
+            lerp(
+                field[i + GRID_SIDE],
+                field[i + GRID_SIDE + 1],
+                gx - ix as f32,
+            ),
+            gz - iz as f32,
+        )
+    }
+
+    #[test]
+    fn revised_river_banks_remove_elevated_water_without_moving_saved_v1_landforms() {
+        let original = geography();
+        let revised = revised_geography();
+        assert_eq!(original.heights, revised.heights);
+        assert_eq!(original.filled, revised.filled);
+        assert_eq!(original.downstream, revised.downstream);
+        let old = original.sample(5480.0, 9088.0);
+        let old_bank = original.sample(5480.0, 9088.5);
+        assert!((old.height - 679.4122).abs() < 0.002);
+        assert!((old.water.unwrap() - 701.0676).abs() < 0.002);
+        assert!(old_bank.water.is_none());
+        assert!(old.water.unwrap() - old_bank.height > 22.0);
+        // The high incoming channel no longer fills the lower channel's
+        // broad carved halo. Both former slab/bank samples are dry.
+        assert!(revised.sample(5480.0, 9088.0).water.is_none());
+        assert!(revised.sample(5480.0, 9088.5).water.is_none());
+        let channel = revised.sample(5504.0, 9088.0);
+        assert!(channel.water.is_some_and(|level| level > channel.height));
+        assert!(channel.water.unwrap() - channel.height <= 2.7);
+        // A retained basin still has a level lake; this fix changes channel
+        // sampling rather than arbitrarily suppressing genuinely deep lakes.
+        let lake = revised.sample(4656.0, 8208.0);
+        assert!((lake.water.unwrap() - 987.2089).abs() < 0.002);
+    }
+
+    #[test]
+    fn revised_channel_surfaces_follow_spill_heights_and_shallow_cross_sections() {
+        let world = revised_geography();
+        let mut checked = 0;
+        for i in 0..world.heights.len() {
+            if world.flow[i] < RIVER_CATCHMENT || world.heights[i] < 0.0 {
+                continue;
+            }
+            let Some(next) = world.downstream[i] else {
+                continue;
+            };
+            let a = grid_position(i);
+            let b = grid_position(next);
+            let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+            let perpendicular = [-(b[1] - a[1]) / length, (b[0] - a[0]) / length];
+            let width = (world.flow[i].sqrt() * 0.32).clamp(5.0, 29.0);
+            for t in [0.0, 0.5, 1.0] {
+                for offset in [-1.05, -1.0, -0.95, 0.0, 0.95, 1.0, 1.05] {
+                    let x = lerp(a[0], b[0], t) + perpendicular[0] * width * offset;
+                    let z = lerp(a[1], b[1], t) + perpendicular[1] * width * offset;
+                    let sample = world.sample(x, z);
+                    let Some(level) = sample.water else { continue };
+                    let base = planned_sample(&world.heights, x, z);
+                    let filled = planned_sample(&world.filled, x, z);
+                    assert!(
+                        level <= filled.max(SEA_LEVEL) + 0.002,
+                        "raised water at {x},{z}"
+                    );
+                    if filled - base <= 0.6 {
+                        // At most 2.6 m of channel depth plus bounded local
+                        // detail; another tributary cannot remove this bank.
+                        assert!(level - sample.height <= 3.7, "thick channel at {x},{z}");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 1000);
+    }
+
+    #[test]
+    fn revised_climate_creates_visible_regions_of_the_approved_biomes() {
+        let world = Geography::generate_v2(42);
+        let mut counts = BTreeMap::<&str, usize>::new();
+        for z in (0..GRID_SIDE).step_by(2) {
+            for x in (0..GRID_SIDE).step_by(2) {
+                let [mx, mz] = grid_position(z * GRID_SIDE + x);
+                let sample = world.sample(mx, mz);
+                if sample.water.is_none() {
+                    *counts.entry(sample.biome.name()).or_default() += 1;
+                }
+            }
+        }
+        for name in [
+            "Meadow",
+            "Broadleaf woods",
+            "Pine forest",
+            "Dry scrub",
+            "Desert",
+            "Tundra",
+            "Alpine",
+            "Snow",
+        ] {
+            assert!(
+                counts.get(name).copied().unwrap_or(0) >= 32,
+                "missing substantial {name} region: {counts:?}"
+            );
+        }
+        assert_eq!(refined_biome(100.0, 0.82, 0.70, None), Biome::Rainforest);
+        assert_eq!(refined_biome(100.0, 0.60, 0.40, None), Biome::PineForest);
+        assert_eq!(refined_biome(100.0, 0.35, 0.60, None), Biome::Shrubland);
     }
 
     #[test]
