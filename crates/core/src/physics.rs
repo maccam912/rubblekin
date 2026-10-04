@@ -1,7 +1,7 @@
 //! Small shared character controller. The body's position is its foot center;
 //! an upright AABB collides against the same edited voxels on client and server.
 
-use crate::world::{BlockPos, CELL_SIZE, MAX_Y, MIN_Y, WORLD_RADIUS, World};
+use crate::world::{BlockPos, CELL_SIZE, World};
 use serde::{Deserialize, Serialize};
 
 pub const PLAYER_RADIUS: f32 = 0.28;
@@ -10,6 +10,14 @@ pub const EYE_HEIGHT: f32 = 1.4;
 const GRAVITY: f32 = 22.0;
 const JUMP_SPEED: f32 = 7.2;
 const CONTACT_EPSILON: f32 = 0.00001;
+
+/// Contact boundaries are half-open. At kilometer coordinates, f32 rounding
+/// exceeds the valley's ten-micrometer skin; reserve two rounding units so a
+/// touching wall does not become an overlap on the next controller tick. The
+/// skin stays below four millimeters throughout this world's horizontal span.
+fn contact_epsilon(coordinate: f32) -> f32 {
+    CONTACT_EPSILON.max(coordinate.abs() * f32::EPSILON * 2.0)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Body {
@@ -50,7 +58,7 @@ pub fn move_character(world: &World, body: &mut Body, input: MoveInput, dt: f32)
     {
         *body = Body::new(world.spawn_position());
     }
-    constrain_to_world(body);
+    constrain_to_world(world, body);
     if !dt.is_finite() || dt <= 0.0 {
         return;
     }
@@ -131,7 +139,7 @@ pub fn move_character(world: &World, body: &mut Body, input: MoveInput, dt: f32)
             let blocked = move_axis(world, &mut body.position, axis, amount);
             if blocked && can_step {
                 let mut raised = before;
-                raised[1] += CELL_SIZE + CONTACT_EPSILON * 2.0;
+                raised[1] += CELL_SIZE + contact_epsilon(before[1] + CELL_SIZE) * 2.0;
                 // Check both upward clearance and the forward destination.
                 if !collides(world, raised) {
                     let forward_blocked = move_axis(world, &mut raised, axis, amount);
@@ -147,12 +155,12 @@ pub fn move_character(world: &World, body: &mut Body, input: MoveInput, dt: f32)
             body.on_ground = vertical < 0.0;
             body.velocity[1] = 0.0;
         }
-        constrain_to_world(body);
+        constrain_to_world(world, body);
     }
 }
 
-fn constrain_to_world(body: &mut Body) {
-    let horizontal = WORLD_RADIUS as f32 * CELL_SIZE;
+fn constrain_to_world(world: &World, body: &mut Body) {
+    let horizontal = world.radius_cells() as f32 * CELL_SIZE;
     for axis in [0, 2] {
         let bounded =
             body.position[axis].clamp(-horizontal + PLAYER_RADIUS, horizontal - PLAYER_RADIUS);
@@ -161,8 +169,8 @@ fn constrain_to_world(body: &mut Body) {
             body.position[axis] = bounded;
         }
     }
-    let minimum = MIN_Y as f32 * CELL_SIZE;
-    let maximum = MAX_Y as f32 * CELL_SIZE - PLAYER_HEIGHT;
+    let minimum = world.min_y() as f32 * CELL_SIZE;
+    let maximum = world.max_y() as f32 * CELL_SIZE - PLAYER_HEIGHT;
     if body.position[1] < minimum {
         body.position[1] = minimum;
         body.velocity[1] = 0.0;
@@ -185,8 +193,8 @@ fn bounds(position: [f32; 3]) -> ([i32; 3], [i32; 3]) {
         position[2] + PLAYER_RADIUS,
     ];
     (
-        min.map(|v| ((v + CONTACT_EPSILON) / CELL_SIZE).floor() as i32),
-        max.map(|v| ((v - CONTACT_EPSILON) / CELL_SIZE).floor() as i32),
+        min.map(|v| ((v + contact_epsilon(v)) / CELL_SIZE).floor() as i32),
+        max.map(|v| ((v - contact_epsilon(v)) / CELL_SIZE).floor() as i32),
     )
 }
 
@@ -245,6 +253,129 @@ mod tests {
         for _ in 0..count {
             move_character(world, body, input, 1.0 / 60.0);
         }
+    }
+
+    #[test]
+    fn geographic_collision_and_flight_keep_full_world_bounds() {
+        let world = World::generate(42, crate::world::WorldGeneration::GeographyV1);
+        let spawn = world.spawn_position();
+        let mut body = Body::new([spawn[0], spawn[1] + 4.0, spawn[2]]);
+        tick(&world, &mut body, MoveInput::default(), 120);
+        assert!(body.on_ground);
+        assert!(!collides(&world, body.position));
+        assert!(body.position[1] >= world.min_y() as f32 * CELL_SIZE);
+        let start = [5000.25, 3000.0, -4000.25];
+        body = Body::new(start);
+        tick(
+            &world,
+            &mut body,
+            MoveInput {
+                direction: [1.0, 0.0],
+                fly: true,
+                ..Default::default()
+            },
+            30,
+        );
+        assert!(body.position[0] > start[0] + 1.0);
+        assert!((body.position[1] - start[1]).abs() < 0.001);
+        assert_eq!(body.position[2], start[2]);
+    }
+
+    #[test]
+    fn kilometer_coordinates_touch_walls_without_false_overlap_recovery() {
+        let mut world = World::generate(42, crate::world::WorldGeneration::GeographyV1);
+        let (x, y, z) = (24000, 6000, 18000);
+        for px in x - 3..=x + 7 {
+            for pz in z - 3..=z + 3 {
+                world
+                    .set_block(BlockPos::new(px, y, pz), Block::Brick)
+                    .unwrap();
+            }
+        }
+        for py in y + 1..=y + 6 {
+            for pz in z - 3..=z + 3 {
+                world
+                    .set_block(BlockPos::new(x + 2, py, pz), Block::Brick)
+                    .unwrap();
+            }
+        }
+        let mut body = Body::new([
+            (x as f32 + 0.5) * CELL_SIZE,
+            (y + 1) as f32 * CELL_SIZE,
+            (z as f32 + 0.5) * CELL_SIZE,
+        ]);
+        let floor = body.position[1];
+        tick(
+            &world,
+            &mut body,
+            MoveInput {
+                direction: [1.0, 0.0],
+                ..Default::default()
+            },
+            40,
+        );
+        assert!(
+            (body.position[1] - floor).abs() < 0.005,
+            "wall contact falsely recovered body upwards: {:?}",
+            body.position
+        );
+        assert!((body.position[0] - ((x + 2) as f32 * CELL_SIZE - PLAYER_RADIUS)).abs() < 0.005);
+        assert!(!collides(&world, body.position));
+        tick(&world, &mut body, MoveInput::default(), 15);
+        assert!((body.position[1] - floor).abs() < 0.005);
+        assert!(body.on_ground);
+
+        // Contact with a low ceiling must not trigger upward recovery either.
+        for px in x - 3..=x + 7 {
+            for pz in z - 3..=z + 3 {
+                world
+                    .set_block(BlockPos::new(px, y + 5, pz), Block::Brick)
+                    .unwrap();
+            }
+        }
+        move_character(
+            &world,
+            &mut body,
+            MoveInput {
+                jump: true,
+                ..Default::default()
+            },
+            0.1,
+        );
+        assert!(body.position[1] <= (y + 5) as f32 * CELL_SIZE - PLAYER_HEIGHT + 0.005);
+        assert!(!collides(&world, body.position));
+        tick(&world, &mut body, MoveInput::default(), 30);
+        assert!((body.position[1] - floor).abs() < 0.005);
+        assert!(body.on_ground);
+
+        // Removing the ceiling and shortening the wall to one cell leaves an
+        // ordinary half-meter step, which must remain walkable at this scale.
+        for px in x - 3..=x + 7 {
+            for pz in z - 3..=z + 3 {
+                world
+                    .set_block(BlockPos::new(px, y + 5, pz), Block::Air)
+                    .unwrap();
+            }
+        }
+        for py in y + 2..=y + 6 {
+            for pz in z - 3..=z + 3 {
+                world
+                    .set_block(BlockPos::new(x + 2, py, pz), Block::Air)
+                    .unwrap();
+            }
+        }
+        tick(
+            &world,
+            &mut body,
+            MoveInput {
+                direction: [1.0, 0.0],
+                ..Default::default()
+            },
+            10,
+        );
+        assert!(body.position[0] > (x + 2) as f32 * CELL_SIZE + PLAYER_RADIUS);
+        assert!((body.position[1] - (floor + CELL_SIZE)).abs() < 0.005);
+        assert!(!collides(&world, body.position));
     }
 
     #[test]

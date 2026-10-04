@@ -23,7 +23,7 @@ use persistence::{MAX_EDITS, Simulation};
 use rubblekin_core::{
     physics::{Body, EYE_HEIGHT, MoveInput, PLAYER_HEIGHT, PLAYER_RADIUS, move_character},
     protocol::*,
-    world::{Block, BlockEdit, BlockPos, CELL_SIZE, World},
+    world::{Block, BlockEdit, BlockPos, CELL_SIZE, World, WorldGeneration},
 };
 
 const TICK: Duration = Duration::from_millis(50);
@@ -39,6 +39,8 @@ pub struct ServerConfig {
     pub bind_addr: String,
     pub save_path: PathBuf,
     pub seed: u32,
+    /// Used only for a new save. Existing worlds keep their generation version.
+    pub generation: WorldGeneration,
     /// Grants players developer controls and permits read-only observer sessions.
     /// For trusted servers only.
     pub allow_admin: bool,
@@ -50,6 +52,7 @@ impl Default for ServerConfig {
             bind_addr: "127.0.0.1:7878".into(),
             save_path: "saves/world.json".into(),
             seed: 42,
+            generation: WorldGeneration::GeographyV1,
             allow_admin: false,
         }
     }
@@ -102,7 +105,7 @@ pub fn spawn(config: ServerConfig) -> io::Result<ServerHandle> {
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
     let save_lock = persistence::lock_save(&config.save_path)?;
-    let simulation = Simulation::load(&config.save_path, config.seed)?;
+    let simulation = Simulation::load(&config.save_path, config.seed, config.generation)?;
     simulation.save(&config.save_path)?;
     let stop = Arc::new(AtomicBool::new(false));
     let loop_stop = stop.clone();
@@ -442,6 +445,7 @@ fn handle_message(
             session_id: id,
             mode,
             seed: sim.world.seed,
+            generation: sim.world.generation(),
             edits: sim.world.edits(),
             players: players(connections),
             npc: sim.npc.snapshot.clone(),
@@ -612,8 +616,8 @@ fn validate_edit(
     block: Block,
     occupied: impl Iterator<Item = [f32; 3]>,
 ) -> Result<(), String> {
-    if !World::is_editable(position) {
-        return Err("That block is outside the editable valley".into());
+    if !world.contains_block(position) {
+        return Err("That block is outside the editable world".into());
     }
     if !actor.position.iter().all(|n| n.is_finite()) {
         return Err("Invalid player position".into());

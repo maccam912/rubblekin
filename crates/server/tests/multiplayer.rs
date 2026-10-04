@@ -37,6 +37,7 @@ impl TestSave {
             bind_addr: "127.0.0.1:0".into(),
             save_path: self.0.join("world.json"),
             seed: 42,
+            generation: rubblekin_core::world::WorldGeneration::ValleyV1,
             allow_admin: admin,
         }
     }
@@ -135,6 +136,117 @@ fn nearby_air() -> BlockPos {
         (world.surface_height(2.25, 0.25) / CELL_SIZE).round() as i32,
         0,
     )
+}
+
+#[test]
+fn geographic_world_replicates_edits_and_preserves_its_generator_across_restart() {
+    use rubblekin_core::world::WorldGeneration;
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV1;
+    let server = spawn(config.clone()).unwrap();
+    let (mut builder, welcome) = Client::connect(server.addr, "Island builder");
+    let (seed, body) = match welcome {
+        ServerMessage::Welcome {
+            seed,
+            generation,
+            session_id,
+            players,
+            ..
+        } => {
+            assert_eq!(generation, WorldGeneration::GeographyV1);
+            (
+                seed,
+                players
+                    .into_iter()
+                    .find(|p| p.id == session_id)
+                    .unwrap()
+                    .body,
+            )
+        }
+        _ => unreachable!(),
+    };
+    let world = World::generate(seed, WorldGeneration::GeographyV1);
+    assert!(
+        (body.position[1] - world.surface_height(body.position[0], body.position[2])).abs() < 0.1
+    );
+    let (mut observer, welcome) =
+        Client::connect_mode(server.addr, "Surveyor", SessionMode::Observer);
+    assert!(matches!(
+        welcome,
+        ServerMessage::Welcome {
+            generation: WorldGeneration::GeographyV1,
+            ..
+        }
+    ));
+    let position = BlockPos::new(
+        (body.position[0] / CELL_SIZE).floor() as i32 + 4,
+        (body.position[1] / CELL_SIZE).floor() as i32 + 3,
+        (body.position[2] / CELL_SIZE).floor() as i32,
+    );
+    builder.send(ClientMessage::Edit {
+        request_id: 1,
+        position,
+        block: Block::Brick,
+    });
+    let response = builder.until(|message| {
+        matches!(
+            message,
+            ServerMessage::BlockChanged { request_id: 1, .. }
+                | ServerMessage::Rejected { request_id: 1, .. }
+        )
+    });
+    assert!(
+        matches!(response, ServerMessage::BlockChanged { .. }),
+        "{response:?}"
+    );
+    observer.until(|message| matches!(message, ServerMessage::BlockChanged { edit, .. } if edit.position == position));
+    drop(builder);
+    drop(observer);
+    server.stop().unwrap();
+
+    // A saved edit kilometers from spawn exercises dynamic world bounds on
+    // restore; old 160 m valley validation must not discard or reject it.
+    let far = BlockPos::new(10000, world.height_at(10000, -12000), -12000);
+    assert!(world.contains_block(far));
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    saved["edits"].as_array_mut().unwrap().push(
+        serde_json::to_value(rubblekin_core::world::BlockEdit {
+            position: far,
+            block: Block::Glass,
+        })
+        .unwrap(),
+    );
+    fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    config.generation = WorldGeneration::ValleyV1;
+    config.seed = 999;
+    let restarted = spawn(config).unwrap();
+    let (client, welcome) = Client::connect(restarted.addr, "Returning");
+    match welcome {
+        ServerMessage::Welcome {
+            generation,
+            seed: restored_seed,
+            edits,
+            ..
+        } => {
+            assert_eq!(generation, WorldGeneration::GeographyV1);
+            assert_eq!(restored_seed, seed);
+            assert!(
+                edits
+                    .iter()
+                    .any(|edit| edit.position == position && edit.block == Block::Brick)
+            );
+            assert!(
+                edits
+                    .iter()
+                    .any(|edit| edit.position == far && edit.block == Block::Glass)
+            );
+        }
+        _ => unreachable!(),
+    }
+    drop(client);
+    restarted.stop().unwrap();
 }
 
 #[test]
@@ -296,7 +408,7 @@ fn observer_admission_and_old_protocol_fail_with_notices_before_disconnect() {
         .unwrap();
     let notice = outdated.until(|message| matches!(message, ServerMessage::Notice { .. }));
     assert!(matches!(notice, ServerMessage::Notice { text }
-        if text.contains("version mismatch") && text.contains("server uses 3")));
+        if text.contains("version mismatch") && text.contains(&format!("server uses {PROTOCOL_VERSION}"))));
     outdated.until_disconnected(0);
 
     let (mut player, welcome) = Client::connect(server.addr, "Still available");

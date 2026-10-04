@@ -1,10 +1,10 @@
 use crate::{
     physics::{Body, MoveInput},
-    world::{Block, BlockEdit, BlockPos},
+    world::{Block, BlockEdit, BlockPos, WorldGeneration},
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -48,6 +48,7 @@ pub enum ServerMessage {
         session_id: u64,
         mode: SessionMode,
         seed: u32,
+        generation: WorldGeneration,
         edits: Vec<BlockEdit>,
         players: Vec<PlayerSnapshot>,
         npc: NpcSnapshot,

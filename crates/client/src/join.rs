@@ -35,9 +35,8 @@ pub struct JoinScreen {
 
 struct Joined {
     connection: Connection,
-    welcome: ServerMessage,
-    address: String,
-    mode: SessionMode,
+    world: GameWorld,
+    session: Session,
     server: Option<ServerHandle>,
 }
 
@@ -55,7 +54,7 @@ impl JoinScreen {
             config,
             graphics,
             mode,
-            status: "Join a shared valley, or continue your local world.".into(),
+            status: "Join a shared world, or explore your local island.".into(),
             pending: None,
             next_action: None,
             local_server: None,
@@ -85,12 +84,13 @@ impl JoinScreen {
             }
         };
         self.status = if local {
-            "Opening your local world…".into()
+            "Opening your local world and shaping its geography…".into()
         } else {
             format!("Connecting to {address}…")
         };
         let config = self.config.clone();
         let mode = self.mode;
+        let graphics = self.graphics;
         self.pending = Some(std::thread::spawn(move || {
             let server = if local {
                 Some(spawn(config).map_err(|error| error.to_string())?)
@@ -112,11 +112,13 @@ impl JoinScreen {
             };
             let (connection, welcome) =
                 Connection::connect(&address, name, mode).map_err(|error| error.to_string())?;
+            // Global geography is prepared on this worker, keeping the menu
+            // responsive even on a first join to a new seed.
+            let (world, session) = session_from_welcome(welcome, address, graphics, 0.0, mode)?;
             Ok(Joined {
                 connection,
-                welcome,
-                address,
-                mode,
+                world,
+                session,
                 server,
             })
         }));
@@ -191,7 +193,7 @@ pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, menu: Res<
             BackgroundColor(Color::srgb(0.08, 0.15, 0.15)),
         )).with_children(|panel| {
             panel.spawn((Text::new("R U B B L E K I N"), TextFont::from_font_size(32.0).with_font(font.clone()), TextColor(ink())));
-            panel.spawn((Text::new("A SHARED VALLEY  /  EARLY PROTOTYPE"), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(accent())));
+            panel.spawn((Text::new("A LIVING WORLD  /  EARLY PROTOTYPE"), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(accent())));
             panel.spawn((Text::new("Choose your server"), TextFont::from_font_size(24.0).with_font(font.clone()), TextColor(ink()), Node { margin: UiRect::top(px(12)), ..default() }));
             for (field, label, value, max) in [(Field::Address, "SERVER ADDRESS", menu.address.as_str(), 260), (Field::Name, "DISPLAY NAME", menu.name.as_str(), 24)] {
                 panel.spawn((Text::new(label), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(accent())));
@@ -376,22 +378,14 @@ pub fn poll_connection(
         .join()
         .unwrap_or_else(|_| Err("Connection worker stopped unexpectedly.".into()));
     match result {
-        Ok(joined) => match session_from_welcome(
-            joined.welcome,
-            joined.address,
-            menu.graphics,
-            time.elapsed_secs_f64(),
-            joined.mode,
-        ) {
-            Ok((world, session)) => {
-                menu.local_server = joined.server;
-                commands.insert_resource(joined.connection);
-                commands.insert_resource(VoxelWorld(world));
-                commands.insert_resource(session);
-                focus.clear();
-            }
-            Err(error) => menu.status = format!("Could not join: {error}"),
-        },
+        Ok(mut joined) => {
+            joined.session.status_until = time.elapsed_secs_f64() + 12.0;
+            menu.local_server = joined.server;
+            commands.insert_resource(joined.connection);
+            commands.insert_resource(VoxelWorld(joined.world));
+            commands.insert_resource(joined.session);
+            focus.clear();
+        }
         Err(error) => {
             menu.status = format!("Could not join: {error}\nCheck the address and try again.")
         }
@@ -410,6 +404,7 @@ fn session_from_welcome(
         session_id,
         mode,
         seed,
+        generation,
         edits,
         players,
         npc,
@@ -425,7 +420,7 @@ fn session_from_welcome(
     if mode != requested_mode {
         return Err("Server returned a different session mode than requested".into());
     }
-    let world = GameWorld::from_edits(seed, &edits)?;
+    let world = GameWorld::from_generation_edits(seed, generation, &edits)?;
     let mut own_players = players.iter().filter(|player| player.id == session_id);
     let own_player = own_players.next();
     let (body, observer, status) = match mode {
@@ -437,7 +432,7 @@ fn session_from_welcome(
             (
                 player.body.clone(),
                 None,
-                "Welcome to the valley. Click to explore; F10 returns to the server screen.",
+                "Welcome to the world. Click to explore; F10 returns to the server screen.",
             )
         }
         SessionMode::Observer => {
@@ -448,7 +443,7 @@ fn session_from_welcome(
             (
                 Body::new(spawn),
                 Some(ObserverCamera::new(spawn)),
-                "Observing the valley without an avatar. Click to fly; F10 returns to the server screen.",
+                "Observing the world without an avatar. Click to fly; F10 returns to the server screen.",
             )
         }
     };
@@ -572,6 +567,7 @@ mod tests {
             session_id: 17,
             mode,
             seed: 42,
+            generation: rubblekin_core::world::WorldGeneration::ValleyV1,
             edits: Vec::new(),
             players: if mode == SessionMode::Player {
                 vec![PlayerSnapshot {
@@ -854,6 +850,7 @@ mod tests {
                 bind_addr: "127.0.0.1:0".into(),
                 save_path: path.clone(),
                 seed: 42,
+                generation: rubblekin_core::world::WorldGeneration::ValleyV1,
                 allow_admin: true,
             },
             GraphicsQuality::default(),

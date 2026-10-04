@@ -1,7 +1,7 @@
 use rubblekin_core::{
     physics::{Body, MoveInput, move_character},
     protocol::{AdminAction, NpcAction, NpcSnapshot},
-    world::World,
+    world::{CELL_SIZE, World},
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,12 +18,25 @@ pub(crate) struct Forager {
     harvest_elapsed: f32,
     wander_step: usize,
     #[serde(default)]
+    home: [f32; 2],
+    #[serde(default)]
     stuck_elapsed: f32,
 }
 
 impl Forager {
     pub fn new(world: &World) -> Self {
-        let position = [3.0, world.surface_height(3.0, 0.0), 0.0];
+        // The forager's home stays fixed when building changes the player's
+        // safe spawn location. Its berry patches use the same stable anchor.
+        let origin = world.geography().map_or([0.0; 3], |geography| {
+            let spawn = geography.spawn();
+            [
+                (spawn[0] / CELL_SIZE).floor() * CELL_SIZE + CELL_SIZE * 0.5,
+                spawn[1],
+                (spawn[2] / CELL_SIZE).floor() * CELL_SIZE + CELL_SIZE * 0.5,
+            ]
+        });
+        let (x, z) = (origin[0] + 3.0, origin[2]);
+        let position = [x, world.surface_height(x, z), z];
         let mut result = Self {
             snapshot: NpcSnapshot {
                 name: "Moss".into(),
@@ -43,6 +56,7 @@ impl Forager {
             decision_elapsed: 0.0,
             harvest_elapsed: 0.0,
             wander_step: 0,
+            home: [origin[0], origin[2]],
             stuck_elapsed: 0.0,
         };
         result.decide(world);
@@ -51,6 +65,7 @@ impl Forager {
 
     pub fn validate(&self) -> bool {
         self.snapshot.position.iter().all(|v| v.is_finite())
+            && self.home.iter().all(|v| v.is_finite())
             && self.body.position.iter().all(|v| v.is_finite())
             && self.body.velocity.iter().all(|v| v.is_finite())
             && self
@@ -129,6 +144,7 @@ impl Forager {
             NpcAction::Wander => {
                 let points = [(3.0, 0.0), (0.0, 7.0), (-6.0, 0.0), (0.0, -5.0)];
                 let (x, z) = points[self.wander_step % points.len()];
+                let (x, z) = (x + self.home[0], z + self.home[1]);
                 Some([x, world.surface_height(x, z), z])
             }
         };

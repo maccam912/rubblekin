@@ -12,6 +12,8 @@
 !/artifacts/shadows-high.png
 !/artifacts/ui-larger-text.png
 !/artifacts/observer-native.png
+!/artifacts/geography-map.png
+!/artifacts/geography-ground.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

@@ -1,32 +1,62 @@
-//! Terrain presentation has one direct path: world cells -> exposed faces -> chunk mesh.
-//! Chunk meshes contain real editable terrain; the distant mountain ring is scenery.
+//! Nearby editable voxels and distant terrain share the same geography.
+//! Geographic worlds stream a bounded local square; legacy saves retain their valley.
 use std::collections::HashMap;
 
 use bevy::{
-    asset::RenderAssetUsages, light::NotShadowCaster, mesh::Indices, prelude::*,
+    asset::RenderAssetUsages,
+    light::NotShadowCaster,
+    mesh::Indices,
+    prelude::*,
     render::render_resource::PrimitiveTopology,
+    tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
-use rubblekin_core::world::{
-    Block, BlockPos, CELL_SIZE, CHUNK_SIZE, MAX_Y, MIN_Y, WATER_LEVEL, WORLD_RADIUS, World,
-    berry_patch_positions,
+use rubblekin_core::{
+    geography::Geography,
+    world::{
+        Block, BlockPos, CELL_SIZE, CHUNK_SIZE, WATER_LEVEL, WORLD_RADIUS, World,
+        berry_patch_positions,
+    },
 };
 
-/// An edit rebuilds its chunk and touching neighbours, including corner AO.
+const DETAIL_RADIUS: i32 = 6;
+const DETAIL_JOBS: usize = 2;
+const CHUNK_METERS: f32 = CHUNK_SIZE as f32 * CELL_SIZE;
+// Eight samples across a maximum1024m leaf retain128m mountain detail.
+const MAX_LOD_TILE_CHUNKS: i32 = 128;
+
+type ChunkKey = (i32, i32);
+type ChunkGeometry = (Geometry, Geometry);
+
+/// Mesh and job ownership stays here so leaving a world cancels its work.
 #[derive(Resource)]
 pub struct TerrainScene {
-    chunks: HashMap<(i32, i32), ChunkMesh>,
+    chunks: HashMap<ChunkKey, ChunkMesh>,
     opaque_material: Handle<StandardMaterial>,
     glass_material: Handle<StandardMaterial>,
+    water_material: Handle<StandardMaterial>,
+    landscape: Option<Landscape>,
+    pending_landscape: Option<Task<(ChunkKey, Geometry, Geometry)>>,
+    pending_chunks: HashMap<ChunkKey, Task<ChunkGeometry>>,
     pub triangle_count: usize,
 }
 
 struct ChunkMesh {
+    entity: Entity,
     opaque: Handle<Mesh>,
     glass: Option<(Entity, Handle<Mesh>)>,
+    water: Option<(Entity, Handle<Mesh>)>,
+    triangles: usize,
+    detailed: bool,
+}
+
+struct Landscape {
+    center: ChunkKey,
+    terrain: Handle<Mesh>,
+    water: Handle<Mesh>,
     triangles: usize,
 }
 
-/// Explicit tag for decorative geometry that is outside the playable world.
+/// Legacy decorative geometry is never added to a geographic world.
 #[derive(Component)]
 struct DistantScenery;
 
@@ -35,6 +65,7 @@ pub fn setup_terrain(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     world: &World,
+    center: [f32; 3],
 ) -> TerrainScene {
     let opaque_material = materials.add(StandardMaterial {
         base_color: Color::WHITE,
@@ -49,48 +80,252 @@ pub fn setup_terrain(
         cull_mode: None,
         ..default()
     });
-    let mut scene = TerrainScene {
-        chunks: HashMap::new(),
-        opaque_material,
-        glass_material,
-        triangle_count: 0,
-    };
-    let first = (-WORLD_RADIUS).div_euclid(CHUNK_SIZE);
-    let last = (WORLD_RADIUS - 1).div_euclid(CHUNK_SIZE);
-    for cx in first..=last {
-        for cz in first..=last {
-            rebuild_one(&mut scene, (cx, cz), world, commands, meshes);
-        }
-    }
-    let scenery_material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        perceptual_roughness: 1.0,
-        reflectance: 0.0,
-        // Atmospheric colors already account for distance. Lighting these
-        // giant triangles like nearby blocks creates distracting facets.
-        unlit: true,
-        ..default()
-    });
-    commands.spawn((
-        crate::GameEntity,
-        Mesh3d(meshes.add(distant_mountains(world.seed))),
-        MeshMaterial3d(scenery_material),
-        DistantScenery,
-        NotShadowCaster,
-    ));
     let water_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.23, 0.52, 0.59),
         perceptual_roughness: 0.32,
         reflectance: 0.28,
         ..default()
     });
-    commands.spawn((
-        crate::GameEntity,
-        Mesh3d(meshes.add(river_mesh(world))),
-        MeshMaterial3d(water_material),
-        NotShadowCaster,
-    ));
+    let mut scene = TerrainScene {
+        chunks: HashMap::new(),
+        opaque_material,
+        glass_material,
+        water_material,
+        landscape: None,
+        pending_landscape: None,
+        pending_chunks: HashMap::new(),
+        triangle_count: 0,
+    };
+    if world.geography().is_some() {
+        let center = chunk_key(center);
+        let (land, water) = landscape_geometry(world, center);
+        let triangles = (land.indices.len() + water.indices.len()) / 3;
+        let terrain = meshes.add(land.into_mesh());
+        let water = meshes.add(water.into_mesh());
+        commands.spawn((
+            crate::GameEntity,
+            Mesh3d(terrain.clone()),
+            MeshMaterial3d(scene.opaque_material.clone()),
+            NotShadowCaster,
+        ));
+        commands.spawn((
+            crate::GameEntity,
+            Mesh3d(water.clone()),
+            MeshMaterial3d(scene.water_material.clone()),
+            NotShadowCaster,
+        ));
+        scene.landscape = Some(Landscape {
+            center,
+            terrain,
+            water,
+            triangles,
+        });
+        scene.triangle_count += triangles;
+        move_local_square(&mut scene, center, world, commands, meshes);
+    } else {
+        let first = (-WORLD_RADIUS).div_euclid(CHUNK_SIZE);
+        let last = (WORLD_RADIUS - 1).div_euclid(CHUNK_SIZE);
+        for cx in first..=last {
+            for cz in first..=last {
+                rebuild_one(&mut scene, (cx, cz), world, commands, meshes);
+            }
+        }
+        let scenery_material = materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 1.0,
+            reflectance: 0.0,
+            unlit: true,
+            ..default()
+        });
+        commands.spawn((
+            crate::GameEntity,
+            Mesh3d(meshes.add(distant_mountains(world.seed))),
+            MeshMaterial3d(scenery_material),
+            DistantScenery,
+            NotShadowCaster,
+        ));
+        commands.spawn((
+            crate::GameEntity,
+            Mesh3d(meshes.add(river_mesh(world))),
+            MeshMaterial3d(scene.water_material.clone()),
+            NotShadowCaster,
+        ));
+    }
     scene
+}
+
+/// Only bounded uploads and job scheduling run on the frame thread. The coarse
+/// surface remains present while a detailed mesh or a new local square is built.
+pub fn stream_terrain(
+    world: Res<crate::VoxelWorld>,
+    session: Res<crate::Session>,
+    mut scene: ResMut<TerrainScene>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    if scene.landscape.is_none() {
+        return;
+    }
+    let position = session
+        .observer
+        .as_ref()
+        .map_or(session.body.position, |camera| camera.position.to_array());
+    let center = chunk_key(position);
+    if let Some((ready_center, land, water)) =
+        scene.pending_landscape.as_mut().and_then(check_ready)
+    {
+        scene.pending_landscape = None;
+        // Install the cutout and its local replacement together: no empty ring
+        // can appear during rapid flight or a camera reset.
+        move_local_square(
+            &mut scene,
+            ready_center,
+            &world.0,
+            &mut commands,
+            &mut meshes,
+        );
+        let next_triangles = (land.indices.len() + water.indices.len()) / 3;
+        let landscape = scene.landscape.as_mut().unwrap();
+        let old_triangles = landscape.triangles;
+        landscape.center = ready_center;
+        landscape.triangles = next_triangles;
+        if let Some(mut mesh) = meshes.get_mut(&landscape.terrain) {
+            *mesh = land.into_mesh();
+        }
+        if let Some(mut mesh) = meshes.get_mut(&landscape.water) {
+            *mesh = water.into_mesh();
+        }
+        scene.triangle_count = scene.triangle_count - old_triangles + next_triangles;
+    }
+    if scene.pending_landscape.is_none() && scene.landscape.as_ref().unwrap().center != center {
+        let snapshot = world.0.clone();
+        scene.pending_landscape = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let (land, water) = landscape_geometry(&snapshot, center);
+            (center, land, water)
+        }));
+    }
+    let ready: Vec<_> = scene
+        .pending_chunks
+        .iter_mut()
+        .filter_map(|(&key, task)| check_ready(task).map(|mesh| (key, mesh)))
+        .collect();
+    for (key, geometry) in ready {
+        scene.pending_chunks.remove(&key);
+        if scene.chunks.contains_key(&key) {
+            install_chunk(&mut scene, key, geometry, true, &mut commands, &mut meshes);
+        }
+    }
+    let mut needed: Vec<_> = scene
+        .chunks
+        .iter()
+        .filter(|(key, chunk)| !chunk.detailed && !scene.pending_chunks.contains_key(key))
+        .map(|(&key, _)| key)
+        .collect();
+    needed.sort_unstable_by_key(|&(x, z)| {
+        (x as i64 - center.0 as i64).pow(2) + (z as i64 - center.1 as i64).pow(2)
+    });
+    for key in needed
+        .into_iter()
+        .take(DETAIL_JOBS.saturating_sub(scene.pending_chunks.len()))
+    {
+        let snapshot = world.0.clone();
+        scene.pending_chunks.insert(
+            key,
+            AsyncComputeTaskPool::get()
+                .spawn(async move { chunk_geometry(&snapshot, key.0, key.1) }),
+        );
+    }
+}
+
+fn chunk_key(position: [f32; 3]) -> ChunkKey {
+    (
+        (position[0] / CHUNK_METERS).floor() as i32,
+        (position[2] / CHUNK_METERS).floor() as i32,
+    )
+}
+
+fn local_keys(center: ChunkKey, world: &World) -> Vec<ChunkKey> {
+    let first = (-world.radius_cells()).div_euclid(CHUNK_SIZE);
+    let last = (world.radius_cells() - 1).div_euclid(CHUNK_SIZE);
+    let mut keys = Vec::new();
+    for x in center.0.saturating_sub(DETAIL_RADIUS)..=center.0.saturating_add(DETAIL_RADIUS) {
+        for z in center.1.saturating_sub(DETAIL_RADIUS)..=center.1.saturating_add(DETAIL_RADIUS) {
+            if (first..=last).contains(&x) && (first..=last).contains(&z) {
+                keys.push((x, z));
+            }
+        }
+    }
+    keys
+}
+
+fn move_local_square(
+    scene: &mut TerrainScene,
+    center: ChunkKey,
+    world: &World,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+) {
+    let wanted = local_keys(center, world);
+    let expired: Vec<_> = scene
+        .chunks
+        .keys()
+        .filter(|key| !wanted.contains(key))
+        .copied()
+        .collect();
+    for key in expired {
+        scene.pending_chunks.remove(&key); // Dropping a task cancels its stale result.
+        let chunk = scene.chunks.remove(&key).unwrap();
+        scene.triangle_count -= chunk.triangles;
+        commands.entity(chunk.entity).despawn();
+        meshes.remove(chunk.opaque.id());
+        for (entity, handle) in chunk.glass.into_iter().chain(chunk.water) {
+            commands.entity(entity).despawn();
+            meshes.remove(handle.id());
+        }
+    }
+    for key in wanted {
+        if scene.chunks.contains_key(&key) {
+            continue;
+        }
+        let mut terrain = Geometry::default();
+        let mut water = Geometry::default();
+        surface_tile(
+            world.geography().unwrap(),
+            [
+                key.0 as f32 * CHUNK_METERS,
+                key.1 as f32 * CHUNK_METERS,
+                CHUNK_METERS,
+            ],
+            8,
+            [None; 4],
+            &mut terrain,
+            &mut water,
+        );
+        install_chunk(
+            scene,
+            key,
+            (terrain, Geometry::default()),
+            false,
+            commands,
+            meshes,
+        );
+        if !water.indices.is_empty() {
+            let triangles = water.indices.len() / 3;
+            let handle = meshes.add(water.into_mesh());
+            let entity = commands
+                .spawn((
+                    crate::GameEntity,
+                    Mesh3d(handle.clone()),
+                    MeshMaterial3d(scene.water_material.clone()),
+                    NotShadowCaster,
+                ))
+                .id();
+            let chunk = scene.chunks.get_mut(&key).unwrap();
+            chunk.water = Some((entity, handle));
+            chunk.triangles += triangles;
+            scene.triangle_count += triangles;
+        }
+    }
 }
 
 pub fn rebuild_chunks(
@@ -101,18 +336,20 @@ pub fn rebuild_chunks(
     meshes: &mut Assets<Mesh>,
 ) {
     for key in affected_chunks(changed) {
+        // Remove any old snapshot before installing an accepted terrain edit.
+        // Completed-but-unpolled work cannot overwrite the current world.
+        scene.pending_chunks.remove(&key);
         if scene.chunks.contains_key(&key) {
             rebuild_one(scene, key, world, commands, meshes);
         }
     }
 }
 
-fn affected_chunks(changed: BlockPos) -> Vec<(i32, i32)> {
+fn affected_chunks(changed: BlockPos) -> Vec<ChunkKey> {
     let cx = changed.x.div_euclid(CHUNK_SIZE);
     let cz = changed.z.div_euclid(CHUNK_SIZE);
     let mut xs = vec![cx];
     let mut zs = vec![cz];
-    // Diagonal chunks also share the ambient-occlusion sample at a corner.
     if changed.x.rem_euclid(CHUNK_SIZE) == 0 {
         xs.push(cx - 1);
     } else if changed.x.rem_euclid(CHUNK_SIZE) == CHUNK_SIZE - 1 {
@@ -130,16 +367,40 @@ fn affected_chunks(changed: BlockPos) -> Vec<(i32, i32)> {
 
 fn rebuild_one(
     scene: &mut TerrainScene,
-    key: (i32, i32),
+    key: ChunkKey,
     world: &World,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) {
-    let (opaque, glass) = chunk_geometry(world, key.0, key.1);
-    let triangles = (opaque.indices.len() + glass.indices.len()) / 3;
+    install_chunk(
+        scene,
+        key,
+        chunk_geometry(world, key.0, key.1),
+        true,
+        commands,
+        meshes,
+    );
+}
+
+fn install_chunk(
+    scene: &mut TerrainScene,
+    key: ChunkKey,
+    (opaque, glass): ChunkGeometry,
+    detailed: bool,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+) {
+    let mut triangles = (opaque.indices.len() + glass.indices.len()) / 3;
     if let Some(chunk) = scene.chunks.get_mut(&key) {
+        if let Some((_, water)) = &chunk.water {
+            triangles += meshes
+                .get(water)
+                .and_then(Mesh::indices)
+                .map_or(0, |i| i.len() / 3);
+        }
         scene.triangle_count = scene.triangle_count - chunk.triangles + triangles;
         chunk.triangles = triangles;
+        chunk.detailed = detailed;
         if let Some(mut mesh) = meshes.get_mut(&chunk.opaque) {
             *mesh = opaque.into_mesh();
         }
@@ -168,13 +429,15 @@ fn rebuild_one(
             (None, true) => {}
         }
     } else {
-        let opaque_handle = meshes.add(opaque.into_mesh());
-        commands.spawn((
-            crate::GameEntity,
-            Mesh3d(opaque_handle.clone()),
-            MeshMaterial3d(scene.opaque_material.clone()),
-        ));
-        let glass_part = if glass.indices.is_empty() {
+        let opaque = meshes.add(opaque.into_mesh());
+        let entity = commands
+            .spawn((
+                crate::GameEntity,
+                Mesh3d(opaque.clone()),
+                MeshMaterial3d(scene.opaque_material.clone()),
+            ))
+            .id();
+        let glass = if glass.indices.is_empty() {
             None
         } else {
             let handle = meshes.add(glass.into_mesh());
@@ -191,74 +454,320 @@ fn rebuild_one(
         scene.chunks.insert(
             key,
             ChunkMesh {
-                opaque: opaque_handle,
-                glass: glass_part,
+                entity,
+                opaque,
+                glass,
+                water: None,
                 triangles,
+                detailed,
             },
         );
     }
 }
 
-/// One-cell halo makes visibility and vertex AO ordinary array reads.
-struct CellCache {
+/// Per-column storage avoids allocating the mountain's entire solid interior.
+/// The lowest changed air cell and adjacent terrain set each column's floor.
+struct CachedColumn {
+    bottom: i32,
+    top: i32,
     blocks: Vec<Block>,
-    tops: Vec<i32>,
+}
+struct CellCache {
+    columns: Vec<CachedColumn>,
     x0: i32,
     z0: i32,
-    height: usize,
+    min_y: i32,
 }
 
 impl CellCache {
     const WIDTH: usize = CHUNK_SIZE as usize + 2;
-
     fn new(world: &World, cx: i32, cz: i32) -> Self {
         let x0 = cx * CHUNK_SIZE - 1;
         let z0 = cz * CHUNK_SIZE - 1;
-        let mut tops = Vec::with_capacity(Self::WIDTH * Self::WIDTH);
+        let mut columns = Vec::with_capacity(Self::WIDTH * Self::WIDTH);
         for x in 0..Self::WIDTH {
             for z in 0..Self::WIDTH {
-                tops.push(
-                    (world.surface_height(
-                        (x0 + x as i32) as f32 * CELL_SIZE + CELL_SIZE * 0.5,
-                        (z0 + z as i32) as f32 * CELL_SIZE + CELL_SIZE * 0.5,
-                    ) / CELL_SIZE) as i32
-                        - 1,
-                );
+                let x = x0 + x as i32;
+                let z = z0 + z as i32;
+                let top = (world
+                    .surface_height((x as f32 + 0.5) * CELL_SIZE, (z as f32 + 0.5) * CELL_SIZE)
+                    / CELL_SIZE)
+                    .round() as i32
+                    - 1;
+                let mut bottom = world.column_mesh_floor(x, z);
+                for dx in -1..=1 {
+                    for dz in -1..=1 {
+                        bottom = bottom.min(world.column_mesh_floor(x + dx, z + dz));
+                    }
+                }
+                bottom = (bottom - 1).max(world.min_y());
+                let blocks = (bottom..=top)
+                    .map(|y| world.block(BlockPos::new(x, y, z)))
+                    .collect();
+                columns.push(CachedColumn {
+                    bottom,
+                    top,
+                    blocks,
+                });
             }
         }
-        let max_y = tops.iter().copied().max().unwrap_or(MIN_Y).max(MIN_Y);
-        let height = (max_y - MIN_Y + 3) as usize;
-        let mut result = Self {
-            blocks: vec![Block::Air; Self::WIDTH * Self::WIDTH * height],
-            tops,
+        Self {
+            columns,
             x0,
             z0,
-            height,
-        };
-        for x in 0..Self::WIDTH {
-            for z in 0..Self::WIDTH {
-                for y in MIN_Y..=result.tops[x * Self::WIDTH + z] {
-                    let index = (x * Self::WIDTH + z) * height + (y - MIN_Y + 1) as usize;
-                    result.blocks[index] = world.block(BlockPos {
-                        x: result.x0 + x as i32,
-                        y,
-                        z: result.z0 + z as i32,
-                    });
+            min_y: world.min_y(),
+        }
+    }
+    fn column(&self, x: i32, z: i32) -> &CachedColumn {
+        &self.columns[(x - self.x0) as usize * Self::WIDTH + (z - self.z0) as usize]
+    }
+    fn get(&self, x: i32, y: i32, z: i32) -> Block {
+        let column = self.column(x, z);
+        if y > column.top || y < self.min_y {
+            Block::Air
+        } else if y < column.bottom {
+            Block::Stone
+        } else {
+            column.blocks[(y - column.bottom) as usize]
+        }
+    }
+    fn top(&self, x: i32, z: i32) -> i32 {
+        self.column(x, z).top
+    }
+    fn bottom(&self, x: i32, z: i32) -> i32 {
+        self.column(x, z).bottom
+    }
+}
+
+/// A quadtree concentrates samples around the camera, with at most eight
+/// samples across each leaf. Every leaf uses the authoritative geography.
+fn landscape_geometry(world: &World, center: ChunkKey) -> (Geometry, Geometry) {
+    let geography = world.geography().expect("geographic landscape");
+    let mut land = Geometry::default();
+    let mut water = Geometry::default();
+    let first = (-world.radius_cells()).div_euclid(CHUNK_SIZE);
+    let side = world.radius_cells() * 2 / CHUNK_SIZE;
+    let tiles = landscape_tiles(first, first, side, center);
+    let tile_lookup: HashMap<_, _> = tiles.iter().map(|&(x, z, size)| ((x, z), size)).collect();
+    for (x, z, size) in tiles {
+        let neighbor_steps = neighbor_steps(&tile_lookup, x, z, size);
+        surface_tile(
+            geography,
+            [
+                x as f32 * CHUNK_METERS,
+                z as f32 * CHUNK_METERS,
+                size as f32 * CHUNK_METERS,
+            ],
+            8,
+            neighbor_steps,
+            &mut land,
+            &mut water,
+        );
+    }
+    (land, water)
+}
+
+fn landscape_tiles(x: i32, z: i32, size: i32, center: ChunkKey) -> Vec<(i32, i32, i32)> {
+    fn visit(x: i32, z: i32, size: i32, center: ChunkKey, output: &mut Vec<(i32, i32, i32)>) {
+        let low_x = center.0.saturating_sub(DETAIL_RADIUS);
+        let low_z = center.1.saturating_sub(DETAIL_RADIUS);
+        let high_x = center.0.saturating_add(DETAIL_RADIUS + 1);
+        let high_z = center.1.saturating_add(DETAIL_RADIUS + 1);
+        if x >= low_x && z >= low_z && x + size <= high_x && z + size <= high_z {
+            return;
+        }
+        let intersects = x < high_x && x + size > low_x && z < high_z && z + size > low_z;
+        let dx = (center.0 as f64 + 0.5 - (x as f64 + size as f64 * 0.5)).abs() - size as f64 * 0.5;
+        let dz = (center.1 as f64 + 0.5 - (z as f64 + size as f64 * 0.5)).abs() - size as f64 * 0.5;
+        let distance = dx.max(0.0).max(dz.max(0.0));
+        if size > 1 && (size > MAX_LOD_TILE_CHUNKS || intersects || distance < size as f64 * 2.0) {
+            let half = size / 2;
+            for (dx, dz) in [(0, 0), (half, 0), (0, half), (half, half)] {
+                visit(x + dx, z + dz, half, center, output);
+            }
+        } else {
+            output.push((x, z, size));
+        }
+    }
+    let mut tiles = Vec::new();
+    visit(x, z, size, center, &mut tiles);
+    tiles
+}
+
+/// North, south, west, east neighbors; aligned quadtree coordinates make
+/// lookup logarithmic. A smaller neighbor stitches itself to this tile.
+fn neighbor_steps(tiles: &HashMap<ChunkKey, i32>, x: i32, z: i32, size: i32) -> [Option<f32>; 4] {
+    [
+        (x + size / 2, z - 1),
+        (x + size / 2, z + size),
+        (x - 1, z + size / 2),
+        (x + size, z + size / 2),
+    ]
+    .map(|(px, pz)| {
+        let mut candidate = 1;
+        while candidate <= MAX_LOD_TILE_CHUNKS {
+            let origin = (
+                px.div_euclid(candidate) * candidate,
+                pz.div_euclid(candidate) * candidate,
+            );
+            if tiles.get(&origin) == Some(&candidate) {
+                return Some(candidate as f32 * CHUNK_METERS / 8.0);
+            }
+            candidate *= 2;
+        }
+        None
+    })
+}
+
+type SurfaceVertex = (Vec3, [f32; 4], Option<f32>, [f32; 3]);
+
+/// Quantization and sampling match World::height_at. Continuous slope normals
+/// keep distant geography smooth while the nearby voxel faces remain crisp.
+fn surface_vertex(geography: &Geography, x: f32, z: f32) -> SurfaceVertex {
+    let sample = geography.sample(
+        (x / CELL_SIZE).floor() * CELL_SIZE + CELL_SIZE * 0.5,
+        (z / CELL_SIZE).floor() * CELL_SIZE + CELL_SIZE * 0.5,
+    );
+    let y = (sample.height / CELL_SIZE).floor() * CELL_SIZE + CELL_SIZE;
+    const NORMAL_STEP: f32 = 8.0;
+    let dx =
+        geography.sample(x + NORMAL_STEP, z).height - geography.sample(x - NORMAL_STEP, z).height;
+    let dz =
+        geography.sample(x, z + NORMAL_STEP).height - geography.sample(x, z - NORMAL_STEP).height;
+    let normal = Vec3::new(-dx, NORMAL_STEP * 2.0, -dz)
+        .normalize_or_zero()
+        .to_array();
+    (
+        Vec3::new(x, y, z),
+        srgb_linear(sample.biome.color()),
+        sample.water,
+        normal,
+    )
+}
+
+fn stitch_vertex(geo: &Geography, vertex: &mut SurfaceVertex, step: f32, along_x: bool) {
+    let coordinate = if along_x { vertex.0.x } else { vertex.0.z };
+    let a = (coordinate / step).floor() * step;
+    let t = (coordinate - a) / step;
+    if t < 0.0001 {
+        return;
+    }
+    let (low, high) = if along_x {
+        (
+            surface_vertex(geo, a, vertex.0.z),
+            surface_vertex(geo, a + step, vertex.0.z),
+        )
+    } else {
+        (
+            surface_vertex(geo, vertex.0.x, a),
+            surface_vertex(geo, vertex.0.x, a + step),
+        )
+    };
+    vertex.0.y = low.0.y * (1.0 - t) + high.0.y * t;
+    vertex.1 = std::array::from_fn(|i| low.1[i] * (1.0 - t) + high.1[i] * t);
+    vertex.3 = Vec3::from_array(low.3)
+        .lerp(Vec3::from_array(high.3), t)
+        .normalize_or_zero()
+        .to_array();
+}
+
+fn water_vertices(corners: [SurfaceVertex; 4], step: f32) -> Option<[[f32; 3]; 4]> {
+    let mut wet_count = 0;
+    let mut wet_sum = 0.0;
+    for corner in &corners {
+        if let Some(y) = corner.2 {
+            wet_sum += y;
+            wet_count += 1;
+        }
+    }
+    if wet_count == 0 {
+        return None;
+    }
+    let level = wet_sum / wet_count as f32;
+    Some(corners.map(|v| {
+        // A dry valley may lie below a wet mountain corner. Submerge dry
+        // vertices under their OWN terrain, never under the average water.
+        // The inset also limits coarse river triangles spreading over land.
+        let y = v.2.map_or(level.min(v.0.y - step.max(1.0)), |y| y + 0.025);
+        [v.0.x, y, v.0.z]
+    }))
+}
+
+fn surface_tile(
+    geography: &Geography,
+    [x, z, size]: [f32; 3],
+    steps: usize,
+    neighbors: [Option<f32>; 4],
+    land: &mut Geometry,
+    water: &mut Geometry,
+) {
+    let step = size / steps as f32;
+    let mut vertices = Vec::with_capacity((steps + 1) * (steps + 1));
+    for iz in 0..=steps {
+        for ix in 0..=steps {
+            let mut vertex = surface_vertex(geography, x + ix as f32 * step, z + iz as f32 * step);
+            for (edge, on_edge) in [iz == 0, iz == steps, ix == 0, ix == steps]
+                .into_iter()
+                .enumerate()
+            {
+                if on_edge
+                    && let Some(coarse) = neighbors[edge]
+                    && coarse > step
+                {
+                    stitch_vertex(geography, &mut vertex, coarse, edge < 2);
                 }
             }
+            vertices.push(vertex);
         }
-        result
     }
-
-    fn get(&self, x: i32, y: i32, z: i32) -> Block {
-        let x = (x - self.x0) as usize;
-        let z = (z - self.z0) as usize;
-        let y = (y - MIN_Y + 1) as usize;
-        self.blocks[(x * Self::WIDTH + z) * self.height + y]
+    let at = |ix: usize, iz: usize| vertices[iz * (steps + 1) + ix];
+    for iz in 0..steps {
+        for ix in 0..steps {
+            let corners = [
+                at(ix, iz + 1),
+                at(ix + 1, iz + 1),
+                at(ix + 1, iz),
+                at(ix, iz),
+            ];
+            let colors = corners.map(|v| v.1);
+            let diagonal = quad_diagonal(colors);
+            land.quad_normals(
+                corners.map(|v| v.0.to_array()),
+                corners.map(|v| v.3),
+                colors,
+                diagonal,
+            );
+            if let Some(points) = water_vertices(corners, step) {
+                // Shared triangulation is essential on steep nonplanar quads:
+                // each dry water edge must remain below its matching land edge.
+                water.quad_normals(points, [[0., 1., 0.]; 4], [[1.; 4]; 4], diagonal);
+            }
+        }
     }
-
-    fn top(&self, x: i32, z: i32) -> i32 {
-        self.tops[(x - self.x0) as usize * Self::WIDTH + (z - self.z0) as usize]
+    // Ordinary LOD edges are stitched, so only the actual cutout and world
+    // border need a shallow skirt for half-meter voxel stair steps.
+    for i in 0..steps {
+        for (edge, (a, b)) in [
+            (at(i, 0), at(i + 1, 0)),
+            (at(i + 1, steps), at(i, steps)),
+            (at(0, i + 1), at(0, i)),
+            (at(steps, i), at(steps, i + 1)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if neighbors[edge].is_some() {
+                continue;
+            }
+            let c = b.0 - Vec3::Y * 2.0;
+            let d = a.0 - Vec3::Y * 2.0;
+            let normal = (b.0 - a.0).cross(d - a.0).normalize_or_zero().to_array();
+            land.quad(
+                [a.0.to_array(), b.0.to_array(), c.to_array(), d.to_array()],
+                normal,
+                [a.1, b.1, b.1, a.1],
+            );
+        }
     }
 }
 
@@ -300,7 +809,14 @@ fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
     let mut glass = Geometry::default();
     for x in cx * CHUNK_SIZE..(cx + 1) * CHUNK_SIZE {
         for z in cz * CHUNK_SIZE..(cz + 1) * CHUNK_SIZE {
-            for y in MIN_Y..=cache.top(x, z) {
+            let geographic_surface = world.geography().map(|geography| {
+                geography
+                    .sample((x as f32 + 0.5) * CELL_SIZE, (z as f32 + 0.5) * CELL_SIZE)
+                    .biome
+                    .color()
+            });
+            let terrain_height = world.height_at(x, z);
+            for y in cache.bottom(x, z)..=cache.top(x, z) {
                 let block = cache.get(x, y, z);
                 if block == Block::Air {
                     continue;
@@ -320,6 +836,12 @@ fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
                         Block::Leaves => [0.24, 0.40, 0.31, 1.0],
                         _ => block.color(),
                     };
+                    if y == terrain_height
+                        && block == world.surface_block(x, z)
+                        && let Some(surface) = geographic_surface
+                    {
+                        color = surface;
+                    }
                     if block == Block::Grass && normal[1] == 0 {
                         let soil = Block::Dirt.color();
                         for i in 0..3 {
@@ -414,7 +936,7 @@ fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
 /// They follow the supporting grass cell and disappear when that cell is edited.
 fn add_meadow_details(mesh: &mut Geometry, world: &World, cache: &CellCache, x: i32, z: i32) {
     let y = world.height_at(x, z);
-    if !(MIN_Y..MAX_Y).contains(&y)
+    if !(world.min_y()..world.max_y()).contains(&y)
         || cache.top(x, z) < y
         || cache.get(x, y, z) != Block::Grass
         || cache.get(x, y + 1, z) != Block::Air
@@ -422,7 +944,7 @@ fn add_meadow_details(mesh: &mut Geometry, world: &World, cache: &CellCache, x: 
         return;
     }
     let chance = hash(x, 713, z, world.seed);
-    if chance > 0.036 || y > 50 {
+    if chance > 0.036 || (world.geography().is_none() && y > 50) {
         return;
     }
     let base = Vec3::new(
@@ -557,19 +1079,20 @@ struct Geometry {
 
 impl Geometry {
     fn quad(&mut self, vertices: [[f32; 3]; 4], normal: [f32; 3], colors: [[f32; 4]; 4]) {
+        self.quad_normals(vertices, [normal; 4], colors, quad_diagonal(colors));
+    }
+    fn quad_normals(
+        &mut self,
+        vertices: [[f32; 3]; 4],
+        normals: [[f32; 3]; 4],
+        colors: [[f32; 4]; 4],
+        diagonal: [u32; 6],
+    ) {
         let start = self.positions.len() as u32;
         self.positions.extend(vertices);
-        self.normals.extend([normal; 4]);
+        self.normals.extend(normals);
         self.colors.extend(colors);
-        let brightness = colors.map(|color| color[..3].iter().sum::<f32>());
-        // Run the diagonal through the darker pair so interpolated AO does not
-        // leave a bright crease through an otherwise occluded face.
-        let indices = if brightness[0] + brightness[2] > brightness[1] + brightness[3] {
-            [0, 1, 3, 1, 2, 3]
-        } else {
-            [0, 1, 2, 0, 2, 3]
-        };
-        self.indices.extend(indices.map(|index| start + index));
+        self.indices.extend(diagonal.map(|index| start + index));
     }
 
     fn triangle(&mut self, a: Vec3, b: Vec3, c: Vec3, color: [f32; 4]) {
@@ -605,6 +1128,16 @@ impl Geometry {
     }
 }
 
+fn quad_diagonal(colors: [[f32; 4]; 4]) -> [u32; 6] {
+    let brightness = colors.map(|color| color[..3].iter().sum::<f32>());
+    // Keep the ambient occlusion diagonal consistent across geometry layers.
+    if brightness[0] + brightness[2] > brightness[1] + brightness[3] {
+        [0, 1, 3, 1, 2, 3]
+    } else {
+        [0, 1, 2, 0, 2, 3]
+    }
+}
+
 fn srgb_linear(color: [f32; 4]) -> [f32; 4] {
     let linear = LinearRgba::from(Srgba::new(color[0], color[1], color[2], color[3]));
     [linear.red, linear.green, linear.blue, linear.alpha]
@@ -624,6 +1157,7 @@ fn hash(x: i32, y: i32, z: i32, seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rubblekin_core::world::MAX_Y;
 
     #[test]
     fn both_ao_diagonals_keep_every_face_winding_outward() {
@@ -726,5 +1260,275 @@ mod tests {
             .set_block(BlockPos::new(2, MAX_Y - 2, 3), Block::Air)
             .unwrap();
         assert_eq!(count(&world), before + 12);
+    }
+    #[test]
+    fn landscape_tiles_cover_the_world_except_exactly_the_local_square() {
+        const FIRST: i32 = -2048;
+        const SIDE: i32 = 4096;
+        for center in [
+            (0, 0),
+            (-137, 91),
+            (2040, 2040),
+            (-2400, 0),
+            (100_000, 100_000),
+        ] {
+            let tiles = landscape_tiles(FIRST, FIRST, SIDE, center);
+            assert!(tiles.len() < 1800, "far terrain work stays bounded");
+            let clipped_side = |c: i32| {
+                ((c + DETAIL_RADIUS + 1).min(FIRST + SIDE) - (c - DETAIL_RADIUS).max(FIRST)).max(0)
+                    as i64
+            };
+            let expected =
+                SIDE as i64 * SIDE as i64 - clipped_side(center.0) * clipped_side(center.1);
+            assert_eq!(
+                tiles.iter().map(|t| t.2 as i64 * t.2 as i64).sum::<i64>(),
+                expected
+            );
+            for &(x, z, size) in &tiles {
+                assert!(
+                    x >= FIRST
+                        && z >= FIRST
+                        && x + size <= FIRST + SIDE
+                        && z + size <= FIRST + SIDE
+                );
+                assert!(
+                    x + size <= center.0 - DETAIL_RADIUS
+                        || x > center.0 + DETAIL_RADIUS
+                        || z + size <= center.1 - DETAIL_RADIUS
+                        || z > center.1 + DETAIL_RADIUS
+                );
+            }
+        }
+        assert_eq!(chunk_key([-0.01, 1000., -8.01]), (-1, -2));
+    }
+
+    #[test]
+    fn mixed_water_quads_stay_below_dry_valleys_and_share_land_triangulation() {
+        for shades in [[1., 0.5, 1., 0.5], [0.5, 1., 0.5, 1.]] {
+            let colors = shades.map(|shade| [shade, shade, shade, 1.]);
+            let corners: [SurfaceVertex; 4] = [
+                (Vec3::new(0., 985., 0.), colors[0], Some(987.), [0., 1., 0.]),
+                (Vec3::new(512., 356., 0.), colors[1], None, [0., 1., 0.]),
+                (Vec3::new(512., 480., 512.), colors[2], None, [0., 1., 0.]),
+                (Vec3::new(0., 700., 512.), colors[3], None, [0., 1., 0.]),
+            ];
+            let points = water_vertices(corners, 512.).unwrap();
+            for i in 1..4 {
+                assert!(points[i][1] < corners[i].0.y);
+            }
+            let mut land = Geometry::default();
+            let mut water = Geometry::default();
+            let diagonal = quad_diagonal(colors);
+            land.quad_normals(
+                corners.map(|c| c.0.to_array()),
+                [[0., 1., 0.]; 4],
+                colors,
+                diagonal,
+            );
+            water.quad_normals(points, [[0., 1., 0.]; 4], [[1.; 4]; 4], diagonal);
+            assert_eq!(land.indices, water.indices);
+            // Every interpolated point along the completely dry opposite
+            // edges stays submerged, even when the wet corner is630m higher.
+            for (a, b) in [(1, 2), (2, 3)] {
+                for weight in [0., 0.25, 0.5, 0.75, 1.] {
+                    let water_y = points[a][1] * (1. - weight) + points[b][1] * weight;
+                    let land_y = corners[a].0.y * (1. - weight) + corners[b].0.y * weight;
+                    assert!(water_y < land_y);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deep_excavation_exposes_walls_without_storing_the_entire_world_height() {
+        let mut world = World::new(7);
+        let baseline = CellCache::new(&world, 0, 0);
+        let stored = baseline
+            .columns
+            .iter()
+            .map(|c| c.blocks.len())
+            .sum::<usize>();
+        assert!(stored < CellCache::WIDTH * CellCache::WIDTH * 16);
+        let position = BlockPos::new(6, world.min_y() + 3, 6);
+        world.set_block(position, Block::Air).unwrap();
+        let mesh = chunk_geometry(&world, 0, 0).0;
+        // All six walls of this isolated carved cell point into the opening.
+        for (normal, _) in FACES {
+            let center = Vec3::new(
+                (position.x as f32 + 0.5) * CELL_SIZE,
+                (position.y as f32 + 0.5) * CELL_SIZE,
+                (position.z as f32 + 0.5) * CELL_SIZE,
+            );
+            let wall = center - Vec3::from_array(normal.map(|n| n as f32)) * CELL_SIZE * 0.5;
+            assert!(
+                mesh.positions
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(mesh.normals.as_chunks::<4>().0.iter())
+                    .any(|(points, normals)| {
+                        let face_center =
+                            points.iter().copied().map(Vec3::from_array).sum::<Vec3>() / 4.;
+                        face_center.distance(wall) < 0.001 && normals[0] == normal.map(|n| n as f32)
+                    }),
+                "missing excavated wall {normal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_streaming_discards_old_mesh_assets_and_matches_geographic_elevation() {
+        use rubblekin_core::world::WorldGeneration;
+        let mut world = World::generate(42, WorldGeneration::GeographyV1);
+        let geo = world.geography().unwrap();
+        for (x, z) in [(0., 0.), (-2400., 3300.), (11999., -5022.)] {
+            let (vertex, _, _, _) = surface_vertex(geo, x, z);
+            let expected = (world.height_at(
+                (x / CELL_SIZE).floor() as i32,
+                (z / CELL_SIZE).floor() as i32,
+            ) + 1) as f32
+                * CELL_SIZE;
+            assert_eq!(vertex.y, expected);
+        }
+        let tiles = landscape_tiles(-2048, -2048, 4096, (0, 0));
+        let lookup: HashMap<_, _> = tiles.iter().map(|&(x, z, size)| ((x, z), size)).collect();
+        let &(tx, tz, size) = tiles
+            .iter()
+            .find(|&&(x, z, size)| {
+                neighbor_steps(&lookup, x, z, size)
+                    .iter()
+                    .flatten()
+                    .any(|step| *step > size as f32)
+            })
+            .expect("a fine tile borders a coarser tile");
+        let neighbors = neighbor_steps(&lookup, tx, tz, size);
+        let edge = neighbors
+            .iter()
+            .position(|neighbor| neighbor.is_some_and(|step| step > size as f32))
+            .unwrap();
+        let coarse_step = neighbors[edge].unwrap();
+        let mut land = Geometry::default();
+        let mut water = Geometry::default();
+        surface_tile(
+            geo,
+            [
+                tx as f32 * CHUNK_METERS,
+                tz as f32 * CHUNK_METERS,
+                size as f32 * CHUNK_METERS,
+            ],
+            8,
+            neighbors,
+            &mut land,
+            &mut water,
+        );
+        let boundary = match edge {
+            0 => tz as f32 * CHUNK_METERS,
+            1 => (tz + size) as f32 * CHUNK_METERS,
+            2 => tx as f32 * CHUNK_METERS,
+            _ => (tx + size) as f32 * CHUNK_METERS,
+        };
+        for vertex in land
+            .positions
+            .iter()
+            .take(8 * 8 * 4)
+            .filter(|v| v[if edge < 2 { 2 } else { 0 }] == boundary)
+        {
+            let along = vertex[if edge < 2 { 0 } else { 2 }];
+            let low = (along / coarse_step).floor() * coarse_step;
+            let fraction = (along - low) / coarse_step;
+            let (a, b) = if edge < 2 {
+                (
+                    surface_vertex(geo, low, boundary),
+                    surface_vertex(geo, low + coarse_step, boundary),
+                )
+            } else {
+                (
+                    surface_vertex(geo, boundary, low),
+                    surface_vertex(geo, boundary, low + coarse_step),
+                )
+            };
+            assert!(
+                (vertex[1] - (a.0.y * (1. - fraction) + b.0.y * fraction)).abs() < 0.001,
+                "fine boundary follows the actual coarse triangle edge"
+            );
+        }
+        let peak = geo
+            .heights()
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            .unwrap()
+            .0;
+        let [peak_x, peak_z] = geo.grid_position(peak);
+        let peak_key = chunk_key([peak_x, 0., peak_z]);
+        let cache = CellCache::new(&world, peak_key.0, peak_key.1);
+        let stored = cache.columns.iter().map(|c| c.blocks.len()).sum::<usize>();
+        let peak_top = cache.columns.iter().map(|c| c.top).max().unwrap();
+        assert!(peak_top > 1000, "test a genuinely elevated mountain");
+        assert!(
+            stored < CellCache::WIDTH * CellCache::WIDTH * 128,
+            "solid mountain interior must not be materialized"
+        );
+        let mut ecs = bevy::prelude::World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut commands = Commands::new(&mut queue, &ecs);
+        let mut scene = setup_terrain(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &world,
+            world.spawn_position(),
+        );
+        assert!(scene.chunks.len() <= 169);
+        assert!(scene.triangle_count < 600_000);
+        queue.apply(&mut ecs);
+        for center in [(100, 100), (-130, 42), (1200, -1700), (0, 0)] {
+            let expired: Vec<_> = scene
+                .chunks
+                .values()
+                .map(|chunk| chunk.opaque.id())
+                .collect();
+            let mut commands = Commands::new(&mut queue, &ecs);
+            move_local_square(&mut scene, center, &world, &mut commands, &mut meshes);
+            queue.apply(&mut ecs);
+            assert!(scene.chunks.len() <= 169);
+            assert!(
+                meshes.len() <= 2 + 169 * 2,
+                "terrain and water assets are bounded"
+            );
+            for handle in expired {
+                assert!(meshes.get(handle).is_none());
+            }
+        }
+        // A task captured before a network edit must never replace that edit.
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let snapshot = world.clone();
+        scene.pending_chunks.insert(
+            (0, 0),
+            AsyncComputeTaskPool::get().spawn(async move { chunk_geometry(&snapshot, 0, 0) }),
+        );
+        let edit = BlockPos::new(2, world.max_y() - 2, 3);
+        world.set_block(edit, Block::Brick).unwrap();
+        let mut commands = Commands::new(&mut queue, &ecs);
+        rebuild_chunks(&mut scene, edit, &world, &mut commands, &mut meshes);
+        queue.apply(&mut ecs);
+        assert!(!scene.pending_chunks.contains_key(&(0, 0)));
+        let chunk = scene.chunks.get(&(0, 0)).unwrap();
+        assert!(chunk.detailed);
+        let positions = meshes
+            .get(&chunk.opaque)
+            .unwrap()
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap();
+        let bevy::mesh::VertexAttributeValues::Float32x3(positions) = positions else {
+            panic!("mesh positions");
+        };
+        assert!(
+            positions
+                .iter()
+                .any(|p| p[1] == (edit.y + 1) as f32 * CELL_SIZE)
+        );
     }
 }

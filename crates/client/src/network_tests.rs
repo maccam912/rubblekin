@@ -48,6 +48,7 @@ fn preserves_delta_for_mode(mode: SessionMode) {
             session_id: 17,
             mode,
             seed: 42,
+            generation: rubblekin_core::world::WorldGeneration::ValleyV1,
             edits: Vec::new(),
             players: if mode == SessionMode::Player {
                 vec![PlayerSnapshot {
@@ -139,6 +140,7 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
     let server = spawn(ServerConfig {
         bind_addr: "127.0.0.1:0".into(),
         save_path: directory.join("world.json"),
+        generation: rubblekin_core::world::WorldGeneration::ValleyV1,
         ..Default::default()
     })
     .unwrap();

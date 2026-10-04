@@ -49,7 +49,7 @@ pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, session
                 }
             ),
             (
-                Text::new("THE FIRST VALLEY  /  EARLY PROTOTYPE"),
+                Text::new("MOUNTAINS & VALLEYS  /  EARLY PROTOTYPE"),
                 TextFont::from_font_size(14.0).with_font(font.clone()),
                 TextColor(Color::srgb(0.86, 0.76, 0.52)),
                 TextShadow {
@@ -71,7 +71,7 @@ pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, session
         },
         BackgroundColor(panel()),
         children![(
-            Text::new("Connecting to the valley…"),
+            Text::new("Preparing the landscape…"),
             TextFont::from_font_size(16.0).with_font(font.clone()),
             TextColor(ink()),
             StatusText
@@ -118,7 +118,7 @@ pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, session
         children![
             (Text::new(if observing { "OBSERVE THE VALLEY" } else { "MAKE YOURSELF AT HOME" }), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.90, 0.73, 0.42))),
             (Text::new(if observing {
-                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to valley\nTab   inspect forager     •     F2   graphics\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
+                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect forager     •     F2   graphics\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
                 "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server"
             }), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
@@ -303,7 +303,7 @@ pub fn update_ui(
             }
         } else if let Some(observer) = &session.observer {
             format!(
-                "Camera  {:.0}, {:.0}, {:.0} m  ·  R or Home returns to the valley",
+                "Camera  {:.0}, {:.0}, {:.0} m  ·  R or Home returns to spawn",
                 observer.position.x, observer.position.y, observer.position.z
             )
         } else if session.target.is_none() {

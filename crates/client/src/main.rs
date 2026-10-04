@@ -148,7 +148,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = GraphicsQuality::High,
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel valley\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/valley.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return\nEscape release cursor | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/geography.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return\nEscape release cursor | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -180,8 +180,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             bind_addr: options.bind.unwrap_or_else(|| "127.0.0.1:7878".into()),
             save_path: options
                 .save
-                .unwrap_or_else(|| PathBuf::from("saves/valley.json")),
+                .unwrap_or_else(|| PathBuf::from("saves/geography.json")),
             seed: options.seed.unwrap_or(42),
+            generation: rubblekin_core::world::WorldGeneration::GeographyV1,
             allow_admin: true,
         },
         options.graphics,
@@ -220,7 +221,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .init_resource::<Avatars>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Rubblekin · The first valley".into(),
+                title: "Rubblekin · Mountains and valleys".into(),
                 resolution: WindowResolution::new(1440, 900).with_scale_factor_override(1.0),
                 present_mode: PresentMode::AutoVsync,
                 ..default()
@@ -241,6 +242,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     receive_network,
                     controls,
                     camera,
+                    terrain::stream_terrain,
                     edit_blocks,
                     update_avatars,
                     ui::update_ui,
@@ -265,7 +267,12 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let start = std::time::Instant::now();
-    let terrain = terrain::setup_terrain(&mut commands, &mut meshes, &mut materials, &world.0);
+    let center = session
+        .observer
+        .as_ref()
+        .map_or(session.body.position, |camera| camera.position.to_array());
+    let terrain =
+        terrain::setup_terrain(&mut commands, &mut meshes, &mut materials, &world.0, center);
     commands.insert_resource(terrain);
     info!("Terrain generated in {:.2}s", start.elapsed().as_secs_f32());
     commands.spawn((
@@ -287,15 +294,27 @@ fn setup(
             ..default()
         },
         Projection::Perspective(PerspectiveProjection {
-            far: 1000.0,
+            far: if world.0.geography().is_some() {
+                45000.0
+            } else {
+                1000.0
+            },
             fov: 60.0_f32.to_radians(),
             ..default()
         }),
         DistanceFog {
             color: Color::srgb(0.61, 0.76, 0.81),
             falloff: FogFalloff::Linear {
-                start: 65.0,
-                end: 580.0,
+                start: if world.0.geography().is_some() {
+                    1800.0
+                } else {
+                    65.0
+                },
+                end: if world.0.geography().is_some() {
+                    28000.0
+                } else {
+                    580.0
+                },
             },
             ..default()
         },

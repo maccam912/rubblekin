@@ -1,8 +1,8 @@
 # Rubblekin
 
-A first playable voxel valley: walk through editable terrain, build with a creative palette, join another player, and watch Moss forage or rest according to its own needs. The long-term game direction and decisions live in [DESIGN.md](DESIGN.md).
+A playable voxel world: explore a 32.768 km island with mountain ranges, eroded valleys, rivers, lakes, and climate-based biomes; build with a creative palette, join another player, and watch Moss forage or rest according to its own needs. The long-term game direction and decisions live in [DESIGN.md](DESIGN.md).
 
-![The valley with the default Balanced shadows and terrain shading](artifacts/shadows-balanced.png)
+![Generated island geography; the small cream cross marks spawn](artifacts/geography-map.png)
 
 This is a working prototype for trusted cooperative play. It has no accounts, public-server authentication, TLS, ownership claims, quests, combat, or complete economy.
 
@@ -25,7 +25,7 @@ On macOS, move **Rubblekin Launcher.app** to Applications. Bundles are ad-hoc si
 | Linux | `$XDG_DATA_HOME/rubblekin`, default `~/.local/share/rubblekin` |
 | macOS | `~/Library/Application Support/rubblekin` |
 
-Local worlds remain in `game/saves/valley.json` through updates; screenshots use `game/artifacts`, and the latest client log is `logs/client.log`. Downloads use `clients/<target>/<commit>`, retaining the current and previous installed version for each architecture. Updates verify SHA-256, stage a complete installation, then atomically change the selected version. They do not modify saves. Existing checkout saves are not moved automatically; with the game stopped, copy one into `game/saves/valley.json` if desired.
+New local islands use `game/saves/geography.json`; existing `game/saves/valley.json` worlds remain available with `--local --save saves/valley.json`. Both are retained through updates; screenshots use `game/artifacts`, and the latest client log is `logs/client.log`. Downloads use `clients/<target>/<commit>`, retaining the current and previous installed version for each architecture. Updates verify SHA-256, stage a complete installation, then atomically change the selected version. They do not modify saves. Existing checkout saves are not moved automatically; with the game stopped, copy one into `game/saves` and select it with `--save` if desired.
 
 ```sh
 rubblekin-launcher --headless -- --low --connect rubblekin.oci.koski.co:7878
@@ -60,7 +60,7 @@ Use Rust/Cargo compatible with the workspace's Rust 1.95 minimum, then run from 
 cargo run --locked -p rubblekin_client
 ```
 
-The first build compiles Bevy and takes longer than subsequent launches. The client opens a join screen with `rubblekin.oci.koski.co:7878` as the default server address and a display name. Choose **Join server** to connect remotely or **Local world** to host at `127.0.0.1:7878` with the save `saves/valley.json`. Names are guest display names, not authenticated accounts. Failed connections return an error on the screen so you can correct the address and retry.
+The first build compiles Bevy and takes longer than subsequent launches. The client opens a join screen with `rubblekin.oci.koski.co:7878` as the default server address and a display name. Choose **Join server** to connect remotely or **Local world** to host at `127.0.0.1:7878` with the save `saves/geography.json`. New saves generate an island; an existing save retains its original generator and terrain. Names are guest display names, not authenticated accounts. Failed connections return an error on the screen so you can correct the address and retry.
 
 Use `--local` to go straight into a local world, or `--connect HOST:PORT --name NAME` to connect immediately. Balanced graphics is the default; use `--low` for the least expensive preset. Click the game to capture the mouse; press Escape to release it. Press F10 to return to the join screen.
 
@@ -75,7 +75,7 @@ cargo run --locked -p rubblekin_client -- --connect 127.0.0.1:7878 --name Visito
 For a fresh world, choose a different save file. A seed changes newly created worlds; existing saves retain their original seed.
 
 ```sh
-cargo run --locked -p rubblekin_client -- --local --save saves/another-valley.json --seed 123
+cargo run --locked -p rubblekin_client -- --local --save saves/another-island.json --seed 123
 ```
 
 On macOS, the optional launcher script creates `artifacts/Rubblekin.app`:
@@ -86,6 +86,26 @@ open artifacts/Rubblekin.app
 ```
 
 The launcher references this checkout's `target/debug/rubblekin` binary. It is a development convenience, not a standalone distributable app.
+
+## Geography and world scale
+
+New worlds use a 32.768 km square region, matching the physical extent of Veloren’s default map. The island boundary is an initial design choice. Seeds 42, 43, and 123 currently produce peaks around 2.2 km above sea level. A global 513 × 513 plan at 64 m spacing defines mountain ranges, coasts, catchments, rivers, lakes, temperature, moisture, and biomes. An independent 48-pass erosion model incises channels, transports/deposits sediment, weathers steep slopes, and cuts spillways through some enclosed basins. [Veloren’s world-generation guide](https://book.veloren.net/players/world-generation.html) is the scale reference; this is Rubblekin’s own generator.
+
+The client loads 50 cm editable voxels near the player or observer and draws distant terrain from the same geography. At most 169 nearby chunks, two detail-generation jobs, and one distant-mesh job are active. The world uses a bounded column cache and sparse saved edits rather than storing billions of untouched blocks. New local worlds use a separate save path so the original valley stays intact:
+
+```sh
+cargo run --locked -p rubblekin_client -- --local
+cargo run --locked -p rubblekin_client -- --local --observe
+cargo run --locked -p rubblekin_client -- --local --save saves/valley.json
+```
+
+Export the actual generated geography as a shaded PPM map, with the spawn marked by a cream cross:
+
+```sh
+cargo run --locked -p rubblekin_core --example geography -- 42 /tmp/geography.ppm
+```
+
+Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Distant terrain shows the generated surface, with individual edits and trees appearing in the nearby detailed area. Airships, gliders, roads, settlements, and an in-game world map are future work. Representative integrated-graphics measurements remain necessary. The [native ground view](artifacts/geography-ground.png) shows the current client rendering.
 
 ## Controls
 
@@ -128,11 +148,11 @@ cargo run --locked -p rubblekin_client -- --connect 127.0.0.1:7878 --observe
 
 Observer sessions require an admin-enabled server (`--allow-admin` on dedicated hosting). Local hosting enables this; the public test server has it disabled. The existing admin setting applies to everyone who can connect, so it is not per-user authentication.
 
-The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to the valley and resets speed. Tab shows Moss's inspector, F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
+The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed. Tab shows Moss's inspector, F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
 
-Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. The entire 160 × 160 m valley remains loaded, and flying beyond it reaches scenery or empty space. Larger-world streaming is not implemented.
+Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. In geographic worlds, nearby detailed terrain follows the camera and distant landforms cover the full 32.768 km region. The old 160 × 160 m valley renderer remains available for legacy saves.
 
-The observer handshake uses **protocol v3**. Rebuild/restart both client and server together; existing world saves keep the same format.
+The geography handshake uses **protocol v4**. Rebuild/restart both client and server together. Save version 2 records the terrain generator; original version-1 valley saves load with their original terrain and upgrade their metadata on the next save.
 
 ## Graphics
 
@@ -176,7 +196,7 @@ Only one process can own a save file. Stop an auto-host before starting a dedica
 
 Accepted edits are saved before the server acknowledges them. The server writes a temporary file beside the save, syncs it, and atomically replaces the previous save. An OS lock on a sidecar file prevents concurrent writers. NPC state and simulation time are checkpointed every five seconds and on orderly shutdown. Corrupt or unsupported saves fail visibly and are left intact.
 
-There is no downtime catch-up: simulation advances while the server runs, even with zero players, and resumes from saved time after a restart. Back up the JSON save before experimenting with new terrain-generation or save-format versions; automatic migration is not implemented.
+There is no downtime catch-up: simulation advances while the server runs, even with zero players, and resumes from saved time after a restart. The save records its terrain-generation version. Version-1 valley saves keep the original terrain when read and are written as version 2 with an explicit ValleyV1 generator. New islands use GeographyV1; a new client does not turn an existing valley into an island. Unknown save/generation versions fail visibly. Use a fresh save path to explore new geography.
 
 [Dockerfile](Dockerfile) tests and builds only the headless server; it excludes the renderer and game assets. The runtime runs as UID/GID 10001. [deploy/kubernetes.yaml](deploy/kubernetes.yaml) provides one replica, a 1 GiB persistent volume claim, a `Recreate` rollout strategy, startup/readiness probes, `imagePullPolicy: Always`, and a private `ClusterIP` service. Review storage settings before using this standalone template.
 
@@ -209,7 +229,7 @@ Resource requests are starting values, not measured production requirements. OCI
 
 ## Git and assets
 
-Install Git LFS before cloning, or run `git lfs install` followed by `git lfs pull` in an existing checkout. The seven curated screenshots linked in this documentation use LFS. The small bundled font and its license remain ordinary Git files. Generated screenshots, app bundles, logs, saves, build output, and local environment files are ignored. `Cargo.lock` is committed; CI and container builds use `--locked`. Server builds need no LFS assets.
+Install Git LFS before cloning, or run `git lfs install` followed by `git lfs pull` in an existing checkout. The curated screenshots linked in this documentation use LFS. The small bundled font and its license remain ordinary Git files. Generated screenshots, app bundles, logs, saves, build output, and local environment files are ignored. `Cargo.lock` is committed; CI and container builds use `--locked`. Server builds need no LFS assets.
 
 ## Follow a feature through the code
 
@@ -228,7 +248,7 @@ For a block edit, read these in order:
 
 Transport is newline-delimited JSON over nonblocking TCP. There is no generic message bus or automatic ECS replication. The headless server currently uses a small standard-library loop; Bevy ECS can be introduced when the simulation earns that complexity. This transport and full-world snapshot approach are prototype choices, not a global-scale networking design.
 
-Movement predicts each frame locally and sends the same numbered input and duration to the server. Server snapshots acknowledge completed inputs; [prediction.rs](crates/client/src/prediction.rs) replays newer inputs so delayed snapshots do not pull the player backward on release or step climbing. The server validates movement time, and prediction history is bounded. Protocol v2 requires matching client/server builds: restart both after updating. Existing world saves remain compatible.
+Movement predicts each frame locally and sends the same numbered input and duration to the server. Server snapshots acknowledge completed inputs; [prediction.rs](crates/client/src/prediction.rs) replays newer inputs so delayed snapshots do not pull the player backward on release or step climbing. The server validates movement time, and prediction history is bounded. Protocol v4 requires matching client/server builds: restart both after updating. Existing valley saves remain compatible through the explicit legacy generator.
 
 ## Verify changes
 
@@ -238,24 +258,26 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Tests include real localhost sockets, so the test environment must permit local networking. All 57 ordinary tests pass locally on macOS: 13 core, 16 client, 16 server, and 12 launcher. Another native package integration test is run explicitly after packaging; on macOS it verified a real client ZIP download, installation, bundle signature, and child process startup. The 22 Python release-tooling tests also pass. Join-screen tests cover validation, failed connections, rapid text entry, and join/leave/rejoin/disconnect cleanup. They cover core geometry and physics, terrain meshing and client handshake, multiplayer edits and reconnects, saves, autonomous behavior, and graceful server shutdown. Movement regressions cover delayed stop acknowledgments, uneven-frame stairs/cliffs, real localhost prediction, exact-once execution, and server time/sequence validation. Terrain regressions also check corner shading, face winding, and affected chunks after edits. macOS/Linux shutdown tests send signals to child server processes they create. Workspace Clippy with warnings denied and formatting checks pass. The [Linux/Windows/macOS CI matrix](.github/workflows/ci.yml) and client release workflow check pushed changes. Live rendering and platform performance still require native playtests on each target.
+Tests include real localhost sockets, so the test environment must permit local networking. All 89 ordinary tests pass locally on macOS: 24 core, 31 client, 22 server, and 12 launcher. The existing native package integration test remains opt-in; it previously verified a real client ZIP download, installation, bundle signature, and child process startup. Release-tooling Python tests were verified during the earlier release work and were not rerun for this geography change.
+
+Geography regressions cover seeded terrain, dry spawn, drainage, distant collision/edits, legacy-save compatibility, and retained generation identity after restart. Renderer checks cover bounded streaming, stale edit jobs, deep cuts, distant edge alignment, and water placement. Existing tests cover joining, movement reconciliation, observer permissions, multiplayer replication, NPCs, persistence, and graceful shutdown. Workspace Clippy with warnings denied, formatting, and the locked offline native build pass. The final native macOS ground view was inspected; long-distance flight feel and lower-end performance remain unverified. The [Linux/Windows/macOS CI matrix](.github/workflows/ci.yml) and client release workflow check pushed changes.
 
 Capture a reproducible initial scene:
 
 ```sh
-cargo run --locked -p rubblekin_client -- --local --screenshot artifacts/valley.png --exit-after 12
+cargo run --locked -p rubblekin_client -- --local --screenshot artifacts/geography-ground.png --exit-after 18
 ```
 
 `--screenshot` captures after eight seconds. Keep the game window visible during capture; an occluded macOS window can produce an empty screenshot. F12 captures the current view interactively. Screenshots document appearance, not frame-time behavior.
 
 ## Current limits and next feedback
 
-- **World:** 160 × 160 meters of editable terrain with 50 cm cells. The distant mountain ring is scenery. All playable chunks are currently built up front; streaming and distant terrain LOD are future work.
+- **World:** new islands span 32.768 km with 50 cm editable cells and bounded local detail. Distant terrain reflects generated geography; remote edits and trees appear only in the nearby voxel region. Legacy 160 m valleys keep their original terrain.
 - **Simulation:** one forager, three renewable logical berry patches, and tunable needs. Berry shrubs and water are decorative; there is no plant lifecycle, fluid simulation, settlement economy, or pathfinding around complex structures yet.
 - **Building and ownership:** all players have unlimited materials and cooperative edit access. Claims and configurable offline property protection remain planned; no protection system is implemented. Moss does not destroy player structures.
 - **Networking:** 32 connection cap and 100,000 edited-cell cap are defensive prototype limits. There are no accounts, transport encryption, hostile-client load tests, or public-server readiness claims. Slow or malformed peers are disconnected.
 - **Compatibility and performance:** native macOS playtests exercised building/removal, NPC override/clear, a [second connected client](artifacts/two-client.png), and [restoring the edits after restarting](artifacts/restarted-world.png). The October 4 graphics playtest verified the full live Balanced → High → Low → Balanced cycle, nearby player/tree shadows, and the Low fallback; brief foreground HUD observations reached around 120 fps on an Apple M5 Pro. Focus and capture interruptions make these unsuitable for a frame-time comparison. Earlier October 3 samples at 1440 × 900 showed about 119–125 fps on the old low preset and 93–120 fps on the old high preset, with scene construction around 0.16–0.23 seconds. These are separate observations on a strong machine, not controlled benchmarks or a measured before/after speed comparison. Windows, Linux, the children's computers, representative integrated graphics, and performance during extensive building remain untested.
 
-The next useful feedback is on movement and camera feel, building at this cell size, the visual direction, and whether Moss's actions are understandable. See [DESIGN.md](DESIGN.md) for the wider ambitions and unresolved choices.
+The next useful feedback is on mountain and valley scale, the initial island shape, river and lake appearance, terrain transitions during travel, movement/camera feel, and whether Moss's actions are understandable. See [DESIGN.md](DESIGN.md) for the wider ambitions and unresolved choices.
 
 The bundled Atkinson Hyperlegible font is distributed under its [SIL Open Font License](assets/fonts/OFL.txt).

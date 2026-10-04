@@ -1,8 +1,12 @@
 //! Deterministic, finite voxel terrain. Positions address 50 cm cells; all
 //! public floating point positions and ray distances are in meters.
 
+use crate::geography::{Biome, Geography};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, RwLock},
+};
 
 pub const CELL_SIZE: f32 = 0.5;
 pub const CHUNK_SIZE: i32 = 16;
@@ -11,6 +15,18 @@ pub const MIN_Y: i32 = -24;
 pub const MAX_Y: i32 = 160;
 pub const WATER_LEVEL: f32 = 0.85;
 const WIDTH: usize = (WORLD_RADIUS * 2) as usize;
+const GEOGRAPHY_RADIUS: i32 = 32768;
+const GEOGRAPHY_MIN_Y: i32 = -1024;
+const GEOGRAPHY_MAX_Y: i32 = 8192;
+const COLUMN_CACHE_LIMIT: usize = 131_072;
+
+/// Saved terrain rules. Missing fields in old saves retain the original valley.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorldGeneration {
+    #[default]
+    ValleyV1,
+    GeographyV1,
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Block {
@@ -24,6 +40,7 @@ pub enum Block {
     Leaves,
     Brick,
     Glass,
+    Snow,
 }
 
 impl Block {
@@ -43,6 +60,7 @@ impl Block {
             Self::Leaves => [0.25, 0.43, 0.23, 1.0],
             Self::Brick => [0.62, 0.32, 0.23, 1.0],
             Self::Glass => [0.57, 0.78, 0.83, 1.0],
+            Self::Snow => [0.87, 0.91, 0.94, 1.0],
         }
     }
 
@@ -57,6 +75,7 @@ impl Block {
             Self::Leaves => "Leaves",
             Self::Brick => "Brick",
             Self::Glass => "Glass",
+            Self::Snow => "Snow",
         }
     }
 }
@@ -91,6 +110,10 @@ pub struct RayHit {
 #[derive(Clone)]
 pub struct World {
     pub seed: u32,
+    generation: WorldGeneration,
+    geography: Option<Arc<Geography>>,
+    geographic_columns: Arc<RwLock<HashMap<(i32, i32), GeographicColumn>>>,
+    edited_columns: HashMap<(i32, i32), BTreeMap<i32, Block>>,
     heights: Vec<i32>,
     surfaces: Vec<Block>,
     column_tops: Vec<i32>,
@@ -98,10 +121,46 @@ pub struct World {
     overrides: HashMap<BlockPos, Block>,
 }
 
+#[derive(Clone, Copy)]
+struct GeographicColumn {
+    height: i32,
+    surface: Block,
+    wood: Option<(i32, i32)>,
+    leaves: Option<(i32, i32)>,
+}
+
+impl GeographicColumn {
+    fn top(self) -> i32 {
+        self.height
+            .max(self.wood.map_or(self.height, |(_, top)| top))
+            .max(self.leaves.map_or(self.height, |(_, top)| top))
+    }
+
+    fn vegetation(self, y: i32) -> Block {
+        if self
+            .wood
+            .is_some_and(|(low, high)| (low..=high).contains(&y))
+        {
+            Block::Wood
+        } else if self
+            .leaves
+            .is_some_and(|(low, high)| (low..=high).contains(&y))
+        {
+            Block::Leaves
+        } else {
+            Block::Air
+        }
+    }
+}
+
 impl World {
     pub fn new(seed: u32) -> Self {
         let mut world = Self {
             seed,
+            generation: WorldGeneration::ValleyV1,
+            geography: None,
+            geographic_columns: Arc::new(RwLock::new(HashMap::new())),
+            edited_columns: HashMap::new(),
             heights: vec![0; WIDTH * WIDTH],
             surfaces: vec![Block::Grass; WIDTH * WIDTH],
             column_tops: vec![0; WIDTH * WIDTH],
@@ -121,13 +180,70 @@ impl World {
         world
     }
 
+    pub fn generate(seed: u32, generation: WorldGeneration) -> Self {
+        match generation {
+            WorldGeneration::ValleyV1 => Self::new(seed),
+            WorldGeneration::GeographyV1 => Self {
+                seed,
+                generation,
+                geography: Some(Arc::new(Geography::generate(seed))),
+                geographic_columns: Arc::new(RwLock::new(HashMap::new())),
+                edited_columns: HashMap::new(),
+                heights: Vec::new(),
+                surfaces: Vec::new(),
+                column_tops: Vec::new(),
+                trees: HashMap::new(),
+                overrides: HashMap::new(),
+            },
+        }
+    }
+
+    pub fn generation(&self) -> WorldGeneration {
+        self.generation
+    }
+
+    pub fn geography(&self) -> Option<&Geography> {
+        self.geography.as_deref()
+    }
+
+    pub fn radius_cells(&self) -> i32 {
+        if self.geography.is_some() {
+            GEOGRAPHY_RADIUS
+        } else {
+            WORLD_RADIUS
+        }
+    }
+
+    pub fn min_y(&self) -> i32 {
+        if self.geography.is_some() {
+            GEOGRAPHY_MIN_Y
+        } else {
+            MIN_Y
+        }
+    }
+
+    pub fn max_y(&self) -> i32 {
+        if self.geography.is_some() {
+            GEOGRAPHY_MAX_Y
+        } else {
+            MAX_Y
+        }
+    }
+
+    pub fn contains_block(&self, position: BlockPos) -> bool {
+        let radius = self.radius_cells();
+        (-radius..radius).contains(&position.x)
+            && (-radius..radius).contains(&position.z)
+            && (self.min_y()..self.max_y()).contains(&position.y)
+    }
+
     /// Both upper boundaries are exclusive: x/z -160..160, y -24..160.
     pub fn is_editable(position: BlockPos) -> bool {
         column_index(position.x, position.z).is_some() && (MIN_Y..MAX_Y).contains(&position.y)
     }
 
     pub fn block(&self, position: BlockPos) -> Block {
-        if !Self::is_editable(position) {
+        if !self.contains_block(position) {
             return Block::Air;
         }
         self.overrides
@@ -137,7 +253,7 @@ impl World {
     }
 
     pub fn set_block(&mut self, position: BlockPos, block: Block) -> Result<(), String> {
-        if !Self::is_editable(position) {
+        if !self.contains_block(position) {
             return Err(format!(
                 "Block ({}, {}, {}) is outside the editable world",
                 position.x, position.y, position.z
@@ -145,8 +261,21 @@ impl World {
         }
         if block == self.base_block(position) {
             self.overrides.remove(&position);
+            if let Some(column) = self.edited_columns.get_mut(&(position.x, position.z)) {
+                column.remove(&position.y);
+                if column.is_empty() {
+                    self.edited_columns.remove(&(position.x, position.z));
+                }
+            }
         } else {
             self.overrides.insert(position, block);
+            self.edited_columns
+                .entry((position.x, position.z))
+                .or_default()
+                .insert(position.y, block);
+        }
+        if self.geography.is_some() {
+            return Ok(());
         }
         let index = column_index(position.x, position.z).unwrap();
         if block.is_solid() {
@@ -188,26 +317,94 @@ impl World {
         Ok(world)
     }
 
+    pub fn from_generation_edits(
+        seed: u32,
+        generation: WorldGeneration,
+        edits: &[BlockEdit],
+    ) -> Result<Self, String> {
+        let mut world = Self::generate(seed, generation);
+        for edit in edits {
+            if !world.contains_block(edit.position) {
+                return Err(format!(
+                    "Saved block position {:?} is outside the world",
+                    edit.position
+                ));
+            }
+            world.set_block(edit.position, edit.block)?;
+        }
+        Ok(world)
+    }
+
     /// Original terrain elevation, excluding trees and player edits.
     /// Out-of-world columns return MIN_Y - 1 (an empty column).
     pub fn height_at(&self, x: i32, z: i32) -> i32 {
-        column_index(x, z).map_or(MIN_Y - 1, |index| self.heights[index])
+        if self.geography.is_some() {
+            self.geographic_column(x, z)
+                .map_or(self.min_y() - 1, |column| column.height)
+        } else {
+            column_index(x, z).map_or(MIN_Y - 1, |index| self.heights[index])
+        }
+    }
+
+    /// Original material on the terrain surface, excluding trees and edits.
+    pub fn surface_block(&self, x: i32, z: i32) -> Block {
+        if self.geography.is_some() {
+            self.geographic_column(x, z)
+                .map_or(Block::Air, |column| column.surface)
+        } else {
+            column_index(x, z).map_or(Block::Air, |index| self.surfaces[index])
+        }
+    }
+
+    /// The renderer need only inspect terrain at and above the lowest changed
+    /// cell or original surface; untouched deep bedrock has no exposed faces.
+    /// Neighboring columns still need consideration when selecting a mesh floor.
+    pub fn column_mesh_floor(&self, x: i32, z: i32) -> i32 {
+        let height = self.height_at(x, z);
+        self.edited_columns
+            .get(&(x, z))
+            .and_then(|column| column.first_key_value())
+            .map_or(height, |(&lowest, _)| height.min(lowest))
+    }
+
+    fn column_top(&self, x: i32, z: i32) -> i32 {
+        if self.geography.is_none() {
+            return column_index(x, z).map_or(MIN_Y - 1, |index| self.column_tops[index]);
+        }
+        let Some(column) = self.geographic_column(x, z) else {
+            return self.min_y() - 1;
+        };
+        let Some(edits) = self.edited_columns.get(&(x, z)) else {
+            return column.top();
+        };
+        let mut top = column.top().max(
+            edits
+                .iter()
+                .rev()
+                .find_map(|(&y, &block)| block.is_solid().then_some(y))
+                .unwrap_or(self.min_y() - 1),
+        );
+        while top >= self.min_y() && !self.block(BlockPos::new(x, top, z)).is_solid() {
+            top -= 1;
+        }
+        top
     }
 
     /// Highest solid surface in meters, including edits and tree canopies.
     /// This is a height query, not a pathfinding or cave-floor query.
     pub fn surface_height(&self, x: f32, z: f32) -> f32 {
         if !x.is_finite() || !z.is_finite() {
-            return MIN_Y as f32 * CELL_SIZE;
+            return self.min_y() as f32 * CELL_SIZE;
         }
         let x = (x / CELL_SIZE).floor() as i32;
         let z = (z / CELL_SIZE).floor() as i32;
-        column_index(x, z).map_or(MIN_Y as f32 * CELL_SIZE, |index| {
-            (self.column_tops[index] + 1) as f32 * CELL_SIZE
-        })
+        (self.column_top(x, z) + 1) as f32 * CELL_SIZE
     }
 
     pub fn spawn_position(&self) -> [f32; 3] {
+        let anchor = self.geography().map_or([0.0; 3], Geography::spawn);
+        let center_x = (anchor[0] / CELL_SIZE).floor() as i32;
+        let center_z = (anchor[2] / CELL_SIZE).floor() as i32;
         // A half-meter-wide character straddles neighboring columns. Account
         // for those columns too, and leave room for its head after player edits.
         for radius in 0_i32..=32 {
@@ -216,18 +413,17 @@ impl World {
                     if x.abs().max(z.abs()) != radius {
                         continue;
                     }
-                    let mut top = MIN_Y;
+                    let mut top = self.min_y();
                     for dz in -1..=1 {
                         for dx in -1..=1 {
-                            let index = column_index(x + dx, z + dz).unwrap();
-                            top = top.max(self.column_tops[index]);
+                            top = top.max(self.column_top(center_x + x + dx, center_z + z + dz));
                         }
                     }
-                    if top < MAX_Y - 5 {
+                    if top < self.max_y() - 5 {
                         return [
-                            (x as f32 + 0.5) * CELL_SIZE,
+                            ((center_x + x) as f32 + 0.5) * CELL_SIZE,
                             (top + 1) as f32 * CELL_SIZE + 0.02,
-                            (z as f32 + 0.5) * CELL_SIZE,
+                            ((center_z + z) as f32 + 0.5) * CELL_SIZE,
                         ];
                     }
                 }
@@ -235,7 +431,11 @@ impl World {
         }
         // Filling every nearby column to the world ceiling leaves no ordinary
         // spawn. The controller's finite bounds still protect invalid states.
-        [0.25, (MAX_Y - 4) as f32 * CELL_SIZE, 0.25]
+        [
+            (center_x as f32 + 0.5) * CELL_SIZE,
+            (self.max_y() - 4) as f32 * CELL_SIZE,
+            (center_z as f32 + 0.5) * CELL_SIZE,
+        ]
     }
 
     /// Stream center in cell coordinates. The stream's water is decorative;
@@ -272,14 +472,14 @@ impl World {
         }
         let direction = direction.map(|v| (v as f64 / length) as f32);
         let minimum = [
-            -(WORLD_RADIUS as f32) * CELL_SIZE,
-            MIN_Y as f32 * CELL_SIZE,
-            -(WORLD_RADIUS as f32) * CELL_SIZE,
+            -(self.radius_cells() as f32) * CELL_SIZE,
+            self.min_y() as f32 * CELL_SIZE,
+            -(self.radius_cells() as f32) * CELL_SIZE,
         ];
         let maximum = [
-            WORLD_RADIUS as f32 * CELL_SIZE,
-            MAX_Y as f32 * CELL_SIZE,
-            WORLD_RADIUS as f32 * CELL_SIZE,
+            self.radius_cells() as f32 * CELL_SIZE,
+            self.max_y() as f32 * CELL_SIZE,
+            self.radius_cells() as f32 * CELL_SIZE,
         ];
         let mut entry = 0.0_f32;
         let mut exit = max_distance;
@@ -339,7 +539,8 @@ impl World {
         let mut previous = position;
         let mut distance = entry;
         // A straight ray cannot cross more planes than the sum of dimensions.
-        for _ in 0..(WIDTH * 2 + (MAX_Y - MIN_Y) as usize + 6) {
+        let max_steps = (self.radius_cells() * 4 + self.max_y() - self.min_y()) as usize + 6;
+        for _ in 0..max_steps {
             if distance > exit + 0.00001 || distance > max_distance + 0.00001 {
                 return None;
             }
@@ -367,6 +568,26 @@ impl World {
     }
 
     fn base_block(&self, position: BlockPos) -> Block {
+        if !self.contains_block(position) {
+            return Block::Air;
+        }
+        if self.geography.is_some() {
+            let column = self.geographic_column(position.x, position.z).unwrap();
+            if position.y > column.height {
+                return column.vegetation(position.y);
+            }
+            return if position.y == column.height {
+                column.surface
+            } else if position.y >= column.height - 3 && column.surface != Block::Stone {
+                if column.surface == Block::Sand {
+                    Block::Sand
+                } else {
+                    Block::Dirt
+                }
+            } else {
+                Block::Stone
+            };
+        }
         let Some(index) = column_index(position.x, position.z) else {
             return Block::Air;
         };
@@ -422,6 +643,104 @@ impl World {
             Block::Grass
         };
         (height, material)
+    }
+
+    fn geographic_column(&self, x: i32, z: i32) -> Option<GeographicColumn> {
+        if !self.contains_block(BlockPos::new(x, self.min_y(), z)) {
+            return None;
+        }
+        {
+            let cached = self
+                .geographic_columns
+                .read()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some(column) = cached.get(&(x, z)) {
+                return Some(*column);
+            }
+        }
+        let geography = self.geography.as_deref()?;
+        let meters_x = (x as f32 + 0.5) * CELL_SIZE;
+        let meters_z = (z as f32 + 0.5) * CELL_SIZE;
+        let sample = geography.sample(meters_x, meters_z);
+        let height = (sample.height / CELL_SIZE).floor() as i32;
+        let surface = match sample.biome {
+            Biome::Ocean | Biome::Beach | Biome::Desert => Block::Sand,
+            Biome::Alpine => Block::Stone,
+            Biome::Snow => Block::Snow,
+            _ if sample.water.is_some_and(|water| water > sample.height) => Block::Sand,
+            _ => Block::Grass,
+        };
+        let mut column = GeographicColumn {
+            height,
+            surface,
+            wood: None,
+            leaves: None,
+        };
+
+        // Each twelve-meter square owns one possible tree. Its crown stays
+        // inside the square, so querying a column needs no global tree array.
+        let grid_x = x.div_euclid(24);
+        let grid_z = z.div_euclid(24);
+        let tree_hash = hash(grid_x, grid_z, self.seed.wrapping_add(817));
+        let tree_x = grid_x * 24 + 6 + ((tree_hash >> 4) % 12) as i32;
+        let tree_z = grid_z * 24 + 6 + ((tree_hash >> 12) % 12) as i32;
+        let dx = x - tree_x;
+        let dz = z - tree_z;
+        if dx * dx + dz * dz <= 24 {
+            let tree_mx = (tree_x as f32 + 0.5) * CELL_SIZE;
+            let tree_mz = (tree_z as f32 + 0.5) * CELL_SIZE;
+            let tree_sample = geography.sample(tree_mx, tree_mz);
+            let density = match tree_sample.biome {
+                Biome::Forest => 75,
+                Biome::Rainforest => 95,
+                Biome::Grassland => 16,
+                Biome::Tundra => 5,
+                _ => 0,
+            };
+            let spawn = geography.spawn();
+            let outside_clearing =
+                (tree_mx - spawn[0]).powi(2) + (tree_mz - spawn[2]).powi(2) > 12.0 * 12.0;
+            let above_water = tree_sample
+                .water
+                .is_none_or(|water| water < tree_sample.height);
+            let gentle_slope = [(2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0)]
+                .into_iter()
+                .all(|(ox, oz)| {
+                    (geography.sample(tree_mx + ox, tree_mz + oz).height - tree_sample.height).abs()
+                        < 1.5
+                });
+            if tree_hash % 100 < density && outside_clearing && above_water && gentle_slope {
+                let bottom = (tree_sample.height / CELL_SIZE).floor() as i32 + 1;
+                let trunk_height = 10 + ((tree_hash >> 20) % 7) as i32;
+                let crown = bottom + trunk_height - 1;
+                if dx == 0 && dz == 0 {
+                    column.wood = Some((bottom.max(height + 1), crown));
+                }
+                let horizontal = dx * dx + dz * dz;
+                let mut low = i32::MAX;
+                let mut high = i32::MIN;
+                for dy in -4_i32..=4 {
+                    if horizontal + dy * dy * 2 <= 24 && crown + dy > height {
+                        low = low.min(crown + dy);
+                        high = high.max(crown + dy);
+                    }
+                }
+                if low <= high {
+                    column.leaves = Some((low, high));
+                }
+            }
+        }
+        let mut cached = self
+            .geographic_columns
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        if cached.len() >= COLUMN_CACHE_LIMIT {
+            // The cache contains only deterministic base columns, never player
+            // edits. Dropping it bounds memory without affecting world state.
+            cached.clear();
+        }
+        cached.insert((x, z), column);
+        Some(column)
     }
 
     fn generate_trees(&mut self) {
@@ -488,9 +807,21 @@ fn column_index(x: i32, z: i32) -> Option<usize> {
 /// Renewable food sources for the first forager. These are logical scene
 /// locations; the client draws their bushes and the server owns availability.
 pub fn berry_patch_positions(world: &World) -> Vec<[f32; 3]> {
+    let center = world.geography().map_or([0.0; 3], |geography| {
+        let planned = geography.spawn();
+        [
+            ((planned[0] / CELL_SIZE).floor() + 0.5) * CELL_SIZE,
+            planned[1],
+            ((planned[2] / CELL_SIZE).floor() + 0.5) * CELL_SIZE,
+        ]
+    });
     [(6.0, 5.0), (-7.0, 3.0), (4.0, -8.0)]
         .into_iter()
-        .map(|(x, z)| [x, world.surface_height(x, z), z])
+        .map(|(dx, dz)| {
+            let x = center[0] + dx;
+            let z = center[2] + dz;
+            [x, world.surface_height(x, z), z]
+        })
         .collect()
 }
 
@@ -524,6 +855,131 @@ fn value_noise(x: f32, z: f32, seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn geographic_world() -> World {
+        static WORLD: std::sync::OnceLock<World> = std::sync::OnceLock::new();
+        WORLD
+            .get_or_init(|| World::generate(42, WorldGeneration::GeographyV1))
+            .clone()
+    }
+
+    #[test]
+    fn explicit_valley_generation_keeps_original_terrain_and_bounds() {
+        let original = World::new(912);
+        let explicit = World::generate(912, WorldGeneration::ValleyV1);
+        assert_eq!(original.heights, explicit.heights);
+        assert_eq!(original.surfaces, explicit.surfaces);
+        assert_eq!(original.trees, explicit.trees);
+        assert_eq!(explicit.generation(), WorldGeneration::ValleyV1);
+        assert!(explicit.geography().is_none());
+        assert_eq!(explicit.radius_cells(), WORLD_RADIUS);
+        assert_eq!(explicit.min_y(), MIN_Y);
+        assert_eq!(explicit.max_y(), MAX_Y);
+        assert_eq!(WorldGeneration::default(), WorldGeneration::ValleyV1);
+    }
+
+    #[test]
+    fn geographic_terrain_rays_and_edits_work_kilometers_from_origin() {
+        let mut world = geographic_world();
+        assert!(world.heights.is_empty());
+        assert!(world.trees.is_empty());
+        assert_eq!(world.radius_cells() as f32 * CELL_SIZE, 16384.0);
+        let x = 6000;
+        let z = -7000;
+        let height = world.height_at(x, z);
+        let meters_x = (x as f32 + 0.5) * CELL_SIZE;
+        let meters_z = (z as f32 + 0.5) * CELL_SIZE;
+        let sample = world.geography().unwrap().sample(meters_x, meters_z);
+        assert_eq!(height, (sample.height / CELL_SIZE).floor() as i32);
+        assert_eq!(
+            world.block(BlockPos::new(x, height, z)),
+            world.surface_block(x, z)
+        );
+        assert_eq!(world.block(BlockPos::new(x, height - 10, z)), Block::Stone);
+        let target = BlockPos::new(x, height + 30, z);
+        world.set_block(target, Block::Brick).unwrap();
+        let hit = world
+            .raycast(
+                [meters_x, (target.y + 3) as f32 * CELL_SIZE, meters_z],
+                [0.0, -1.0, 0.0],
+                4.0,
+            )
+            .unwrap();
+        assert_eq!(hit.position, target);
+        assert_eq!(hit.previous, BlockPos::new(x, target.y + 1, z));
+        assert!((hit.distance - 1.0).abs() < 0.001);
+        assert_eq!(
+            world.surface_height(meters_x, meters_z),
+            (target.y + 1) as f32 * CELL_SIZE
+        );
+        world.set_block(target, Block::Air).unwrap();
+        assert_eq!(world.edits().len(), 0);
+        let dug = BlockPos::new(x, height - 8, z);
+        world.set_block(dug, Block::Air).unwrap();
+        assert_eq!(world.column_mesh_floor(x, z), height - 8);
+        let edits = world.edits();
+        let restored =
+            World::from_generation_edits(42, WorldGeneration::GeographyV1, &edits).unwrap();
+        assert_eq!(restored.edits(), edits);
+        assert_eq!(restored.block(dug), Block::Air);
+        assert_eq!(restored.height_at(x, z), height);
+        assert!(World::from_edits(42, &edits).is_err());
+    }
+
+    #[test]
+    fn geographic_bounds_spawn_and_surface_removals_follow_dynamic_world() {
+        let mut world = geographic_world();
+        let spawn = world.spawn_position();
+        assert!(spawn.iter().all(|value| value.is_finite()));
+        let x = (spawn[0] / CELL_SIZE).floor() as i32;
+        let z = (spawn[2] / CELL_SIZE).floor() as i32;
+        let top = world.height_at(x, z);
+        let original_surface = world.surface_height(spawn[0], spawn[2]);
+        assert_eq!(original_surface, (top + 1) as f32 * CELL_SIZE);
+        world
+            .set_block(BlockPos::new(x, top, z), Block::Air)
+            .unwrap();
+        assert_eq!(
+            world.surface_height(spawn[0], spawn[2]),
+            original_surface - CELL_SIZE
+        );
+        let minimum = BlockPos::new(
+            -world.radius_cells(),
+            world.min_y(),
+            world.radius_cells() - 1,
+        );
+        assert!(world.contains_block(minimum));
+        for invalid in [
+            BlockPos::new(world.radius_cells(), 0, 0),
+            BlockPos::new(0, world.max_y(), 0),
+            BlockPos::new(0, world.min_y() - 1, 0),
+        ] {
+            assert!(!world.contains_block(invalid));
+            assert_eq!(world.block(invalid), Block::Air);
+            assert!(world.set_block(invalid, Block::Stone).is_err());
+        }
+        for patch in berry_patch_positions(&world) {
+            assert!((patch[0] - spawn[0]).abs() < 10.0);
+            assert!((patch[2] - spawn[2]).abs() < 10.0);
+        }
+    }
+
+    #[test]
+    fn geographic_berry_locations_keep_their_home_when_spawn_clearance_moves() {
+        let mut world = geographic_world();
+        let original_spawn = world.spawn_position();
+        let patches = berry_patch_positions(&world);
+        let x = (original_spawn[0] / CELL_SIZE).floor() as i32;
+        let z = (original_spawn[2] / CELL_SIZE).floor() as i32;
+        world
+            .set_block(BlockPos::new(x, world.max_y() - 1, z), Block::Stone)
+            .unwrap();
+        let changed_spawn = world.spawn_position();
+        assert!(changed_spawn[0] != original_spawn[0] || changed_spawn[2] != original_spawn[2]);
+        for (before, after) in patches.into_iter().zip(berry_patch_positions(&world)) {
+            assert_eq!([before[0], before[2]], [after[0], after[2]]);
+        }
+    }
 
     #[test]
     fn edits_round_trip_and_restoring_base_removes_override() {
