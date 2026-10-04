@@ -106,7 +106,7 @@ The launcher references this checkout's `target/debug/rubblekin` binary. It is a
 | F10 | Disconnect and return to the join screen. |
 | F12 | Save a screenshot in `artifacts/`. |
 
-Developer controls work only when the server allows them:
+Developer controls work only for player sessions when the server allows them:
 
 | Input | Action |
 | --- | --- |
@@ -116,6 +116,23 @@ Developer controls work only when the server allows them:
 | `[` / `]` | Favor rest / restore equal forage and rest weights. |
 
 The local auto-host enables these controls for every connected player. They are disabled by default on a dedicated server. On keyboards with media function keys, use the platform's function-key modifier if needed.
+
+## Observe without a player avatar
+
+Choose **Observe as admin** on the join screen, then **Local world** or **Join server**. Direct startup also works:
+
+```sh
+cargo run --locked -p rubblekin_client -- --local --observe
+cargo run --locked -p rubblekin_client -- --connect 127.0.0.1:7878 --observe
+```
+
+Observer sessions require an admin-enabled server (`--allow-admin` on dedicated hosting). Local hosting enables this; the public test server has it disabled. The existing admin setting applies to everyone who can connect, so it is not per-user authentication.
+
+The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to the valley and resets speed. Tab shows Moss's inspector, F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
+
+Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. The entire 160 × 160 m valley remains loaded, and flying beyond it reaches scenery or empty space. Larger-world streaming is not implemented.
+
+The observer handshake uses **protocol v3**. Rebuild/restart both client and server together; existing world saves keep the same format.
 
 ## Graphics
 
@@ -172,13 +189,21 @@ docker run --rm -p 7878:7878 -v rubblekin-world:/data rubblekin-server:prototype
 
 The actual OCI cluster configuration lives in [fleet-infra/apps/rubblekin](https://github.com/maccam912/fleet-infra/tree/main/apps/rubblekin). It uses the cluster's OCI block storage and shared ingress-nginx TCP load balancer on port 7878. The game uses raw TCP, so it needs a TCP forwarding entry, not an HTTP Ingress. Flux scans `latest` every five minutes and commits its new digest into the Deployment to trigger a rollout. `Always` checks the image when a container starts; it does not restart existing pods by itself. One `Recreate` replica ensures the old save writer stops before its replacement. The namespace and world PVC are retained when removing the Flux app and require deliberate manual deletion.
 
-The October 4 deployment is running, and native client/two-client socket checks through the cluster succeeded. The configured public endpoint is `147.224.165.110:7878`; public access is currently awaiting an OCI network-rule check because that port times out. Until that is resolved, use:
+The public test server is running at **`147.224.165.110:7878`**. Enter that address and a display name on the join screen, or connect directly:
+
+```sh
+cargo run --locked -p rubblekin_client -- --connect 147.224.165.110:7878 --name Visitor
+```
+
+The October 4 native client and two-client socket checks passed over this public endpoint, including shared player state, ping, and logout removal. Dedicated-server admin controls are disabled. OCI's security list permits TCP 7878 to the shared load balancer; its existing private rules cover forwarding to Kubernetes.
+
+For cluster-local troubleshooting, you can also forward the service:
 
 ```sh
 kubectl -n rubblekin port-forward service/rubblekin 17878:7878
 ```
 
-Then enter `127.0.0.1:17878` and a display name on the join screen. Keep the forwarding command running while playing.
+Then enter `127.0.0.1:17878` on the join screen. Keep the forwarding command running while playing.
 
 Resource requests are starting values, not measured production requirements. OCI provisioned its 50 GiB minimum volume for this app's 1 GiB request. Increasing replicas does not distribute a world; the save requires one writer.
 

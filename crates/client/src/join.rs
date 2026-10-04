@@ -1,7 +1,7 @@
 //! A guest join screen. DNS, connection, and local-server startup run off the render thread.
 use crate::{
     Avatars, GameEntity, Session, VoxelWorld, graphics::GraphicsQuality, network::Connection,
-    prediction::Prediction, terrain::TerrainScene,
+    observer::ObserverCamera, prediction::Prediction, terrain::TerrainScene,
 };
 use bevy::{
     input::keyboard::{Key, KeyboardInput},
@@ -13,7 +13,7 @@ use bevy::{
 };
 use rubblekin_core::{
     physics::Body,
-    protocol::{PROTOCOL_VERSION, ServerMessage},
+    protocol::{PROTOCOL_VERSION, ServerMessage, SessionMode},
     world::World as GameWorld,
 };
 use rubblekin_server::{ServerConfig, ServerHandle, spawn};
@@ -27,6 +27,7 @@ pub struct JoinScreen {
     status: String,
     config: ServerConfig,
     graphics: GraphicsQuality,
+    mode: SessionMode,
     pending: Option<JoinHandle<Result<Joined, String>>>,
     next_action: Option<Action>,
     local_server: Option<ServerHandle>,
@@ -36,6 +37,7 @@ struct Joined {
     connection: Connection,
     welcome: ServerMessage,
     address: String,
+    mode: SessionMode,
     server: Option<ServerHandle>,
 }
 
@@ -45,12 +47,14 @@ impl JoinScreen {
         name: String,
         config: ServerConfig,
         graphics: GraphicsQuality,
+        mode: SessionMode,
     ) -> Self {
         Self {
             address,
             name,
             config,
             graphics,
+            mode,
             status: "Join a shared valley, or continue your local world.".into(),
             pending: None,
             next_action: None,
@@ -86,6 +90,7 @@ impl JoinScreen {
             format!("Connecting to {address}…")
         };
         let config = self.config.clone();
+        let mode = self.mode;
         self.pending = Some(std::thread::spawn(move || {
             let server = if local {
                 Some(spawn(config).map_err(|error| error.to_string())?)
@@ -106,11 +111,12 @@ impl JoinScreen {
                 address
             };
             let (connection, welcome) =
-                Connection::connect(&address, name).map_err(|error| error.to_string())?;
+                Connection::connect(&address, name, mode).map_err(|error| error.to_string())?;
             Ok(Joined {
                 connection,
                 welcome,
                 address,
+                mode,
                 server,
             })
         }));
@@ -159,6 +165,7 @@ pub(super) enum Field {
 pub(super) enum Action {
     Join,
     Local,
+    Mode(SessionMode),
 }
 
 fn ink() -> Color {
@@ -200,6 +207,13 @@ pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, menu: Res<
                     BackgroundColor(Color::srgb(0.04, 0.08, 0.08)), BorderColor::all(Color::srgb(0.20, 0.32, 0.30)),
                 ));
             }
+            panel.spawn((Node { column_gap: px(12), ..default() },)).with_children(|row| {
+                for (mode, label) in [(SessionMode::Player, "Play as explorer"), (SessionMode::Observer, "Observe as admin")] {
+                    row.spawn((Button, Action::Mode(mode), Node { padding: UiRect::axes(px(15), px(11)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                        .with_child((Text::new(label), TextFont::from_font_size(18.0).with_font(font.clone()), TextColor(ink())));
+                }
+            });
+            panel.spawn((Text::new("Observer camera is read-only; server admin controls must be enabled."), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
             panel.spawn((Node { column_gap: px(12), margin: UiRect::top(px(4)), ..default() },)).with_children(|row| {
                 for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world")] {
                     row.spawn((Button, action, Node { padding: UiRect::axes(px(22), px(13)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
@@ -306,7 +320,11 @@ pub fn interact(
         .find(|(_, interaction)| **interaction == Interaction::Pressed)
         .map(|(action, _)| *action)
         .or_else(|| keys.just_pressed(KeyCode::Enter).then_some(Action::Join));
-    menu.next_action = action;
+    if let Some(Action::Mode(mode)) = action {
+        menu.mode = mode;
+    } else {
+        menu.next_action = action;
+    }
     if let Some(action) = requested {
         menu.next_action = None;
         menu.start(matches!(action, Action::Local));
@@ -363,6 +381,7 @@ pub fn poll_connection(
             joined.address,
             menu.graphics,
             time.elapsed_secs_f64(),
+            joined.mode,
         ) {
             Ok((world, session)) => {
                 menu.local_server = joined.server;
@@ -384,10 +403,12 @@ fn session_from_welcome(
     address: String,
     graphics: GraphicsQuality,
     now: f64,
+    requested_mode: SessionMode,
 ) -> Result<(GameWorld, Session), String> {
     let ServerMessage::Welcome {
         version,
-        player_id,
+        session_id,
+        mode,
         seed,
         edits,
         players,
@@ -401,17 +422,42 @@ fn session_from_welcome(
     if version != PROTOCOL_VERSION {
         return Err("Server protocol version does not match this client".into());
     }
+    if mode != requested_mode {
+        return Err("Server returned a different session mode than requested".into());
+    }
     let world = GameWorld::from_edits(seed, &edits)?;
-    let body = players
-        .iter()
-        .find(|player| player.id == player_id)
-        .map(|player| player.body.clone())
-        .unwrap_or_else(|| Body::new(world.spawn_position()));
+    let mut own_players = players.iter().filter(|player| player.id == session_id);
+    let own_player = own_players.next();
+    let (body, observer, status) = match mode {
+        SessionMode::Player => {
+            let player = own_player.ok_or("Server did not provide your player avatar")?;
+            if own_players.next().is_some() {
+                return Err("Server provided multiple avatars for your session".into());
+            }
+            (
+                player.body.clone(),
+                None,
+                "Welcome to the valley. Click to explore; F10 returns to the server screen.",
+            )
+        }
+        SessionMode::Observer => {
+            if own_player.is_some() || can_admin {
+                return Err("Server returned an invalid read-only observer session".into());
+            }
+            let spawn = world.spawn_position();
+            (
+                Body::new(spawn),
+                Some(ObserverCamera::new(spawn)),
+                "Observing the valley without an avatar. Click to fly; F10 returns to the server screen.",
+            )
+        }
+    };
     Ok((
         world,
         Session {
-            id: player_id,
+            id: session_id,
             body,
+            observer,
             yaw: -0.45,
             pitch: 0.12,
             camera_distance: 6.5,
@@ -425,8 +471,7 @@ fn session_from_welcome(
             npc,
             players,
             world_time,
-            status: "Welcome to the valley. Click to explore; F10 returns to the server screen."
-                .into(),
+            status: status.into(),
             status_until: now + 12.0,
             target: None,
             fps: 0.0,
@@ -453,7 +498,13 @@ pub fn leave_world(
         return;
     }
     menu.status = connection.error.as_ref().map_or_else(
-        || "You left the world. Accepted changes have been saved.".into(),
+        || {
+            if session.observer.is_some() {
+                "You stopped observing the world.".into()
+            } else {
+                "You left the world. Accepted changes have been saved.".into()
+            }
+        },
         |error| format!("Disconnected: {error}"),
     );
     menu.graphics = session.graphics;
@@ -479,7 +530,7 @@ pub fn refresh(
     mut camera: Single<&mut Camera, With<MenuCamera>>,
     mut status: Single<&mut Text, With<MenuStatus>>,
     mut fields: Query<(Entity, &mut BorderColor), With<Field>>,
-    mut buttons: Query<(&Interaction, &mut BackgroundColor), With<Action>>,
+    mut buttons: Query<(&Action, &Interaction, &mut BackgroundColor)>,
 ) {
     root.display = if session.is_some() {
         Display::None
@@ -497,9 +548,11 @@ pub fn refresh(
             Color::srgb(0.20, 0.32, 0.30)
         });
     }
-    for (interaction, mut background) in &mut buttons {
+    for (action, interaction, mut background) in &mut buttons {
         background.0 = if menu.pending.is_some() {
             Color::srgb(0.12, 0.22, 0.20)
+        } else if matches!(action, Action::Mode(mode) if *mode == menu.mode) {
+            Color::srgb(0.39, 0.43, 0.24)
         } else if *interaction == Interaction::Hovered {
             Color::srgb(0.27, 0.45, 0.39)
         } else {
@@ -511,6 +564,122 @@ pub fn refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rubblekin_core::protocol::{NpcAction, NpcSnapshot, PlayerSnapshot};
+
+    pub(super) fn welcome(mode: SessionMode) -> ServerMessage {
+        ServerMessage::Welcome {
+            version: PROTOCOL_VERSION,
+            session_id: 17,
+            mode,
+            seed: 42,
+            edits: Vec::new(),
+            players: if mode == SessionMode::Player {
+                vec![PlayerSnapshot {
+                    id: 17,
+                    name: "Tester".into(),
+                    body: Body::new([0.25, 2.52, 0.25]),
+                    yaw: 0.0,
+                    last_input_sequence: 0,
+                }]
+            } else {
+                Vec::new()
+            },
+            npc: NpcSnapshot {
+                name: "Moss".into(),
+                position: [3.0, 2.5, 0.0],
+                hunger: 60.0,
+                energy: 80.0,
+                action: NpcAction::Forage,
+                reason: "Looking for berries".into(),
+                berries: 0,
+                forced: false,
+                target: None,
+            },
+            world_time: 0.0,
+            can_admin: false,
+        }
+    }
+
+    fn join(
+        welcome: ServerMessage,
+        requested: SessionMode,
+    ) -> Result<(GameWorld, Session), String> {
+        session_from_welcome(
+            welcome,
+            "test.example:7878".into(),
+            GraphicsQuality::default(),
+            0.0,
+            requested,
+        )
+    }
+
+    #[test]
+    fn session_requires_the_requested_mode_and_exactly_the_right_avatar() {
+        for mode in [SessionMode::Player, SessionMode::Observer] {
+            let (_, session) = join(welcome(mode), mode).unwrap();
+            assert_eq!(session.observer.is_some(), mode == SessionMode::Observer);
+            assert_eq!(
+                session.players.len(),
+                usize::from(mode == SessionMode::Player)
+            );
+            assert_eq!(session.id, 17);
+            let other_mode = if mode == SessionMode::Player {
+                SessionMode::Observer
+            } else {
+                SessionMode::Player
+            };
+            assert!(
+                join(welcome(mode), other_mode)
+                    .err()
+                    .unwrap()
+                    .contains("different session mode")
+            );
+        }
+
+        let mut missing = welcome(SessionMode::Player);
+        if let ServerMessage::Welcome { players, .. } = &mut missing {
+            players.clear();
+        }
+        assert!(
+            join(missing, SessionMode::Player)
+                .err()
+                .unwrap()
+                .contains("player avatar")
+        );
+
+        let mut duplicate = welcome(SessionMode::Player);
+        if let ServerMessage::Welcome { players, .. } = &mut duplicate {
+            players.push(players[0].clone());
+        }
+        assert!(
+            join(duplicate, SessionMode::Player)
+                .err()
+                .unwrap()
+                .contains("multiple avatars")
+        );
+
+        let mut embodied_observer = welcome(SessionMode::Player);
+        if let ServerMessage::Welcome { mode, .. } = &mut embodied_observer {
+            *mode = SessionMode::Observer;
+        }
+        assert!(
+            join(embodied_observer, SessionMode::Observer)
+                .err()
+                .unwrap()
+                .contains("invalid read-only")
+        );
+
+        let mut writable_observer = welcome(SessionMode::Observer);
+        if let ServerMessage::Welcome { can_admin, .. } = &mut writable_observer {
+            *can_admin = true;
+        }
+        assert!(
+            join(writable_observer, SessionMode::Observer)
+                .err()
+                .unwrap()
+                .contains("invalid read-only")
+        );
+    }
 
     #[test]
     fn server_addresses_require_a_host_and_real_port() {
@@ -554,6 +723,7 @@ mod tests {
             "Wayfarer".into(),
             ServerConfig::default(),
             GraphicsQuality::default(),
+            SessionMode::Player,
         );
         menu.start(false);
         assert!(menu.pending.is_none());
@@ -573,6 +743,7 @@ mod tests {
             "Wayfarer".into(),
             ServerConfig::default(),
             GraphicsQuality::default(),
+            SessionMode::Player,
         );
         menu.pending = Some(std::thread::spawn(|| Err("Connection refused".into())));
         while !menu.pending.as_ref().unwrap().is_finished() {
@@ -599,6 +770,7 @@ mod tests {
             "Tester".into(),
             ServerConfig::default(),
             GraphicsQuality::default(),
+            SessionMode::Player,
         ))
         .init_resource::<InputFocus>()
         .init_resource::<ButtonInput<KeyCode>>()
@@ -685,6 +857,7 @@ mod tests {
                 allow_admin: true,
             },
             GraphicsQuality::default(),
+            SessionMode::Observer,
         );
         menu.start(true);
         let mut app = App::new();
@@ -724,7 +897,10 @@ mod tests {
             );
         };
         wait_for_join(&mut app);
-        assert!(app.world().resource::<Session>().can_admin);
+        let session = app.world().resource::<Session>();
+        assert!(session.observer.is_some());
+        assert!(!session.can_admin);
+        assert!(session.players.is_empty());
         assert_eq!(app.world().resource::<Visits>().0, 1);
         assert!(
             app.world_mut()
@@ -748,12 +924,40 @@ mod tests {
             0
         );
         assert!(app.world().resource::<JoinScreen>().local_server.is_none());
+        assert_eq!(
+            app.world().resource::<JoinScreen>().mode,
+            SessionMode::Observer
+        );
         assert!(path.exists());
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .clear();
+        // Switching the visible mode controls applies to the next local join.
+        let player_mode_button = app
+            .world_mut()
+            .query::<(Entity, &Action)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| {
+                matches!(action, Action::Mode(SessionMode::Player)).then_some(entity)
+            })
+            .unwrap();
+        *app.world_mut()
+            .get_mut::<Interaction>(player_mode_button)
+            .unwrap() = Interaction::Pressed;
+        app.update();
+        assert_eq!(
+            app.world().resource::<JoinScreen>().mode,
+            SessionMode::Player
+        );
+        *app.world_mut()
+            .get_mut::<Interaction>(player_mode_button)
+            .unwrap() = Interaction::None;
         app.world_mut().resource_mut::<JoinScreen>().start(true);
         wait_for_join(&mut app);
+        let session = app.world().resource::<Session>();
+        assert!(session.observer.is_none());
+        assert!(session.can_admin);
+        assert!(session.players.iter().any(|player| player.id == session.id));
         assert_eq!(app.world().resource::<Visits>().0, 2);
         app.world_mut()
             .resource_mut::<Connection>()
@@ -776,3 +980,7 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "observer_tests.rs"]
+mod observer_controls_tests;

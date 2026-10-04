@@ -23,7 +23,8 @@ fn panel() -> Color {
     Color::srgba(0.055, 0.10, 0.10, 0.87)
 }
 
-pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
+pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, session: Res<Session>) {
+    let observing = session.observer.is_some();
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
@@ -115,8 +116,12 @@ pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
         Node { position_type: PositionType::Absolute, bottom: px(28), left: px(28), padding: UiRect::all(px(17)), flex_direction: FlexDirection::Column, row_gap: px(8), border_radius: BorderRadius::all(px(8)), ..default() },
         BackgroundColor(panel()), HelpPanel,
         children![
-            (Text::new("MAKE YOURSELF AT HOME"), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.90, 0.73, 0.42))),
-            (Text::new("W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server"), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
+            (Text::new(if observing { "OBSERVE THE VALLEY" } else { "MAKE YOURSELF AT HOME" }), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.90, 0.73, 0.42))),
+            (Text::new(if observing {
+                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to valley\nTab   inspect forager     •     F2   graphics\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
+            } else {
+                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server"
+            }), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
         ],
     ));
     let palette_font = font.clone();
@@ -147,6 +152,11 @@ pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                 Node {
                     flex_direction: FlexDirection::Row,
                     column_gap: px(6),
+                    display: if observing {
+                        Display::None
+                    } else {
+                        Display::Flex
+                    },
                     ..default()
                 },
                 Children::spawn(SpawnIter(PALETTE.into_iter().enumerate().map(
@@ -286,7 +296,16 @@ pub fn update_ui(
         let value = if time.elapsed_secs_f64() < session.status_until {
             session.status.clone()
         } else if !session.captured {
-            "Click to explore  ·  changes are saved automatically".into()
+            if session.observer.is_some() {
+                "Click to fly the camera  ·  read-only observation".into()
+            } else {
+                "Click to explore  ·  changes are saved automatically".into()
+            }
+        } else if let Some(observer) = &session.observer {
+            format!(
+                "Camera  {:.0}, {:.0}, {:.0} m  ·  R or Home returns to the valley",
+                observer.position.x, observer.position.y, observer.position.z
+            )
         } else if session.target.is_none() {
             "Move closer to reach a block  ·  aim down to build nearby".into()
         } else {
@@ -298,8 +317,13 @@ pub fn update_ui(
         set_text(&mut text, value);
     }
     for mut text in &mut texts.p3() {
-        set_text(
-            &mut text,
+        let value = if let Some(observer) = &session.observer {
+            format!(
+                "OBSERVER  /  READ ONLY\n{:.0} m/s  ·  Shift {:.0} m/s",
+                observer.speed,
+                observer.speed(true)
+            )
+        } else {
             format!(
                 "CREATIVE  /  {}",
                 if session.flying {
@@ -307,8 +331,9 @@ pub fn update_ui(
                 } else {
                     "UNLIMITED MATERIALS"
                 }
-            ),
-        );
+            )
+        };
+        set_text(&mut text, value);
     }
     for (mut node, help, npc) in &mut panels {
         if help.is_some() {

@@ -1,6 +1,6 @@
 //! One wire format, one socket. Rendering never blocks on a socket operation.
 use bevy::prelude::Resource;
-use rubblekin_core::protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage};
+use rubblekin_core::protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage, SessionMode};
 use std::{
     collections::VecDeque,
     io::{self, Read, Write},
@@ -22,7 +22,11 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn connect(address: &str, name: String) -> io::Result<(Self, ServerMessage)> {
+    pub fn connect(
+        address: &str,
+        name: String,
+        mode: SessionMode,
+    ) -> io::Result<(Self, ServerMessage)> {
         // A hostname can resolve to both IPv6 and IPv4; try alternatives if the
         // first family is unavailable instead of rejecting a reachable server.
         let addresses: Vec<_> = address.to_socket_addrs()?.take(8).collect();
@@ -56,6 +60,7 @@ impl Connection {
         connection.send(ClientMessage::Hello {
             version: PROTOCOL_VERSION,
             name,
+            mode,
         });
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {

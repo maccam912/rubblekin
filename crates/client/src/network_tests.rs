@@ -15,6 +15,12 @@ use std::{
 
 #[test]
 fn preserves_terrain_delta_coalesced_with_welcome() {
+    for mode in [SessionMode::Player, SessionMode::Observer] {
+        preserves_delta_for_mode(mode);
+    }
+}
+
+fn preserves_delta_for_mode(mode: SessionMode) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     let address = listener.local_addr().unwrap().to_string();
     let (release, released) = mpsc::channel::<()>();
@@ -33,21 +39,27 @@ fn preserves_terrain_delta_coalesced_with_welcome() {
             .unwrap();
         assert!(matches!(
             serde_json::from_str::<ClientMessage>(&hello).unwrap(),
-            ClientMessage::Hello { .. }
+            ClientMessage::Hello { version: PROTOCOL_VERSION, mode: actual, ref name }
+                if actual == mode && name == "Joiner"
         ));
 
         let welcome = ServerMessage::Welcome {
             version: PROTOCOL_VERSION,
-            player_id: 17,
+            session_id: 17,
+            mode,
             seed: 42,
             edits: Vec::new(),
-            players: vec![PlayerSnapshot {
-                id: 17,
-                name: "Joiner".into(),
-                body: Body::new([0.25, 2.52, 0.25]),
-                yaw: 0.0,
-                last_input_sequence: 0,
-            }],
+            players: if mode == SessionMode::Player {
+                vec![PlayerSnapshot {
+                    id: 17,
+                    name: "Joiner".into(),
+                    body: Body::new([0.25, 2.52, 0.25]),
+                    yaw: 0.0,
+                    last_input_sequence: 0,
+                }]
+            } else {
+                Vec::new()
+            },
             npc: NpcSnapshot {
                 name: "Moss".into(),
                 position: [3.0, 2.5, 0.0],
@@ -77,10 +89,10 @@ fn preserves_terrain_delta_coalesced_with_welcome() {
         let _ = released.recv_timeout(Duration::from_secs(5));
     });
 
-    let (mut connection, welcome) = Connection::connect(&address, "Joiner".into()).unwrap();
+    let (mut connection, welcome) = Connection::connect(&address, "Joiner".into(), mode).unwrap();
     assert!(matches!(
         welcome,
-        ServerMessage::Welcome { player_id: 17, .. }
+        ServerMessage::Welcome { session_id: 17, mode: actual, .. } if actual == mode
     ));
     // Allow normal TCP fragmentation while ensuring the accepted terrain delta
     // is delivered exactly once after the handshake, never silently discarded.
@@ -130,10 +142,14 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
         ..Default::default()
     })
     .unwrap();
-    let (mut connection, welcome) =
-        Connection::connect(&server.addr.to_string(), "Walker".into()).unwrap();
+    let (mut connection, welcome) = Connection::connect(
+        &server.addr.to_string(),
+        "Walker".into(),
+        SessionMode::Player,
+    )
+    .unwrap();
     let ServerMessage::Welcome {
-        player_id,
+        session_id,
         seed,
         edits,
         players,
@@ -145,7 +161,7 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
     let world = World::from_edits(seed, &edits).unwrap();
     let mut body = players
         .iter()
-        .find(|p| p.id == player_id)
+        .find(|p| p.id == session_id)
         .unwrap()
         .body
         .clone();
@@ -170,7 +186,7 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
             if let ServerMessage::State { players, .. } = message {
                 delayed.push_back((
                     Instant::now() + Duration::from_millis(80),
-                    players.into_iter().find(|p| p.id == player_id).unwrap(),
+                    players.into_iter().find(|p| p.id == session_id).unwrap(),
                 ));
             }
         }
@@ -199,7 +215,7 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
         let mut done = false;
         for message in connection.poll() {
             if let ServerMessage::State { players, .. } = message {
-                let state = players.into_iter().find(|p| p.id == player_id).unwrap();
+                let state = players.into_iter().find(|p| p.id == session_id).unwrap();
                 done |= state.last_input_sequence == 90;
                 reconcile(&mut prediction, &mut body, state);
             }

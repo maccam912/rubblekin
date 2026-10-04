@@ -39,7 +39,8 @@ pub struct ServerConfig {
     pub bind_addr: String,
     pub save_path: PathBuf,
     pub seed: u32,
-    /// Grants every connected client developer controls. For trusted servers only.
+    /// Grants players developer controls and permits read-only observer sessions.
+    /// For trusted servers only.
     pub allow_admin: bool,
 }
 
@@ -128,8 +129,10 @@ struct Connection {
     outgoing: VecDeque<Vec<u8>>,
     write_offset: usize,
     queued_bytes: usize,
+    mode: Option<SessionMode>,
     player: Option<PlayerSnapshot>,
     connected_at: Instant,
+    closing_at: Option<Instant>,
     last_input: Instant,
     input_credit: f64,
     credit_updated: Instant,
@@ -148,8 +151,10 @@ impl Connection {
             outgoing: VecDeque::new(),
             write_offset: 0,
             queued_bytes: 0,
+            mode: None,
             player: None,
             connected_at: now,
+            closing_at: None,
             last_input: now,
             input_credit: MAX_INPUT_CREDIT,
             credit_updated: now,
@@ -237,7 +242,15 @@ impl Connection {
                 Err(error) => return Err(error),
             }
         }
+        if self.closing_at.is_some() && self.outgoing.is_empty() {
+            self.dead = true;
+        }
         Ok(())
+    }
+
+    fn close_with_notice(&mut self, text: String) {
+        self.send(&ServerMessage::Notice { text });
+        self.closing_at = Some(Instant::now());
     }
 }
 
@@ -267,19 +280,27 @@ fn run(
         }
         let mut inbox = Vec::new();
         for (&id, connection) in &mut connections {
-            match connection.receive() {
-                Ok(messages) => inbox.extend(messages.into_iter().map(|message| (id, message))),
-                Err(_) => connection.dead = true,
+            if connection.closing_at.is_none() {
+                match connection.receive() {
+                    Ok(messages) => inbox.extend(messages.into_iter().map(|message| (id, message))),
+                    Err(_) => connection.dead = true,
+                }
             }
-            if connection.player.is_none()
-                && connection.connected_at.elapsed() > Duration::from_secs(5)
+            if (connection.mode.is_none()
+                && connection.connected_at.elapsed() > Duration::from_secs(5))
+                || connection
+                    .closing_at
+                    .is_some_and(|started| started.elapsed() > Duration::from_secs(5))
             {
                 connection.dead = true;
             }
         }
         let mut edit_budget = 16;
         for (id, message) in inbox {
-            if connections.get(&id).is_none_or(|client| client.dead) {
+            if connections
+                .get(&id)
+                .is_none_or(|client| client.dead || client.closing_at.is_some())
+            {
                 continue;
             }
             handle_message(
@@ -347,7 +368,7 @@ fn players(connections: &BTreeMap<u64, Connection>) -> Vec<PlayerSnapshot> {
 fn broadcast(connections: &mut BTreeMap<u64, Connection>, message: &ServerMessage) {
     for connection in connections
         .values_mut()
-        .filter(|c| c.player.is_some() && !c.dead)
+        .filter(|c| c.mode.is_some() && c.closing_at.is_none() && !c.dead)
     {
         connection.send(message);
     }
@@ -375,10 +396,25 @@ fn handle_message(
     config: &ServerConfig,
     edit_budget: &mut usize,
 ) -> io::Result<()> {
-    if let ClientMessage::Hello { version, name } = message {
+    if let ClientMessage::Hello {
+        version,
+        name,
+        mode,
+    } = message
+    {
         let connection = connections.get_mut(&id).unwrap();
-        if version != PROTOCOL_VERSION || connection.player.is_some() {
+        if connection.mode.is_some() {
             connection.dead = true;
+            return Ok(());
+        }
+        if version != PROTOCOL_VERSION {
+            connection.close_with_notice(format!(
+                "Protocol version mismatch: server uses {PROTOCOL_VERSION}, client uses {version}. Update both client and server."
+            ));
+            return Ok(());
+        }
+        if mode == SessionMode::Observer && !config.allow_admin {
+            connection.close_with_notice("Admin observation is disabled on this server".into());
             return Ok(());
         }
         let name: String = name
@@ -391,29 +427,57 @@ fn handle_message(
         } else {
             name
         };
-        connection.player = Some(PlayerSnapshot {
-            id,
-            name,
-            body: Body::new(sim.world.spawn_position()),
-            yaw: 0.0,
-            last_input_sequence: 0,
-        });
+        connection.mode = Some(mode);
+        if mode == SessionMode::Player {
+            connection.player = Some(PlayerSnapshot {
+                id,
+                name,
+                body: Body::new(sim.world.spawn_position()),
+                yaw: 0.0,
+                last_input_sequence: 0,
+            });
+        }
         let welcome = ServerMessage::Welcome {
             version: PROTOCOL_VERSION,
-            player_id: id,
+            session_id: id,
+            mode,
             seed: sim.world.seed,
             edits: sim.world.edits(),
             players: players(connections),
             npc: sim.npc.snapshot.clone(),
             world_time: sim.world_time,
-            can_admin: config.allow_admin,
+            can_admin: config.allow_admin && mode == SessionMode::Player,
         };
         connections.get_mut(&id).unwrap().send(&welcome);
         return Ok(());
     }
-    if connections.get(&id).is_none_or(|c| c.player.is_none()) {
+    if connections.get(&id).is_none_or(|c| c.mode.is_none()) {
         connections.get_mut(&id).unwrap().dead = true;
         return Ok(());
+    }
+    if connections[&id].mode == Some(SessionMode::Observer) {
+        match &message {
+            ClientMessage::Edit { request_id, .. } => {
+                reject(
+                    connections,
+                    id,
+                    *request_id,
+                    "Observer sessions are read-only",
+                );
+                return Ok(());
+            }
+            ClientMessage::Input { .. } | ClientMessage::Admin { .. } => {
+                connections
+                    .get_mut(&id)
+                    .unwrap()
+                    .send(&ServerMessage::Notice {
+                        text: "Observer sessions are read-only".into(),
+                    });
+                return Ok(());
+            }
+            ClientMessage::Ping => {}
+            ClientMessage::Hello { .. } => unreachable!(),
+        }
     }
     match message {
         ClientMessage::Input {

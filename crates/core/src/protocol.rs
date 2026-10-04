@@ -4,16 +4,25 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionMode {
+    #[default]
+    Player,
+    Observer,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMessage {
     Hello {
         version: u32,
         name: String,
+        #[serde(default)]
+        mode: SessionMode,
     },
     Input {
         sequence: u64,
@@ -36,7 +45,8 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     Welcome {
         version: u32,
-        player_id: u64,
+        session_id: u64,
+        mode: SessionMode,
         seed: u32,
         edits: Vec<BlockEdit>,
         players: Vec<PlayerSnapshot>,

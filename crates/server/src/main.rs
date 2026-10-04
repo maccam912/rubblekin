@@ -32,7 +32,7 @@ fn main() -> io::Result<()> {
             "--allow-admin" => config.allow_admin = true,
             "--help" | "-h" => {
                 println!(
-                    "rubblekin-server [--bind 0.0.0.0:7878] [--save saves/world.json] [--seed 42] [--allow-admin]\n\n--allow-admin grants developer controls to EVERY connected player. Use only on a trusted development server.\nExisting saves retain their seed. The world keeps simulating without players; server downtime is not replayed."
+                    "rubblekin-server [--bind 0.0.0.0:7878] [--save saves/world.json] [--seed 42] [--allow-admin]\n\n--allow-admin grants developer controls to EVERY connected player and allows read-only observer sessions. Use only on a trusted development server.\nExisting saves retain their seed. The world keeps simulating without players; server downtime is not replayed."
                 );
                 return Ok(());
             }

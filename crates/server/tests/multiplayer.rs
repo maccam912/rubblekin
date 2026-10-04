@@ -55,6 +55,21 @@ struct Client {
 
 impl Client {
     fn connect(addr: SocketAddr, name: &str) -> (Self, ServerMessage) {
+        Self::connect_mode(addr, name, SessionMode::Player)
+    }
+
+    fn connect_mode(addr: SocketAddr, name: &str, mode: SessionMode) -> (Self, ServerMessage) {
+        let mut client = Self::open(addr);
+        client.send(ClientMessage::Hello {
+            version: PROTOCOL_VERSION,
+            name: name.into(),
+            mode,
+        });
+        let welcome = client.until(|message| matches!(message, ServerMessage::Welcome { .. }));
+        (client, welcome)
+    }
+
+    fn open(addr: SocketAddr) -> Self {
         let writer = TcpStream::connect(addr).unwrap();
         writer
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -63,16 +78,10 @@ impl Client {
             .set_write_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         writer.set_nodelay(true).unwrap();
-        let mut client = Self {
+        Self {
             reader: BufReader::new(writer.try_clone().unwrap()),
             writer,
-        };
-        client.send(ClientMessage::Hello {
-            version: PROTOCOL_VERSION,
-            name: name.into(),
-        });
-        let welcome = client.until(|message| matches!(message, ServerMessage::Welcome { .. }));
-        (client, welcome)
+        }
     }
 
     fn send(&mut self, message: ClientMessage) {
@@ -126,6 +135,192 @@ fn nearby_air() -> BlockPos {
         (world.surface_height(2.25, 0.25) / CELL_SIZE).round() as i32,
         0,
     )
+}
+
+#[test]
+fn observers_receive_the_live_world_without_an_avatar_and_cannot_mutate_it() {
+    let save = TestSave::new();
+    let server = spawn(save.config(true)).unwrap();
+    let connected_at = Instant::now();
+    let (mut observer, welcome) =
+        Client::connect_mode(server.addr, "Admin camera", SessionMode::Observer);
+    let observer_id = match welcome {
+        ServerMessage::Welcome {
+            session_id,
+            mode,
+            players,
+            can_admin,
+            ..
+        } => {
+            assert_eq!(mode, SessionMode::Observer);
+            assert!(
+                players.is_empty(),
+                "An observer must never create an avatar"
+            );
+            assert!(!can_admin, "Observation is read-only");
+            session_id
+        }
+        _ => unreachable!(),
+    };
+    let (mut player, welcome) = Client::connect(server.addr, "Builder");
+    let player_id = match welcome {
+        ServerMessage::Welcome {
+            session_id,
+            mode,
+            players,
+            can_admin,
+            ..
+        } => {
+            assert_eq!(mode, SessionMode::Player);
+            assert!(can_admin);
+            assert_eq!(players.len(), 1);
+            assert_eq!(players[0].id, session_id);
+            assert_ne!(session_id, observer_id);
+            session_id
+        }
+        _ => unreachable!(),
+    };
+
+    let position = nearby_air();
+    observer.send(ClientMessage::Edit {
+        request_id: 90,
+        position,
+        block: Block::Brick,
+    });
+    let rejection =
+        observer.until(|message| matches!(message, ServerMessage::Rejected { request_id: 90, .. }));
+    assert!(
+        matches!(rejection, ServerMessage::Rejected { reason, .. } if reason.contains("read-only"))
+    );
+    observer.send(ClientMessage::Input {
+        sequence: 1,
+        dt: 0.05,
+        input: MoveInput {
+            direction: [1.0, 0.0],
+            fly: true,
+            ..Default::default()
+        },
+        yaw: 0.0,
+    });
+    let notice = observer.until(|message| matches!(message, ServerMessage::Notice { .. }));
+    assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("read-only")));
+    for action in [
+        AdminAction::SetNpcGoal {
+            goal: Some(NpcAction::Rest),
+        },
+        AdminAction::SetNpcNeeds {
+            hunger: 0.0,
+            energy: 0.0,
+        },
+        AdminAction::SetNpcWeights {
+            forage: 0.0,
+            rest: 10.0,
+        },
+    ] {
+        observer.send(ClientMessage::Admin { action });
+        let notice = observer.until(|message| matches!(message, ServerMessage::Notice { .. }));
+        assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("read-only")));
+    }
+    let state = observer.until(|message| matches!(message, ServerMessage::State { .. }));
+    match state {
+        ServerMessage::State { players, npc, .. } => {
+            assert_eq!(players.len(), 1);
+            assert_eq!(players[0].id, player_id);
+            assert_eq!(players[0].last_input_sequence, 0);
+            assert!(!npc.forced);
+            assert!(npc.hunger > 0.0 && npc.energy > 0.0);
+        }
+        _ => unreachable!(),
+    }
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(save.config(true).save_path).unwrap()).unwrap();
+    assert!(saved["edits"].as_array().unwrap().is_empty());
+    assert!(saved["npc"]["forced_goal"].is_null());
+    assert_eq!(saved["npc"]["forage_weight"], 1.0);
+    assert_eq!(saved["npc"]["rest_weight"], 1.0);
+
+    player.send(ClientMessage::Edit {
+        request_id: 91,
+        position,
+        block: Block::Wood,
+    });
+    let edit = observer
+        .until(|message| matches!(message, ServerMessage::BlockChanged { request_id: 91, .. }));
+    assert!(
+        matches!(edit, ServerMessage::BlockChanged { player_id: actor, edit, .. }
+        if actor == player_id && edit.position == position && edit.block == Block::Wood)
+    );
+    observer.send(ClientMessage::Ping);
+    observer.until(|message| matches!(message, ServerMessage::Pong));
+
+    // An admitted camera has no PlayerSnapshot, but must outlive the handshake
+    // timeout and keep receiving updates without movement input.
+    let deadline = connected_at + Duration::from_secs(8);
+    while connected_at.elapsed() < Duration::from_millis(5_200) {
+        assert!(Instant::now() < deadline);
+        let state = observer.until(|message| matches!(message, ServerMessage::State { .. }));
+        assert!(matches!(state, ServerMessage::State { players, .. }
+            if players.len() == 1 && players[0].id == player_id));
+    }
+    observer.send(ClientMessage::Ping);
+    observer.until(|message| matches!(message, ServerMessage::Pong));
+    drop(observer);
+    player.send(ClientMessage::Ping);
+    player.until(|message| matches!(message, ServerMessage::Pong));
+    let state = player.until(|message| matches!(message, ServerMessage::State { .. }));
+    assert!(matches!(state, ServerMessage::State { players, .. }
+        if players.len() == 1 && players[0].id == player_id));
+    server.stop().unwrap();
+}
+
+#[test]
+fn observer_admission_and_old_protocol_fail_with_notices_before_disconnect() {
+    let save = TestSave::new();
+    let server = spawn(save.config(false)).unwrap();
+    let mut denied = Client::open(server.addr);
+    denied.send(ClientMessage::Hello {
+        version: PROTOCOL_VERSION,
+        name: "Camera".into(),
+        mode: SessionMode::Observer,
+    });
+    let notice = denied.until(|message| matches!(message, ServerMessage::Notice { .. }));
+    assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("disabled")));
+    denied.until_disconnected(0);
+
+    // Actual protocol-v2 clients omit mode; deserialize that shape far enough
+    // to explain the required update instead of silently dropping the socket.
+    let mut outdated = Client::open(server.addr);
+    outdated
+        .writer
+        .write_all(b"{\"Hello\":{\"version\":2,\"name\":\"Old client\"}}\n")
+        .unwrap();
+    let notice = outdated.until(|message| matches!(message, ServerMessage::Notice { .. }));
+    assert!(matches!(notice, ServerMessage::Notice { text }
+        if text.contains("version mismatch") && text.contains("server uses 3")));
+    outdated.until_disconnected(0);
+
+    let (mut player, welcome) = Client::connect(server.addr, "Still available");
+    assert!(matches!(welcome, ServerMessage::Welcome { players, .. } if players.len() == 1));
+    player.send(ClientMessage::Ping);
+    player.until(|message| matches!(message, ServerMessage::Pong));
+    server.stop().unwrap();
+}
+
+#[test]
+fn an_observer_cannot_repeat_hello_to_create_a_player() {
+    let save = TestSave::new();
+    let server = spawn(save.config(true)).unwrap();
+    let (mut observer, _) = Client::connect_mode(server.addr, "Camera", SessionMode::Observer);
+    observer.send(ClientMessage::Hello {
+        version: PROTOCOL_VERSION,
+        name: "Attempted player".into(),
+        mode: SessionMode::Player,
+    });
+    observer.until_disconnected(0);
+    let (_, welcome) = Client::connect(server.addr, "Only player");
+    assert!(matches!(welcome, ServerMessage::Welcome { players, .. }
+        if players.len() == 1 && players[0].name == "Only player"));
+    server.stop().unwrap();
 }
 
 #[test]
@@ -329,7 +524,7 @@ fn movement_input_expires_and_logout_removes_the_avatar() {
     let server = spawn(save.config(false)).unwrap();
     let (mut moving, welcome) = Client::connect(server.addr, "Moving player");
     let id = match welcome {
-        ServerMessage::Welcome { player_id, .. } => player_id,
+        ServerMessage::Welcome { session_id, .. } => session_id,
         _ => unreachable!(),
     };
     let (mut observer, _) = Client::connect(server.addr, "Observer");
@@ -371,14 +566,14 @@ fn movement_commands_execute_exactly_once_with_their_original_durations() {
     let (mut client, welcome) = Client::connect(server.addr, "Predicting player");
     let (id, world, mut expected) = match welcome {
         ServerMessage::Welcome {
-            player_id,
+            session_id,
             seed,
             players,
             ..
         } => {
-            let player = players.into_iter().find(|p| p.id == player_id).unwrap();
+            let player = players.into_iter().find(|p| p.id == session_id).unwrap();
             assert_eq!(player.last_input_sequence, 0);
-            (player_id, World::new(seed), player.body)
+            (session_id, World::new(seed), player.body)
         }
         _ => unreachable!(),
     };
@@ -481,12 +676,14 @@ fn a_long_frame_after_a_short_frame_fits_the_bounded_network_burst_allowance() {
     let (mut client, welcome) = Client::connect(server.addr, "Slow frame");
     let (id, mut expected) = match welcome {
         ServerMessage::Welcome {
-            player_id, players, ..
+            session_id,
+            players,
+            ..
         } => (
-            player_id,
+            session_id,
             players
                 .into_iter()
-                .find(|p| p.id == player_id)
+                .find(|p| p.id == session_id)
                 .unwrap()
                 .body,
         ),
@@ -554,7 +751,7 @@ fn invalid_movement_duration_and_sequence_are_never_acknowledged() {
     }
     let (mut client, welcome) = Client::connect(server.addr, "Duplicate command");
     let id = match welcome {
-        ServerMessage::Welcome { player_id, .. } => player_id,
+        ServerMessage::Welcome { session_id, .. } => session_id,
         _ => unreachable!(),
     };
     let command = ClientMessage::Input {

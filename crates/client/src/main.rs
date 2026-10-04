@@ -1,6 +1,8 @@
+mod follow_camera;
 mod graphics;
 mod join;
 mod network;
+mod observer;
 mod prediction;
 mod terrain;
 mod ui;
@@ -16,8 +18,10 @@ use bevy::{
     render::view::screenshot::{Screenshot, save_to_disk},
     window::{CursorGrabMode, CursorOptions, PresentMode, WindowResolution},
 };
+use follow_camera::CameraFollow;
 use graphics::GraphicsQuality;
 use network::Connection;
+use observer::ObserverCamera;
 use prediction::Prediction;
 use rubblekin_core::{
     physics::{Body, EYE_HEIGHT, MoveInput},
@@ -62,6 +66,7 @@ pub struct Session {
     pub fps: f64,
     pub edits: usize,
     pub connected_to: String,
+    pub observer: Option<ObserverCamera>,
     prediction: Prediction,
     edit_clock: f32,
     next_request: u64,
@@ -102,6 +107,7 @@ struct Options {
     exit_after: Option<f32>,
     graphics: GraphicsQuality,
     seed: Option<u32>,
+    observe: bool,
 }
 
 fn options() -> Result<Options, String> {
@@ -110,6 +116,7 @@ fn options() -> Result<Options, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--local" => result.local = true,
+            "--observe" => result.observe = true,
             "--connect" => result.connect = Some(args.next().ok_or("--connect needs host:port")?),
             "--bind" => result.bind = Some(args.next().ok_or("--bind needs host:port")?),
             "--save" => result.save = Some(args.next().ok_or("--save needs a file path")?.into()),
@@ -141,7 +148,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = GraphicsQuality::High,
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel valley\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/valley.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nEscape release cursor | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel valley\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/valley.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return\nEscape release cursor | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -178,6 +185,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             allow_admin: true,
         },
         options.graphics,
+        if options.observe {
+            SessionMode::Observer
+        } else {
+            SessionMode::Player
+        },
     );
     if options.local || options.connect.is_some() {
         menu.start(options.local);
@@ -293,6 +305,7 @@ fn setup(
             Vec3::from_array(session.body.position) + Vec3::new(0.0, 4.0, 6.0),
         ),
         GameCamera,
+        CameraFollow::default(),
         IsDefaultUiCamera,
     ));
 }
@@ -314,7 +327,10 @@ fn receive_network(
                 npc,
                 world_time,
             } => {
-                if let Some(authoritative) = players.iter().find(|player| player.id == session.id) {
+                if session.observer.is_none()
+                    && let Some(authoritative) =
+                        players.iter().find(|player| player.id == session.id)
+                {
                     latest_authoritative = Some(authoritative.clone());
                 }
                 session.players = players;
@@ -380,6 +396,7 @@ fn controls(
     diagnostics: Res<DiagnosticsStore>,
 ) {
     let dt = time.delta_secs().min(MAX_INPUT_DT);
+    let observing = session.observer.is_some();
     if keys.just_pressed(KeyCode::Escape) || !window.focused {
         session.captured = false;
         cursor.grab_mode = CursorGrabMode::None;
@@ -391,6 +408,7 @@ fn controls(
         session.edit_clock = 0.3;
     }
     if session.captured {
+        let (min_pitch, max_pitch) = if observing { (-1.5, 1.5) } else { (-0.6, 1.2) };
         session.yaw += motion.delta.x * 0.0025;
         // Discrete steps also support brief keyboard taps and accessibility input.
         session.yaw += (f32::from(keys.just_pressed(KeyCode::ArrowRight))
@@ -400,7 +418,7 @@ fn controls(
             + (f32::from(keys.just_pressed(KeyCode::ArrowDown))
                 - f32::from(keys.just_pressed(KeyCode::ArrowUp)))
                 * 0.06)
-            .clamp(-0.6, 1.2);
+            .clamp(min_pitch, max_pitch);
         session.yaw += (f32::from(keys.pressed(KeyCode::ArrowRight))
             - f32::from(keys.pressed(KeyCode::ArrowLeft)))
             * dt
@@ -409,12 +427,25 @@ fn controls(
             + (f32::from(keys.pressed(KeyCode::ArrowDown))
                 - f32::from(keys.pressed(KeyCode::ArrowUp)))
                 * dt)
-            .clamp(-0.6, 1.2);
-        session.pitch = (session.pitch + motion.delta.y * 0.0025).clamp(-0.6, 1.2);
-        session.camera_distance = (session.camera_distance - scroll.delta.y * 0.45).clamp(1.0, 9.0);
+            .clamp(min_pitch, max_pitch);
+        session.pitch = (session.pitch + motion.delta.y * 0.0025).clamp(min_pitch, max_pitch);
+        if let Some(observer) = &mut session.observer {
+            observer.adjust_speed(scroll.delta.y);
+        } else {
+            session.camera_distance =
+                (session.camera_distance - scroll.delta.y * 0.45).clamp(1.0, 9.0);
+        }
     }
-    if keys.just_pressed(KeyCode::KeyF) {
+    if !observing && keys.just_pressed(KeyCode::KeyF) {
         session.flying = !session.flying;
+    }
+    if observing
+        && window.focused
+        && (keys.just_pressed(KeyCode::Home) || keys.just_pressed(KeyCode::KeyR))
+    {
+        session.observer = Some(ObserverCamera::new(world.0.spawn_position()));
+        session.yaw = -0.45;
+        session.pitch = 0.12;
     }
     if keys.just_pressed(KeyCode::Tab) {
         session.inspector = !session.inspector;
@@ -449,7 +480,7 @@ fn controls(
             session.selected = i;
         }
     }
-    if session.can_admin {
+    if session.can_admin && !observing {
         let goal = if keys.just_pressed(KeyCode::F6) {
             Some(Some(NpcAction::Forage))
         } else if keys.just_pressed(KeyCode::F7) {
@@ -490,6 +521,7 @@ fn controls(
         }
     }
     let mut input = MoveInput::default();
+    let mut observer_input = Vec3::ZERO;
     if session.captured && window.focused && connection.error.is_none() {
         let forward = Vec2::new(session.yaw.sin(), -session.yaw.cos());
         let right = Vec2::new(session.yaw.cos(), session.yaw.sin());
@@ -501,16 +533,21 @@ fn controls(
         input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         input.vertical =
             f32::from(keys.pressed(KeyCode::KeyE)) - f32::from(keys.pressed(KeyCode::KeyQ));
+        observer_input = Vec3::new(x, input.vertical, z);
     }
     input.fly = session.flying;
     if connection.error.is_none() && dt > 0.0 {
         let session = &mut *session;
-        match session
-            .prediction
-            .advance(&world.0, &mut session.body, input, session.yaw, dt)
-        {
-            Ok(message) => connection.send(message),
-            Err(error) => connection.fail(error.into()),
+        if let Some(observer) = &mut session.observer {
+            observer.advance(observer_input, session.yaw, session.pitch, input.sprint, dt);
+        } else {
+            match session
+                .prediction
+                .advance(&world.0, &mut session.body, input, session.yaw, dt)
+            {
+                Ok(message) => connection.send(message),
+                Err(error) => connection.fail(error.into()),
+            }
         }
     }
     session.edit_clock = (session.edit_clock - dt).max(0.0);
@@ -525,24 +562,24 @@ fn controls(
 fn camera(
     world: Res<VoxelWorld>,
     session: Res<Session>,
-    mut camera: Single<&mut Transform, With<GameCamera>>,
+    time: Res<Time>,
+    mut camera: Single<(&mut Transform, &mut CameraFollow), With<GameCamera>>,
 ) {
+    let (transform, follow) = &mut *camera;
+    if let Some(observer) = &session.observer {
+        **transform = observer.transform(session.yaw, session.pitch);
+        return;
+    }
     let eye = Vec3::from_array(session.body.position) + Vec3::Y * EYE_HEIGHT;
-    let shoulder = Vec3::new(session.yaw.cos(), 0.0, session.yaw.sin()) * 0.8;
-    let pivot = eye + shoulder;
-    let forward = Vec3::new(
-        session.yaw.sin() * session.pitch.cos(),
-        -session.pitch.sin(),
-        -session.yaw.cos() * session.pitch.cos(),
+    let follow_eye = follow.advance(eye, time.delta_secs());
+    **transform = follow_camera::transform(
+        &world.0,
+        eye,
+        follow_eye,
+        session.yaw,
+        session.pitch,
+        session.camera_distance,
     );
-    let back = -forward;
-    let distance = world
-        .0
-        .raycast(pivot.to_array(), back.to_array(), session.camera_distance)
-        .map(|hit| (hit.distance - 0.2).max(0.25))
-        .unwrap_or(session.camera_distance);
-    **camera = Transform::from_translation(pivot + back * distance)
-        .looking_at(pivot + forward * 4.0, Vec3::Y);
 }
 
 fn edit_blocks(
@@ -554,6 +591,19 @@ fn edit_blocks(
     mut connection: ResMut<Connection>,
     mut gizmos: Gizmos,
 ) {
+    if session.inspector
+        && let Some(target) = session.npc.target
+    {
+        gizmos.line(
+            Vec3::from_array(session.npc.position) + Vec3::Y,
+            Vec3::from_array(target) + Vec3::Y * 0.15,
+            Color::srgba(0.97, 0.71, 0.28, 0.8),
+        );
+    }
+    if session.observer.is_some() {
+        session.target = None;
+        return;
+    }
     let ray = world.0.raycast(
         camera.translation.to_array(),
         camera.forward().to_array(),
@@ -606,15 +656,6 @@ fn edit_blocks(
                 block,
             });
         }
-    }
-    if session.inspector
-        && let Some(target) = session.npc.target
-    {
-        gizmos.line(
-            Vec3::from_array(session.npc.position) + Vec3::Y,
-            Vec3::from_array(target) + Vec3::Y * 0.15,
-            Color::srgba(0.97, 0.71, 0.28, 0.8),
-        );
     }
 }
 
