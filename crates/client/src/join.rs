@@ -8,7 +8,8 @@ use bevy::{
     input_focus::{FocusCause, InputFocus},
     prelude::*,
     text::{EditableText, EditableTextFilter, TextCursorStyle, TextEdit},
-    window::{CursorGrabMode, CursorOptions},
+    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
+    winit::{RawWinitWindowEvent, converters::convert_keyboard_input},
 };
 use rubblekin_core::{
     physics::Body,
@@ -17,6 +18,7 @@ use rubblekin_core::{
 };
 use rubblekin_server::{ServerConfig, ServerHandle, spawn};
 use std::{net::Ipv6Addr, thread::JoinHandle};
+use winit::{event::WindowEvent as NativeWindowEvent, keyboard::ModifiersState};
 
 #[derive(Resource)]
 pub struct JoinScreen {
@@ -210,6 +212,39 @@ pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, menu: Res<
     });
 }
 
+// macOS can attach modifier flags to synthesized key events without emitting
+// separate modifier key presses. Bevy's ButtonInput does not expose those flags.
+#[derive(Message)]
+pub(super) struct MenuKey {
+    input: KeyboardInput,
+    modifiers: ModifiersState,
+}
+
+pub fn native_input(
+    mut events: MessageReader<RawWinitWindowEvent>,
+    mut modifiers: Local<ModifiersState>,
+    mut keys: MessageWriter<MenuKey>,
+    window: Single<Entity, With<PrimaryWindow>>,
+) {
+    for event in events.read() {
+        match &event.event {
+            NativeWindowEvent::ModifiersChanged(value) => *modifiers = value.state(),
+            NativeWindowEvent::Focused(false) => *modifiers = ModifiersState::empty(),
+            NativeWindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => {
+                keys.write(MenuKey {
+                    input: convert_keyboard_input(event, *window),
+                    modifiers: *modifiers,
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
 // The existing Bevy text editor owns selection, Unicode editing, and clipboard
 // operations. This maps the two fields' input without a second UI framework.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -217,15 +252,13 @@ pub fn interact(
     mut menu: ResMut<JoinScreen>,
     session: Option<Res<Session>>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut keyboard: MessageReader<KeyboardInput>,
-    mut event_keys: Local<ButtonInput<KeyCode>>,
+    mut keyboard: MessageReader<MenuKey>,
     mut focus: ResMut<InputFocus>,
     mut fields: Query<(Entity, &Field, &Interaction, &mut EditableText)>,
     actions: Query<(&Action, &Interaction), Changed<Interaction>>,
 ) {
     if session.is_some() || menu.pending.is_some() {
         keyboard.clear();
-        *event_keys = keys.clone();
         return;
     }
     // Text edits commit in PostUpdate. Submit the previous frame's action only
@@ -244,22 +277,15 @@ pub fn interact(
             focus.set(entity, FocusCause::Navigated);
         }
     }
-    // A complete modifier chord can arrive in one render frame. Preserve its
-    // event order instead of looking at the final (already released) key state.
-    for event in keyboard.read() {
-        if event.state.is_pressed() {
-            event_keys.press(event.key_code);
-        } else {
-            event_keys.release(event.key_code);
+    // Each event retains the modifier flags it had when Winit received it,
+    // including complete press/release chords arriving in a single frame.
+    for key in keyboard.read() {
+        let event = &key.input;
+        if !event.state.is_pressed() {
             continue;
         }
-        let shortcut = event_keys.any_pressed([
-            KeyCode::ControlLeft,
-            KeyCode::ControlRight,
-            KeyCode::SuperLeft,
-            KeyCode::SuperRight,
-        ]);
-        let shift = event_keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let shortcut = key.modifiers.control_key() || key.modifiers.super_key();
+        let shift = key.modifiers.shift_key();
         let Some(edit) = text_edit(event, shortcut, shift) else {
             continue;
         };
@@ -269,8 +295,6 @@ pub fn interact(
             input.queue_edit(edit);
         }
     }
-    // Bevy also clears held keys after window focus loss.
-    *event_keys = keys.clone();
     for (_, field, _, input) in &fields {
         match field {
             Field::Address => menu.address = input.value().to_string(),
@@ -568,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn modifier_chord_typing_and_enter_in_one_frame_submit_committed_text() {
+    fn modifier_flags_typing_and_enter_in_one_frame_submit_committed_text() {
         let mut app = App::new();
         app.insert_resource(JoinScreen::new(
             "127.0.0.1:7878".into(),
@@ -581,7 +605,7 @@ mod tests {
         .init_resource::<bevy::text::FontCx>()
         .init_resource::<bevy::text::LayoutCx>()
         .init_resource::<bevy::clipboard::Clipboard>()
-        .add_message::<KeyboardInput>()
+        .add_message::<MenuKey>()
         .add_systems(Update, interact)
         .add_systems(PostUpdate, bevy::text::apply_text_edits);
         // Parley selection uses shaped layout, so the headless test needs the
@@ -605,21 +629,22 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::Enter);
-        use bevy::input::ButtonState::{Pressed, Released};
-        for (key_code, state, text) in [
-            (KeyCode::SuperLeft, Pressed, None),
-            (KeyCode::KeyA, Pressed, Some("a")),
-            (KeyCode::KeyA, Released, None),
-            (KeyCode::SuperLeft, Released, None),
-            (KeyCode::KeyN, Pressed, Some("no-port")),
+        // Native macOS input can provide Command flags with no separate
+        // Command-key event (as reproduced during the actual window test).
+        for (key_code, text, modifiers) in [
+            (KeyCode::KeyA, "a", ModifiersState::SUPER),
+            (KeyCode::KeyN, "no-port", ModifiersState::empty()),
         ] {
-            app.world_mut().write_message(KeyboardInput {
-                key_code,
-                logical_key: Key::Character(text.unwrap_or("").into()),
-                state,
-                text: text.map(Into::into),
-                repeat: false,
-                window: Entity::PLACEHOLDER,
+            app.world_mut().write_message(MenuKey {
+                input: KeyboardInput {
+                    key_code,
+                    logical_key: Key::Character(text.into()),
+                    state: bevy::input::ButtonState::Pressed,
+                    text: Some(text.into()),
+                    repeat: false,
+                    window: Entity::PLACEHOLDER,
+                },
+                modifiers,
             });
         }
         app.update();
@@ -669,7 +694,7 @@ mod tests {
             .init_resource::<Assets<Font>>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Visits>()
-            .add_message::<KeyboardInput>()
+            .add_message::<MenuKey>()
             .add_systems(Startup, setup)
             .add_systems(
                 Update,

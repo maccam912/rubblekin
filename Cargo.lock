@@ -3710,6 +3710,7 @@ dependencies = [
  "rubblekin_core",
  "rubblekin_server",
  "serde_json",
+ "winit",
 ]
 
 [[package]]

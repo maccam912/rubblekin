@@ -216,10 +216,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             ..default()
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_message::<join::MenuKey>()
         .add_systems(Startup, join::setup)
         .add_systems(
             Update,
             (
+                join::native_input,
                 join::interact,
                 join::poll_connection,
                 (setup, ui::setup_ui).run_if(resource_added::<Session>),
