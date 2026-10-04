@@ -174,7 +174,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         options
             .connect
             .clone()
-            .unwrap_or_else(|| "127.0.0.1:7878".into()),
+            .unwrap_or_else(|| "rubblekin.oci.koski.co:7878".into()),
         options.name.unwrap_or_else(|| "Wayfarer".into()),
         ServerConfig {
             bind_addr: options.bind.unwrap_or_else(|| "127.0.0.1:7878".into()),

@@ -28,7 +28,7 @@ On macOS, move **Rubblekin Launcher.app** to Applications. Bundles are ad-hoc si
 Local worlds remain in `game/saves/valley.json` through updates; screenshots use `game/artifacts`, and the latest client log is `logs/client.log`. Downloads use `clients/<target>/<commit>`, retaining the current and previous installed version for each architecture. Updates verify SHA-256, stage a complete installation, then atomically change the selected version. They do not modify saves. Existing checkout saves are not moved automatically; with the game stopped, copy one into `game/saves/valley.json` if desired.
 
 ```sh
-rubblekin-launcher --headless -- --low --connect 147.224.165.110:7878
+rubblekin-launcher --headless -- --low --connect rubblekin.oci.koski.co:7878
 rubblekin-launcher --offline
 rubblekin-launcher --data-dir /path/to/rubblekin-data
 cargo run --locked -p rubblekin_launcher
@@ -60,7 +60,7 @@ Use Rust/Cargo compatible with the workspace's Rust 1.95 minimum, then run from 
 cargo run --locked -p rubblekin_client
 ```
 
-The first build compiles Bevy and takes longer than subsequent launches. The client opens a join screen with a server address and display name. Choose **Join server** to connect remotely or **Local world** to host at `127.0.0.1:7878` with the save `saves/valley.json`. Names are guest display names, not authenticated accounts. Failed connections return an error on the screen so you can correct the address and retry.
+The first build compiles Bevy and takes longer than subsequent launches. The client opens a join screen with `rubblekin.oci.koski.co:7878` as the default server address and a display name. Choose **Join server** to connect remotely or **Local world** to host at `127.0.0.1:7878` with the save `saves/valley.json`. Names are guest display names, not authenticated accounts. Failed connections return an error on the screen so you can correct the address and retry.
 
 Use `--local` to go straight into a local world, or `--connect HOST:PORT --name NAME` to connect immediately. Balanced graphics is the default; use `--low` for the least expensive preset. Click the game to capture the mouse; press Escape to release it. Press F10 to return to the join screen.
 
@@ -189,13 +189,13 @@ docker run --rm -p 7878:7878 -v rubblekin-world:/data rubblekin-server:prototype
 
 The actual OCI cluster configuration lives in [fleet-infra/apps/rubblekin](https://github.com/maccam912/fleet-infra/tree/main/apps/rubblekin). It uses the cluster's OCI block storage and shared ingress-nginx TCP load balancer on port 7878. The game uses raw TCP, so it needs a TCP forwarding entry, not an HTTP Ingress. Flux scans `latest` every five minutes and commits its new digest into the Deployment to trigger a rollout. `Always` checks the image when a container starts; it does not restart existing pods by itself. One `Recreate` replica ensures the old save writer stops before its replacement. The namespace and world PVC are retained when removing the Flux app and require deliberate manual deletion.
 
-The public test server is running at **`147.224.165.110:7878`**. Enter that address and a display name on the join screen, or connect directly:
+The public test server address is **`rubblekin.oci.koski.co:7878`**, prefilled on the join screen. Enter a display name and choose **Join server**, or connect directly:
 
 ```sh
-cargo run --locked -p rubblekin_client -- --connect 147.224.165.110:7878 --name Visitor
+cargo run --locked -p rubblekin_client -- --connect rubblekin.oci.koski.co:7878 --name Visitor
 ```
 
-The October 4 native client and two-client socket checks passed over this public endpoint, including shared player state, ping, and logout removal. Dedicated-server admin controls are disabled. OCI's security list permits TCP 7878 to the shared load balancer; its existing private rules cover forwarding to Kubernetes.
+The October 4 native client and two-client socket checks passed over the original public IP (`147.224.165.110:7878`), including shared player state, ping, and logout removal. Dedicated-server admin controls are disabled. OCI's security list permits TCP 7878 to the shared load balancer; its existing private rules cover forwarding to Kubernetes.
 
 For cluster-local troubleshooting, you can also forward the service:
 

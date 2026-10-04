@@ -16,6 +16,8 @@ The user approved Balanced graphics by default with a Low fallback on 2026-10-04
 
 The HUD text was enlarged on 2026-10-04 at the user's request for more comfortable reading. Labels use 13–14 px, controls/status/notices use 16 px, and the inspector body uses 18 px, with wider inspector and material slots to accommodate them.
 
+The join screen defaults to `rubblekin.oci.koski.co:7878` at the user's request on 2026-10-04. This applies to direct client and launcher startup; players can edit the address or choose local play.
+
 The broader design includes a much larger finite world with geography generated up front and scenic long-distance transportation with airships and gliding as the motivating experience. These directions were recorded on 2026-10-04 and remain unimplemented. An island is the suggested world shape, with exact dimensions and implementation choices still open.
 
 The independent admin camera is now implemented. On 2026-10-04 the user approved a read-only observer session with no avatar, available on local/admin-enabled servers. Select **Observe as admin** on the join screen or pass `--observe`; the camera has free flight, adjustable speed, a Shift boost, and R or Home to return to the valley. It receives live terrain, player, and NPC updates; the server rejects all observer movement, building, and NPC-control requests. The camera uses the existing fully loaded valley; larger-world streaming remains unimplemented.
@@ -269,6 +271,7 @@ These are a backlog of decisions, not a request to settle everything before prot
 | 2026-10-04 | Test-server deployment | User approved a public `maccam912/rubblekin` repository, GHCR image publishing, an OCI Kubernetes test server exposed on TCP 7878, and an address/display-name join screen. The guest protocol remains unauthenticated, and remote admin controls remain disabled. One persistent save writer and Flux digest tracking provide safe restarts and latest-image rollouts. |
 | 2026-10-04 | CI ordering and caching | User requested parallel checks that cancel on any failure, followed by client/server builds only after all checks pass, with compilation reuse where possible. One orchestrating workflow now gates reusable build workflows on all selected commits. Release-profile tests match the client build configuration to reuse cached dependencies; native client and Debian container caches remain separate. This supersedes independent push-triggered builds. |
 | 2026-10-04 | Read-only admin observation | User approved a separate observer session with no avatar or editing on local/admin-enabled servers, using WASD, mouse look, vertical movement, and a speed boost. Implemented with the existing server-wide admin gate and protocol v3. Speed values, scroll adjustment, and R/Home reset are prototype defaults; per-user authorization and larger-world loading remain open. |
+| 2026-10-04 | Default server address | User selected `rubblekin.oci.koski.co:7878` as the default connection address, superseding the join form's localhost default. Explicit `--connect` addresses and local hosting retain their existing behavior. |
 
 ## Work log
 
@@ -372,6 +375,11 @@ These are a backlog of decisions, not a request to settle everything before prot
 - Constrained the final smoothed camera candidate from the actual player eye, including its shoulder offset. This prevents lag from carrying the view through a wall and removes the old minimum-distance clamp that could place it beyond a nearby obstruction. Collision remains a single-ray approximation.
 - Added six regressions for half-meter step smoothing and monotonic settling, equal elapsed-time response at 30/144 Hz, fresh-camera/large-correction initialization, immediate look/zoom, newly placed obstructions, and an anchor lagging behind a wall. Updated the observer system test's camera fixture with the required follow component.
 - All 71 ordinary workspace tests pass on macOS, including observer controls and socket regressions; the packaged-launcher integration test remains opt-in. Workspace Clippy with warnings denied, formatting, and the locked offline native client build pass. A temporary-save native macOS startup rendered the world, avatar, and HUD without logged errors; its screenshot was inspected. Native UI automation returned late, so walking and subjective smoothing feel were not verified. Other platforms and representative lower-end hardware remain untested for this change.
+
+### 2026-10-04 — default public server address
+
+- Changed the join form's default address to the user-selected `rubblekin.oci.koski.co:7878`. Launcher startup uses the same client default. Updated README connection examples; explicit addresses and local hosting still follow their existing paths.
+- The locked offline client compilation check, workspace formatting check, and diff check pass. This change did not verify DNS or a live connection through the hostname.
 
 ## Technical references
 
