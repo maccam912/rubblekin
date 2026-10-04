@@ -1,0 +1,107 @@
+name: Commit checks
+
+on:
+  workflow_call:
+    inputs:
+      commit:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.check }} (${{ matrix.target || 'source' }})
+    strategy:
+      # All checks share a matrix so any failure cancels the other lanes.
+      fail-fast: true
+      matrix:
+        include:
+          - check: format
+            runner: ubuntu-22.04
+          - check: tooling
+            runner: ubuntu-22.04
+          - check: test
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - check: test
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+          - check: test
+            runner: macos-14
+            target: aarch64-apple-darwin
+          - check: test
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - check: clippy
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - check: clippy
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+          - check: clippy
+            runner: macos-14
+            target: aarch64-apple-darwin
+          - check: clippy
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      TARGET: ${{ matrix.target }}
+      # Keep release tests identical to the downstream client build configuration.
+      RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+          lfs: false
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.check != 'tooling'
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v7
+        if: matrix.check == 'tooling'
+        with:
+          python-version: '3.13'
+      - name: Cache Rust dependencies and compilation
+        if: matrix.target != ''
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Clippy metadata has its own cache; tests seed the client build cache.
+          key: rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-${{ matrix.check == 'clippy' && 'clippy' || 'release' }}-${{ hashFiles('Cargo.lock') }}-${{ inputs.commit }}-checks
+          restore-keys: |
+            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-${{ matrix.check == 'clippy' && 'clippy' || 'release' }}-${{ hashFiles('Cargo.lock') }}-${{ inputs.commit }}-
+            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-${{ matrix.check == 'clippy' && 'clippy' || 'release' }}-${{ hashFiles('Cargo.lock') }}-
+            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-${{ matrix.check == 'clippy' && 'clippy' || 'release' }}-
+      - name: Linux windowing dependencies
+        if: runner.os == 'Linux' && matrix.target != ''
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libegl1-mesa-dev libgl1-mesa-dev
+      - name: Check formatting
+        if: matrix.check == 'format'
+        run: cargo fmt --all -- --check
+      - name: Test release and pipeline tooling
+        if: matrix.check == 'tooling'
+        run: |
+          python -m unittest discover -s scripts/release -v
+          # Historical release commits may predate the pipeline planner.
+          if [ -d scripts/ci ]; then python -m unittest discover -s scripts/ci -v; fi
+      - name: Test release configuration
+        if: matrix.check == 'test'
+        run: cargo test --workspace --release --locked --target "$TARGET"
+      - name: Clippy
+        if: matrix.check == 'clippy'
+        run: cargo clippy --workspace --all-targets --release --locked --target "$TARGET" -- -D warnings

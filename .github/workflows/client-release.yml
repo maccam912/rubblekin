@@ -1,59 +1,30 @@
 name: Client releases
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      commit:
-        description: 'Optional full SHA from main to build again (defaults to main head)'
-        required: false
+      commits:
+        description: 'JSON list of exact commits that passed every check'
+        required: true
         type: string
+      matrix:
+        description: 'JSON client platform/commit build matrix'
+        required: true
+        type: string
+    secrets:
+      RELEASE_TOKEN:
+        required: false
 
 permissions:
   contents: read
 
-# Do not cancel builds on later pushes: every new first-parent main commit gets
-# its own four-platform release. Only the short publication jobs are serialized.
+# Only ci.yml calls this workflow, after the complete checks matrix succeeds.
 jobs:
-  prepare:
-    name: Select every new main commit
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    outputs:
-      commits: ${{ steps.plan.outputs.commits }}
-      matrix: ${{ steps.plan.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          lfs: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-      - name: Test package validation and publication ordering
-        run: python -m unittest discover -s scripts/release -v
-      - name: Plan commit and platform matrix
-        id: plan
-        env:
-          EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
-          COMMIT: ${{ inputs.commit }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: python scripts/release/plan.py --event "$EVENT" --before "$BEFORE" --after "$AFTER" --commit "$COMMIT" --repository "$GITHUB_REPOSITORY"
-
   build:
     name: ${{ matrix.target }} at ${{ matrix.commit }}
-    needs: prepare
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJSON(inputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     defaults:
@@ -79,22 +50,23 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - name: Cache Rust build dependencies
+      - name: Restore checked compilation and cache finished builds
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: client-release-v1-${{ matrix.target }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}-${{ matrix.commit }}
+          # Same runner, target, toolchain, flags, and profile as checks.yml.
+          # A distinct suffix lets builds save progress beyond the immutable test cache.
+          key: rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-release-${{ hashFiles('Cargo.lock') }}-${{ matrix.commit }}-build
           restore-keys: |
-            client-release-v1-${{ matrix.target }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}-
-            client-release-v1-${{ matrix.target }}-rust-1.98.1-
+            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-release-${{ hashFiles('Cargo.lock') }}-${{ matrix.commit }}-
+            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-release-${{ hashFiles('Cargo.lock') }}-
+            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-release-
       - name: Linux windowing dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libegl1-mesa-dev libgl1-mesa-dev
-      - name: Test the release configuration
-        run: cargo test --workspace --release --locked --target "$TARGET"
       - name: Build client and standalone launcher
         run: cargo build --release --locked --target "$TARGET" -p rubblekin_client -p rubblekin_launcher
       - name: Log Linux runtime requirements
@@ -121,14 +93,14 @@ jobs:
 
   publish:
     name: Release ${{ matrix.commit }}
-    needs: [prepare, build]
+    needs: build
     # A failed build for one commit must not discard other complete commits.
     # A missing platform fails manifest assembly for that commit only.
-    if: always() && !cancelled() && needs.prepare.result == 'success'
+    if: always() && !cancelled()
     strategy:
       fail-fast: false
       matrix:
-        commit: ${{ fromJSON(needs.prepare.outputs.commits) }}
+        commit: ${{ fromJSON(inputs.commits) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     concurrency:
