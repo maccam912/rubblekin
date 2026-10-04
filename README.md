@@ -122,11 +122,19 @@ docker build -t rubblekin-server:prototype .
 docker run --rm -p 7878:7878 -v rubblekin-world:/data rubblekin-server:prototype
 ```
 
-[Server image publishing](.github/workflows/server-image.yml) tests/builds Linux AMD64 and ARM64 images on pull requests. On `main` pushes that change server build inputs, or a manual run on `main`, it also publishes `ghcr.io/maccam912/rubblekin:latest` and an immutable `sha-<full commit>` tag using the workflow's `GITHUB_TOKEN`. Repository/package linkage is included in the image labels. The GHCR package must be public for anonymous cluster pulls; package visibility is separate from repository visibility.
+[Server image publishing](.github/workflows/server-image.yml) tests/builds Linux AMD64 and ARM64 images on their native GitHub runners on pull requests. A publication job assembles the multi-platform image only after both builds succeed. On `main` pushes that change server build inputs, or a manual run on `main`, it also publishes `ghcr.io/maccam912/rubblekin:latest` and an immutable `sha-<full commit>` tag using the workflow's `GITHUB_TOKEN`. Repository/package linkage is included in the image labels. The GHCR package must be public for anonymous cluster pulls; package visibility is separate from repository visibility.
 
 The actual OCI cluster configuration lives in [fleet-infra/apps/rubblekin](https://github.com/maccam912/fleet-infra/tree/main/apps/rubblekin). It uses the cluster's OCI block storage and shared ingress-nginx TCP load balancer on port 7878. The game uses raw TCP, so it needs a TCP forwarding entry, not an HTTP Ingress. Flux scans `latest` every five minutes and commits its new digest into the Deployment to trigger a rollout. `Always` checks the image when a container starts; it does not restart existing pods by itself. One `Recreate` replica ensures the old save writer stops before its replacement. The namespace and world PVC are retained when removing the Flux app and require deliberate manual deletion.
 
-Resource requests are starting values, not measured production requirements. Increasing replicas does not distribute a world; the save requires one writer.
+The October 4 deployment is running, and native client/two-client socket checks through the cluster succeeded. The configured public endpoint is `147.224.165.110:7878`; public access is currently awaiting an OCI network-rule check because that port times out. Until that is resolved, use:
+
+```sh
+kubectl -n rubblekin port-forward service/rubblekin 17878:7878
+```
+
+Then enter `127.0.0.1:17878` and a display name on the join screen. Keep the forwarding command running while playing.
+
+Resource requests are starting values, not measured production requirements. OCI provisioned its 50 GiB minimum volume for this app's 1 GiB request. Increasing replicas does not distribute a world; the save requires one writer.
 
 ## Git and assets
 
