@@ -1,0 +1,753 @@
+//! A guest join screen. DNS, connection, and local-server startup run off the render thread.
+use crate::{
+    Avatars, GameEntity, Session, VoxelWorld, graphics::GraphicsQuality, network::Connection,
+    prediction::Prediction, terrain::TerrainScene,
+};
+use bevy::{
+    input::keyboard::{Key, KeyboardInput},
+    input_focus::{FocusCause, InputFocus},
+    prelude::*,
+    text::{EditableText, EditableTextFilter, TextCursorStyle, TextEdit},
+    window::{CursorGrabMode, CursorOptions},
+};
+use rubblekin_core::{
+    physics::Body,
+    protocol::{PROTOCOL_VERSION, ServerMessage},
+    world::World as GameWorld,
+};
+use rubblekin_server::{ServerConfig, ServerHandle, spawn};
+use std::{net::Ipv6Addr, thread::JoinHandle};
+
+#[derive(Resource)]
+pub struct JoinScreen {
+    address: String,
+    name: String,
+    status: String,
+    config: ServerConfig,
+    graphics: GraphicsQuality,
+    pending: Option<JoinHandle<Result<Joined, String>>>,
+    next_action: Option<Action>,
+    local_server: Option<ServerHandle>,
+}
+
+struct Joined {
+    connection: Connection,
+    welcome: ServerMessage,
+    address: String,
+    server: Option<ServerHandle>,
+}
+
+impl JoinScreen {
+    pub fn new(
+        address: String,
+        name: String,
+        config: ServerConfig,
+        graphics: GraphicsQuality,
+    ) -> Self {
+        Self {
+            address,
+            name,
+            config,
+            graphics,
+            status: "Join a shared valley, or continue your local world.".into(),
+            pending: None,
+            next_action: None,
+            local_server: None,
+        }
+    }
+
+    pub fn start(&mut self, local: bool) {
+        if self.pending.is_some() {
+            return;
+        }
+        let name = match validate_name(&self.name) {
+            Ok(name) => name,
+            Err(error) => {
+                self.status = error.into();
+                return;
+            }
+        };
+        let address = if local {
+            String::new()
+        } else {
+            match validate_address(&self.address) {
+                Ok(address) => address,
+                Err(error) => {
+                    self.status = error.into();
+                    return;
+                }
+            }
+        };
+        self.status = if local {
+            "Opening your local world…".into()
+        } else {
+            format!("Connecting to {address}…")
+        };
+        let config = self.config.clone();
+        self.pending = Some(std::thread::spawn(move || {
+            let server = if local {
+                Some(spawn(config).map_err(|error| error.to_string())?)
+            } else {
+                None
+            };
+            let address = if let Some(server) = &server {
+                let mut address = server.addr;
+                if address.ip().is_unspecified() {
+                    address.set_ip(if address.is_ipv6() {
+                        std::net::Ipv6Addr::LOCALHOST.into()
+                    } else {
+                        std::net::Ipv4Addr::LOCALHOST.into()
+                    });
+                }
+                address.to_string()
+            } else {
+                address
+            };
+            let (connection, welcome) =
+                Connection::connect(&address, name).map_err(|error| error.to_string())?;
+            Ok(Joined {
+                connection,
+                welcome,
+                address,
+                server,
+            })
+        }));
+    }
+}
+
+fn validate_name(name: &str) -> Result<String, &'static str> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 24 || name.chars().any(char::is_control) {
+        return Err("Enter a display name of 1–24 characters.");
+    }
+    Ok(name.into())
+}
+
+fn validate_address(address: &str) -> Result<String, &'static str> {
+    let address = address.trim();
+    let help = "Enter a server as host:port, for example 127.0.0.1:7878.";
+    if address.len() > 260 || address.chars().any(char::is_whitespace) || address.contains('/') {
+        return Err(help);
+    }
+    let (host, port) = address.rsplit_once(':').ok_or(help)?;
+    if host.is_empty() || port.parse::<u16>().ok().is_none_or(|port| port == 0) {
+        return Err(help);
+    }
+    if host.contains(':') || host.contains(['[', ']']) {
+        host.strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .and_then(|host| host.parse::<Ipv6Addr>().ok())
+            .ok_or("Use [IPv6-address]:port for IPv6 servers.")?;
+    }
+    Ok(address.into())
+}
+
+#[derive(Component)]
+pub(super) struct MenuRoot;
+#[derive(Component)]
+pub(super) struct MenuCamera;
+#[derive(Component)]
+pub(super) struct MenuStatus;
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Field {
+    Address,
+    Name,
+}
+#[derive(Component, Clone, Copy)]
+pub(super) enum Action {
+    Join,
+    Local,
+}
+
+fn ink() -> Color {
+    Color::srgb(0.89, 0.92, 0.85)
+}
+fn accent() -> Color {
+    Color::srgb(0.90, 0.73, 0.42)
+}
+
+pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, menu: Res<JoinScreen>) {
+    let font = fonts.add(Font::from_bytes(
+        include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
+    ));
+    let camera = commands.spawn((Camera2d, MenuCamera)).id();
+    commands.spawn((
+        MenuRoot,
+        UiTargetCamera(camera),
+        Node { width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, padding: UiRect::all(px(24)), ..default() },
+        BackgroundColor(Color::srgb(0.055, 0.10, 0.10)),
+    )).with_children(|root| {
+        root.spawn((
+            Node { width: px(560), max_width: percent(100), padding: UiRect::all(px(32)), flex_direction: FlexDirection::Column, row_gap: px(16), border_radius: BorderRadius::all(px(12)), ..default() },
+            BackgroundColor(Color::srgb(0.08, 0.15, 0.15)),
+        )).with_children(|panel| {
+            panel.spawn((Text::new("R U B B L E K I N"), TextFont::from_font_size(32.0).with_font(font.clone()), TextColor(ink())));
+            panel.spawn((Text::new("A SHARED VALLEY  /  EARLY PROTOTYPE"), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(accent())));
+            panel.spawn((Text::new("Choose your server"), TextFont::from_font_size(24.0).with_font(font.clone()), TextColor(ink()), Node { margin: UiRect::top(px(12)), ..default() }));
+            for (field, label, value, max) in [(Field::Address, "SERVER ADDRESS", menu.address.as_str(), 260), (Field::Name, "DISPLAY NAME", menu.name.as_str(), 24)] {
+                panel.spawn((Text::new(label), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(accent())));
+                panel.spawn((
+                    field,
+                    Interaction::default(),
+                    Node { width: percent(100), padding: UiRect::all(px(12)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(5)), overflow: Overflow::clip_x(), ..default() },
+                    EditableText { max_characters: Some(max), ..EditableText::new(value) },
+                    EditableTextFilter::new(|ch| !ch.is_control()),
+                    TextLayout::no_wrap(),
+                    TextCursorStyle { color: ink(), selection_color: Color::srgb(0.23, 0.43, 0.42), unfocused_selection_color: Color::NONE, ..default() },
+                    TextFont::from_font_size(21.0).with_font(font.clone()), TextColor(ink()),
+                    BackgroundColor(Color::srgb(0.04, 0.08, 0.08)), BorderColor::all(Color::srgb(0.20, 0.32, 0.30)),
+                ));
+            }
+            panel.spawn((Node { column_gap: px(12), margin: UiRect::top(px(4)), ..default() },)).with_children(|row| {
+                for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world")] {
+                    row.spawn((Button, action, Node { padding: UiRect::axes(px(22), px(13)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                        .with_child((Text::new(label), TextFont::from_font_size(19.0).with_font(font.clone()), TextColor(ink())));
+                }
+            });
+            panel.spawn((Text::new(menu.status.clone()), TextFont::from_font_size(17.0).with_font(font.clone()), TextColor(ink()), MenuStatus, Node { min_height: px(46), ..default() }));
+            panel.spawn((Text::new("Guest access · no account or password\nTab switches fields · Enter joins · F10 leaves a world"), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+        });
+    });
+}
+
+// The existing Bevy text editor owns selection, Unicode editing, and clipboard
+// operations. This maps the two fields' input without a second UI framework.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn interact(
+    mut menu: ResMut<JoinScreen>,
+    session: Option<Res<Session>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut keyboard: MessageReader<KeyboardInput>,
+    mut event_keys: Local<ButtonInput<KeyCode>>,
+    mut focus: ResMut<InputFocus>,
+    mut fields: Query<(Entity, &Field, &Interaction, &mut EditableText)>,
+    actions: Query<(&Action, &Interaction), Changed<Interaction>>,
+) {
+    if session.is_some() || menu.pending.is_some() {
+        keyboard.clear();
+        *event_keys = keys.clone();
+        return;
+    }
+    // Text edits commit in PostUpdate. Submit the previous frame's action only
+    // after reading those committed values (including paste followed by Enter).
+    let requested = menu.next_action.take();
+    for (entity, _, interaction, _) in &fields {
+        if *interaction == Interaction::Pressed {
+            focus.set(entity, FocusCause::Navigated);
+        }
+    }
+    if focus.get().is_none() || keys.just_pressed(KeyCode::Tab) {
+        let old = focus.get();
+        if let Some((entity, _, _, _)) =
+            fields.iter().find(|(entity, _, _, _)| Some(*entity) != old)
+        {
+            focus.set(entity, FocusCause::Navigated);
+        }
+    }
+    // A complete modifier chord can arrive in one render frame. Preserve its
+    // event order instead of looking at the final (already released) key state.
+    for event in keyboard.read() {
+        if event.state.is_pressed() {
+            event_keys.press(event.key_code);
+        } else {
+            event_keys.release(event.key_code);
+            continue;
+        }
+        let shortcut = event_keys.any_pressed([
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::SuperLeft,
+            KeyCode::SuperRight,
+        ]);
+        let shift = event_keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let Some(edit) = text_edit(event, shortcut, shift) else {
+            continue;
+        };
+        if let Some(entity) = focus.get()
+            && let Ok((_, _, _, mut input)) = fields.get_mut(entity)
+        {
+            input.queue_edit(edit);
+        }
+    }
+    // Bevy also clears held keys after window focus loss.
+    *event_keys = keys.clone();
+    for (_, field, _, input) in &fields {
+        match field {
+            Field::Address => menu.address = input.value().to_string(),
+            Field::Name => menu.name = input.value().to_string(),
+        }
+    }
+    let action = actions
+        .iter()
+        .find(|(_, interaction)| **interaction == Interaction::Pressed)
+        .map(|(action, _)| *action)
+        .or_else(|| keys.just_pressed(KeyCode::Enter).then_some(Action::Join));
+    menu.next_action = action;
+    if let Some(action) = requested {
+        menu.next_action = None;
+        menu.start(matches!(action, Action::Local));
+    }
+}
+
+fn text_edit(event: &KeyboardInput, shortcut: bool, shift: bool) -> Option<TextEdit> {
+    if shortcut {
+        return match event.key_code {
+            KeyCode::KeyA => Some(TextEdit::SelectAll),
+            KeyCode::KeyC => Some(TextEdit::Copy),
+            KeyCode::KeyX => Some(TextEdit::Cut),
+            KeyCode::KeyV => Some(TextEdit::Paste),
+            KeyCode::ArrowLeft => Some(TextEdit::WordLeft(shift)),
+            KeyCode::ArrowRight => Some(TextEdit::WordRight(shift)),
+            KeyCode::Backspace => Some(TextEdit::BackspaceWord),
+            KeyCode::Delete => Some(TextEdit::DeleteWord),
+            _ => None,
+        };
+    }
+    match event.logical_key {
+        Key::Backspace => Some(TextEdit::Backspace),
+        Key::Delete => Some(TextEdit::Delete),
+        Key::ArrowLeft => Some(TextEdit::Left(shift)),
+        Key::ArrowRight => Some(TextEdit::Right(shift)),
+        Key::Home => Some(TextEdit::TextStart(shift)),
+        Key::End => Some(TextEdit::TextEnd(shift)),
+        _ => event
+            .text
+            .as_ref()
+            .filter(|text| !text.chars().any(char::is_control))
+            .map(|text| TextEdit::Insert(text.clone())),
+    }
+}
+
+pub fn poll_connection(
+    mut commands: Commands,
+    mut menu: ResMut<JoinScreen>,
+    mut focus: ResMut<InputFocus>,
+    time: Res<Time>,
+) {
+    if !menu.pending.as_ref().is_some_and(JoinHandle::is_finished) {
+        return;
+    }
+    let result = menu
+        .pending
+        .take()
+        .unwrap()
+        .join()
+        .unwrap_or_else(|_| Err("Connection worker stopped unexpectedly.".into()));
+    match result {
+        Ok(joined) => match session_from_welcome(
+            joined.welcome,
+            joined.address,
+            menu.graphics,
+            time.elapsed_secs_f64(),
+        ) {
+            Ok((world, session)) => {
+                menu.local_server = joined.server;
+                commands.insert_resource(joined.connection);
+                commands.insert_resource(VoxelWorld(world));
+                commands.insert_resource(session);
+                focus.clear();
+            }
+            Err(error) => menu.status = format!("Could not join: {error}"),
+        },
+        Err(error) => {
+            menu.status = format!("Could not join: {error}\nCheck the address and try again.")
+        }
+    }
+}
+
+fn session_from_welcome(
+    welcome: ServerMessage,
+    address: String,
+    graphics: GraphicsQuality,
+    now: f64,
+) -> Result<(GameWorld, Session), String> {
+    let ServerMessage::Welcome {
+        version,
+        player_id,
+        seed,
+        edits,
+        players,
+        npc,
+        world_time,
+        can_admin,
+    } = welcome
+    else {
+        return Err("Server did not send a welcome message".into());
+    };
+    if version != PROTOCOL_VERSION {
+        return Err("Server protocol version does not match this client".into());
+    }
+    let world = GameWorld::from_edits(seed, &edits)?;
+    let body = players
+        .iter()
+        .find(|player| player.id == player_id)
+        .map(|player| player.body.clone())
+        .unwrap_or_else(|| Body::new(world.spawn_position()));
+    Ok((
+        world,
+        Session {
+            id: player_id,
+            body,
+            yaw: -0.45,
+            pitch: 0.12,
+            camera_distance: 6.5,
+            selected: 3,
+            flying: false,
+            captured: false,
+            can_admin,
+            inspector: true,
+            help: true,
+            graphics,
+            npc,
+            players,
+            world_time,
+            status: "Welcome to the valley. Click to explore; F10 returns to the server screen."
+                .into(),
+            status_until: now + 12.0,
+            target: None,
+            fps: 0.0,
+            edits: edits.len(),
+            connected_to: address,
+            prediction: Prediction::default(),
+            edit_clock: 0.0,
+            next_request: 1,
+        },
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn leave_world(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    connection: Res<Connection>,
+    session: Res<Session>,
+    entities: Query<Entity, With<GameEntity>>,
+    mut menu: ResMut<JoinScreen>,
+    mut cursor: Single<&mut CursorOptions>,
+) {
+    if !keys.just_pressed(KeyCode::F10) && connection.error.is_none() {
+        return;
+    }
+    menu.status = connection.error.as_ref().map_or_else(
+        || "You left the world. Accepted changes have been saved.".into(),
+        |error| format!("Disconnected: {error}"),
+    );
+    menu.graphics = session.graphics;
+    for entity in &entities {
+        commands.entity(entity).despawn();
+    }
+    commands.remove_resource::<Connection>();
+    commands.remove_resource::<Session>();
+    commands.remove_resource::<VoxelWorld>();
+    commands.remove_resource::<TerrainScene>();
+    commands.insert_resource(Avatars::default());
+    menu.local_server.take();
+    cursor.grab_mode = CursorGrabMode::None;
+    cursor.visible = true;
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn refresh(
+    menu: Res<JoinScreen>,
+    session: Option<Res<Session>>,
+    focus: Res<InputFocus>,
+    mut root: Single<&mut Node, With<MenuRoot>>,
+    mut camera: Single<&mut Camera, With<MenuCamera>>,
+    mut status: Single<&mut Text, With<MenuStatus>>,
+    mut fields: Query<(Entity, &mut BorderColor), With<Field>>,
+    mut buttons: Query<(&Interaction, &mut BackgroundColor), With<Action>>,
+) {
+    root.display = if session.is_some() {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    camera.is_active = session.is_none();
+    if status.0 != menu.status {
+        status.0.clone_from(&menu.status);
+    }
+    for (entity, mut border) in &mut fields {
+        border.set_all(if focus.get() == Some(entity) && menu.pending.is_none() {
+            accent()
+        } else {
+            Color::srgb(0.20, 0.32, 0.30)
+        });
+    }
+    for (interaction, mut background) in &mut buttons {
+        background.0 = if menu.pending.is_some() {
+            Color::srgb(0.12, 0.22, 0.20)
+        } else if *interaction == Interaction::Hovered {
+            Color::srgb(0.27, 0.45, 0.39)
+        } else {
+            Color::srgb(0.19, 0.34, 0.31)
+        };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_addresses_require_a_host_and_real_port() {
+        for address in [
+            "127.0.0.1:7878",
+            "test.example:30078",
+            "[::1]:7878",
+            " [2001:db8::1]:7878 ",
+        ] {
+            assert_eq!(validate_address(address).unwrap(), address.trim());
+        }
+        for address in [
+            "",
+            "test.example",
+            ":7878",
+            "host:0",
+            "host:65536",
+            "host:notaport",
+            "https://host:7878",
+            "host :7878",
+            "::1:7878",
+            "[invalid]:7878",
+        ] {
+            assert!(validate_address(address).is_err(), "{address}");
+        }
+    }
+
+    #[test]
+    fn display_names_preserve_unicode_and_match_the_server_limit() {
+        assert_eq!(validate_name("  Violet 雪  ").unwrap(), "Violet 雪");
+        assert!(validate_name(&"雪".repeat(24)).is_ok());
+        for name in ["", "   ", "hello\nworld", &"x".repeat(25)] {
+            assert!(validate_name(name).is_err());
+        }
+    }
+
+    #[test]
+    fn failed_validation_allows_another_attempt_without_starting_a_worker() {
+        let mut menu = JoinScreen::new(
+            "no port".into(),
+            "Wayfarer".into(),
+            ServerConfig::default(),
+            GraphicsQuality::default(),
+        );
+        menu.start(false);
+        assert!(menu.pending.is_none());
+        assert!(menu.status.contains("host:port"));
+        menu.address = "localhost:7878".into();
+        menu.name = " ".into();
+        menu.start(false);
+        assert!(menu.pending.is_none());
+        assert!(menu.status.contains("display name"));
+    }
+
+    #[test]
+    fn a_worker_failure_returns_to_the_same_join_form() {
+        let mut app = App::new();
+        let mut menu = JoinScreen::new(
+            "test.example:7878".into(),
+            "Wayfarer".into(),
+            ServerConfig::default(),
+            GraphicsQuality::default(),
+        );
+        menu.pending = Some(std::thread::spawn(|| Err("Connection refused".into())));
+        while !menu.pending.as_ref().unwrap().is_finished() {
+            std::thread::yield_now();
+        }
+        app.insert_resource(menu)
+            .init_resource::<InputFocus>()
+            .init_resource::<Time>()
+            .add_systems(Update, poll_connection);
+        app.update();
+        let menu = app.world().resource::<JoinScreen>();
+        assert!(menu.pending.is_none());
+        assert!(menu.status.contains("Connection refused"));
+        assert_eq!(menu.address, "test.example:7878");
+        assert_eq!(menu.name, "Wayfarer");
+        assert!(!app.world().contains_resource::<Session>());
+    }
+
+    #[test]
+    fn modifier_chord_typing_and_enter_in_one_frame_submit_committed_text() {
+        let mut app = App::new();
+        app.insert_resource(JoinScreen::new(
+            "127.0.0.1:7878".into(),
+            "Tester".into(),
+            ServerConfig::default(),
+            GraphicsQuality::default(),
+        ))
+        .init_resource::<InputFocus>()
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<bevy::text::FontCx>()
+        .init_resource::<bevy::text::LayoutCx>()
+        .init_resource::<bevy::clipboard::Clipboard>()
+        .add_message::<KeyboardInput>()
+        .add_systems(Update, interact)
+        .add_systems(PostUpdate, bevy::text::apply_text_edits);
+        // Parley selection uses shaped layout, so the headless test needs the
+        // same real font as the rendered menu, not an empty font collection.
+        let font = Font::from_bytes(
+            include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
+        );
+        let mut fonts = app.world_mut().resource_mut::<bevy::text::FontCx>();
+        let family = fonts.collection.register_fonts(font.data, None)[0].0;
+        let family_name = fonts.collection.family_name(family).unwrap().to_owned();
+        fonts.set_sans_serif_family(&family_name).unwrap();
+        fonts.set_serif_family(&family_name).unwrap();
+        let editable = EditableText::new("127.0.0.1:7878");
+        let field = app
+            .world_mut()
+            .spawn((Field::Address, Interaction::None, editable))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(field, FocusCause::Navigated);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        use bevy::input::ButtonState::{Pressed, Released};
+        for (key_code, state, text) in [
+            (KeyCode::SuperLeft, Pressed, None),
+            (KeyCode::KeyA, Pressed, Some("a")),
+            (KeyCode::KeyA, Released, None),
+            (KeyCode::SuperLeft, Released, None),
+            (KeyCode::KeyN, Pressed, Some("no-port")),
+        ] {
+            app.world_mut().write_message(KeyboardInput {
+                key_code,
+                logical_key: Key::Character(text.unwrap_or("").into()),
+                state,
+                text: text.map(Into::into),
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            });
+        }
+        app.update();
+        assert!(app.world().resource::<JoinScreen>().pending.is_none());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+        let menu = app.world().resource::<JoinScreen>();
+        assert!(menu.pending.is_none());
+        assert_eq!(menu.address, "no-port");
+        assert!(menu.status.contains("host:port"));
+    }
+
+    #[test]
+    fn joining_leaving_and_rejoining_clean_up_the_world_and_keep_the_form() {
+        #[derive(Resource, Default)]
+        struct Visits(u32);
+        fn setup_world(mut commands: Commands, mut visits: ResMut<Visits>) {
+            visits.0 += 1;
+            commands.spawn(GameEntity).with_child(GameEntity);
+        }
+        let path = std::env::temp_dir().join(format!(
+            "rubblekin-join-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut menu = JoinScreen::new(
+            "remote.example:7878".into(),
+            "Tester".into(),
+            ServerConfig {
+                bind_addr: "127.0.0.1:0".into(),
+                save_path: path.clone(),
+                seed: 42,
+                allow_admin: true,
+            },
+            GraphicsQuality::default(),
+        );
+        menu.start(true);
+        let mut app = App::new();
+        app.insert_resource(menu)
+            .init_resource::<InputFocus>()
+            .init_resource::<Time>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Visits>()
+            .add_message::<KeyboardInput>()
+            .add_systems(Startup, setup)
+            .add_systems(
+                Update,
+                (
+                    interact,
+                    poll_connection,
+                    setup_world.run_if(resource_added::<Session>),
+                    leave_world.run_if(resource_exists::<Session>),
+                    refresh,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .spawn((Window::default(), CursorOptions::default()));
+        let wait_for_join = |app: &mut App| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !app.world().contains_resource::<Session>()
+                && std::time::Instant::now() < deadline
+            {
+                app.update();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(
+                app.world().contains_resource::<Session>(),
+                "{}",
+                app.world().resource::<JoinScreen>().status
+            );
+        };
+        wait_for_join(&mut app);
+        assert!(app.world().resource::<Session>().can_admin);
+        assert_eq!(app.world().resource::<Visits>().0, 1);
+        assert!(
+            app.world_mut()
+                .query_filtered::<&Node, With<MenuRoot>>()
+                .single(app.world())
+                .unwrap()
+                .display
+                == Display::None
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F10);
+        app.update();
+        assert!(!app.world().contains_resource::<Session>());
+        assert!(!app.world().contains_resource::<Connection>());
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<GameEntity>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
+        assert!(app.world().resource::<JoinScreen>().local_server.is_none());
+        assert!(path.exists());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.world_mut().resource_mut::<JoinScreen>().start(true);
+        wait_for_join(&mut app);
+        assert_eq!(app.world().resource::<Visits>().0, 2);
+        app.world_mut()
+            .resource_mut::<Connection>()
+            .fail("test disconnect".into());
+        app.update();
+        let menu = app.world().resource::<JoinScreen>();
+        assert!(menu.status.contains("test disconnect"));
+        assert_eq!(menu.address, "remote.example:7878");
+        assert_eq!(menu.name, "Tester");
+        assert!(!app.world().contains_resource::<Session>());
+        assert!(
+            app.world_mut()
+                .query_filtered::<&Camera, With<MenuCamera>>()
+                .single(app.world())
+                .unwrap()
+                .is_active
+        );
+        drop(app);
+        let _ = std::fs::remove_file(path.with_extension("lock"));
+        std::fs::remove_file(path).unwrap();
+    }
+}

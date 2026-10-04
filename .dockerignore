@@ -1,0 +1,12 @@
+# Only server build inputs enter the context. This excludes saves, credentials,
+# screenshots/LFS files, client source, and local build output.
+**
+!Cargo.toml
+!Cargo.lock
+!crates/
+!crates/client/
+!crates/client/Cargo.toml
+!crates/core/
+!crates/core/**
+!crates/server/
+!crates/server/**

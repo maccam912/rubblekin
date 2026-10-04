@@ -1,0 +1,89 @@
+# Standalone private test-server template. The live Flux app is in fleet-infra.
+# One writer per world. Scaling replicas does not scale a shared world.
+# Always checks the latest tag when a pod starts; restart the deployment after
+# publishing to update an existing pod (fleet-infra automates digest updates).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rubblekin-world
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rubblekin
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: rubblekin
+  template:
+    metadata:
+      labels:
+        app: rubblekin
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: ghcr.io/maccam912/rubblekin:latest
+          imagePullPolicy: Always
+          ports:
+            - name: game
+              containerPort: 7878
+          args: ["--bind", "0.0.0.0:7878", "--save", "/data/world.json"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: world
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: game
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          startupProbe:
+            tcpSocket:
+              port: game
+            periodSeconds: 2
+            failureThreshold: 30
+      volumes:
+        - name: world
+          persistentVolumeClaim:
+            claimName: rubblekin-world
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rubblekin
+spec:
+  selector:
+    app: rubblekin
+  ports:
+    - name: game
+      port: 7878
+      targetPort: game
+      protocol: TCP
+  type: ClusterIP

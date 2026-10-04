@@ -1,0 +1,14 @@
+[package]
+name = "rubblekin_server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rubblekin_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ctrlc = { version = "3", features = ["termination"] }
+
+[[bin]]
+name = "rubblekin-server"
+path = "src/main.rs"

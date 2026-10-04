@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+# Curated visual evidence is binary and changes as the prototype evolves.
+artifacts/*.png filter=lfs diff=lfs merge=lfs -text
+
+# The bundled 56 KB font is small enough for regular Git; preserve its bytes.
+*.ttf binary
