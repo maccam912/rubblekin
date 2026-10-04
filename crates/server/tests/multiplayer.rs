@@ -243,7 +243,27 @@ fn world_and_forager_advance_with_no_clients_and_admin_is_disabled_by_default() 
         _ => unreachable!(),
     };
     drop(client);
-    thread::sleep(Duration::from_millis(650));
+    // A busy runner need not simulate 400 ms during a 650 ms sleep: the server
+    // deliberately avoids catching up missed ticks. Observe an autosave instead
+    // of reconnecting to poll, so progress must happen with no clients present.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(save.config(false).save_path).unwrap()).unwrap();
+        let saved_time = saved["world_time"].as_f64().unwrap();
+        let saved_position: [f32; 3] =
+            serde_json::from_value(saved["npc"]["snapshot"]["position"].clone()).unwrap();
+        if saved_time > before_time + 0.4 && saved_position != before_position {
+            break;
+        }
+        assert!(!server.is_finished(), "Server stopped before idle progress");
+        assert!(
+            Instant::now() < deadline,
+            "No saved progress with zero clients: time {before_time} -> {saved_time}, \
+             NPC {before_position:?} -> {saved_position:?}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
     let (mut client, welcome) = Client::connect(server.addr, "Observer returns");
     match welcome {
         ServerMessage::Welcome {
@@ -261,7 +281,8 @@ fn world_and_forager_advance_with_no_clients_and_admin_is_disabled_by_default() 
     });
     let notice = client.until(|m| matches!(m, ServerMessage::Notice { .. }));
     assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("disabled")));
-    client.until(|m| matches!(m, ServerMessage::State { npc, .. } if !npc.forced && npc.action == NpcAction::Forage));
+    // Its autonomous action may have changed while we waited for the autosave.
+    client.until(|m| matches!(m, ServerMessage::State { npc, .. } if !npc.forced));
     server.stop().unwrap();
 }
 
