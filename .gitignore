@@ -24,6 +24,11 @@
 !/artifacts/villages-overview.png
 !/artifacts/android-local.png
 !/artifacts/android-keyboard.png
+!/artifacts/distant-map-atlas.png
+!/artifacts/map-lod-valley.png
+!/artifacts/map-lod-near.png
+!/artifacts/map-lod-forest.png
+!/artifacts/map-lod-ground.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

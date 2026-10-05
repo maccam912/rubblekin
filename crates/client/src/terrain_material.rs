@@ -1,4 +1,4 @@
-//! One embedded terrain shader keeps nearby voxels and distant land textured alike.
+//! Nearby voxel grain and map-colored heightmaps share one small material shader.
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
     pbr::{ExtendedMaterial, MaterialExtension},

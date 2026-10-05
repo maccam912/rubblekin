@@ -1,9 +1,10 @@
-// World-aligned pixel grain. Derivative filtering removes subpixel patterns;
-// larger layers retain visible texture on coarse distant landscape meshes.
+// Nearby voxels keep fine filtered grain. Distant heightmaps use the world map,
+// without procedural square grain or imitation voxel faces.
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
+    mesh_view_bindings::view,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> distant: f32;
@@ -26,22 +27,22 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // A constant bias avoids numerical flips on exact half-meter block planes.
     let position = in.world_position.xyz + vec3<f32>(0.013);
     let footprint = max(length(dpdx(position)), length(dpdy(position)));
-    // Only generated landscape vertices carry this mask. Batched tree crowns
-    // keep their species colors, and detailed edited blocks keep their material.
+    // Only heightmap ground carries this mask. Local silhouettes and edited
+    // voxels keep their material colors. Blend near the detailed chunk boundary;
+    // map visibility depends on distance, not on screen resolution or slope.
     let map_color = textureSample(distant_albedo, distant_sampler,
         (in.world_position.xz + vec2<f32>(16384.0)) / 32768.0).rgb;
-    let map_weight = distant * in.uv.x * smoothstep(0.3, 3.0, footprint);
+    let map_surface = distant * in.uv.x;
+    let map_weight = map_surface * smoothstep(48.0, 144.0,
+        distance(in.world_position.xyz, view.world_position));
     pbr.material.base_color = vec4<f32>(
         mix(pbr.material.base_color.rgb, map_color, map_weight),
         pbr.material.base_color.a);
     let fine = 1.0 - smoothstep(0.04, 0.14, footprint);
     let block = 1.0 - smoothstep(0.3, 1.0, footprint);
-    let medium = 1.0 - smoothstep(3.0, 12.0, footprint);
-    let broad = 1.0 - smoothstep(24.0, 80.0, footprint);
-    let texture = 1.0 + grain(position, 0.125) * 0.16 * fine
-        + grain(position, 0.5) * 0.08 * block
-        + grain(position, 8.0) * 0.16 * medium
-        + grain(position, 64.0) * 0.14 * broad;
+    let texture = 1.0 + (1.0 - map_surface) * (
+        grain(position, 0.125) * 0.16 * fine
+        + grain(position, 0.5) * 0.08 * block);
     pbr.material.base_color = vec4<f32>(pbr.material.base_color.rgb * texture, pbr.material.base_color.a);
     pbr.material.base_color = alpha_discard(pbr.material, pbr.material.base_color);
     var out: FragmentOutput;
