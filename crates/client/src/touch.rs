@@ -26,13 +26,12 @@ pub struct TouchControls {
     pub(crate) flight: bool,
     pub(crate) inspect: bool,
     pub(crate) help: bool,
-    pub(crate) graphics: bool,
     pub(crate) selected: Option<usize>,
     pub(crate) zoom: f32,
     pub(crate) return_spawn: bool,
     pub(crate) next_village: bool,
     contacts: HashMap<u64, Contact>,
-    suspended: bool,
+    pub(crate) suspended: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -51,11 +50,6 @@ enum Action {
     Material(usize),
     ZoomIn,
     ZoomOut,
-    Help,
-    Graphics,
-    Return,
-    NextVillage,
-    Leave,
     Blocked,
 }
 
@@ -107,33 +101,11 @@ impl Layout {
             s(14.0),
             72.0,
             48.0,
-            if menu_open { "Close" } else { "Menu" }.into(),
+            "Menu".into(),
         );
         if menu_open {
-            let width = s(364.0);
-            let left = (size.x - width) * 0.5;
-            let top = (size.y - s(228.0)) * 0.5;
-            let entries = [
-                (Action::Inspect, "Inspect"),
-                (Action::Help, "Controls"),
-                (Action::Graphics, "Graphics"),
-                (Action::Return, "Return to spawn"),
-                (Action::NextVillage, "Next village"),
-                (Action::Leave, "Leave world"),
-            ];
-            for (index, (action, label)) in entries.into_iter().enumerate() {
-                if !observing && matches!(action, Action::Return | Action::NextVillage) {
-                    continue;
-                }
-                add(
-                    action,
-                    left + s((index % 2) as f32 * 186.0),
-                    top + s((index / 2) as f32 * 76.0),
-                    178.0,
-                    64.0,
-                    label.into(),
-                );
-            }
+            // The shared pause panel owns all menu controls and hit testing.
+            result.regions.clear();
             return result;
         }
         add(
@@ -272,7 +244,6 @@ impl TouchControls {
         self.flight = false;
         self.inspect = false;
         self.help = false;
-        self.graphics = false;
         self.selected = None;
         self.zoom = 0.0;
         self.return_spawn = false;
@@ -290,12 +261,6 @@ impl TouchControls {
                 self.menu_open = false;
                 self.contacts.clear();
             }
-            Action::Help => {
-                self.help = true;
-                self.menu_open = false;
-                self.contacts.clear();
-            }
-            Action::Graphics => self.graphics = true,
             Action::Material(index) => self.selected = Some(index),
             Action::Menu => {
                 self.menu_open = !self.menu_open;
@@ -308,12 +273,6 @@ impl TouchControls {
                 self.selected = None;
                 self.flight = false;
             }
-            Action::Leave => {
-                self.leave = true;
-                self.contacts.clear();
-            }
-            Action::Return => self.return_spawn = true,
-            Action::NextVillage => self.next_village = true,
             _ => {}
         }
     }
@@ -427,7 +386,7 @@ pub fn read(
     mut events: MessageReader<TouchInput>,
     mut focus: MessageReader<WindowFocused>,
     mut lifecycle: MessageReader<AppLifecycle>,
-    keys: Res<ButtonInput<KeyCode>>,
+    pause: Option<Res<crate::pause::PauseMenu>>,
     mouse: Res<ButtonInput<MouseButton>>,
     window: Single<(Entity, &Window), With<PrimaryWindow>>,
     session: Option<Res<Session>>,
@@ -463,10 +422,13 @@ pub fn read(
         events.clear();
         return;
     }
-    let session = session.unwrap();
-    if keys.just_pressed(KeyCode::Escape) {
-        controls.press(Action::Menu);
+    if pause.is_some_and(|pause| pause.open) {
+        controls.contacts.clear();
+        controls.menu_open = true;
+        events.clear();
+        return;
     }
+    let session = session.unwrap();
     let size = Vec2::new(window.width(), window.height());
     // Rebuild after each event: a Menu press changes which controls are active
     // immediately, including additional fingers delivered in this same frame.
@@ -559,8 +521,6 @@ pub(crate) struct TouchButton(Action);
 pub(crate) struct StickBase;
 #[derive(Component)]
 pub(crate) struct StickKnob;
-#[derive(Component)]
-pub(crate) struct TouchMenuBackdrop;
 
 pub fn setup(
     mut commands: Commands,
@@ -572,19 +532,6 @@ pub fn setup(
     }
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
-    ));
-    commands.spawn((
-        GameEntity,
-        TouchMenuBackdrop,
-        Node {
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            height: percent(100),
-            display: Display::None,
-            ..default()
-        },
-        GlobalZIndex(20),
-        BackgroundColor(Color::srgba(0.02, 0.05, 0.05, 0.86)),
     ));
     commands.spawn((
         GameEntity,
@@ -622,11 +569,6 @@ pub fn setup(
         Action::Menu,
         Action::ZoomIn,
         Action::ZoomOut,
-        Action::Help,
-        Action::Graphics,
-        Action::Return,
-        Action::NextVillage,
-        Action::Leave,
     ];
     for action in actions
         .into_iter()
@@ -667,16 +609,10 @@ pub fn refresh(
             Option<&TouchButton>,
             Option<&StickBase>,
             Option<&StickKnob>,
-            Option<&TouchMenuBackdrop>,
             Option<&Children>,
             Option<&mut BackgroundColor>,
         ),
-        Or<(
-            With<TouchButton>,
-            With<StickBase>,
-            With<StickKnob>,
-            With<TouchMenuBackdrop>,
-        )>,
+        Or<(With<TouchButton>, With<StickBase>, With<StickKnob>)>,
     >,
     mut labels: Query<(&mut Text, &mut TextFont)>,
 ) {
@@ -686,15 +622,9 @@ pub fn refresh(
         session.flying,
         controls.menu_open,
     );
-    for (mut node, button, base, knob, backdrop, children, background) in &mut nodes {
+    for (mut node, button, base, knob, children, background) in &mut nodes {
         node.display = Display::None;
-        if !controls.enabled {
-            continue;
-        }
-        if backdrop.is_some() {
-            if controls.menu_open {
-                node.display = Display::Flex;
-            }
+        if !controls.enabled || controls.menu_open {
             continue;
         }
         if base.is_some() || knob.is_some() {
@@ -998,6 +928,10 @@ mod tests {
         time.advance_by(Duration::from_millis(25));
         let mut app = App::new();
         app.insert_resource(crate::VoxelWorld(world))
+            .insert_resource(crate::graphics::GraphicsSettings::new(
+                crate::graphics::GraphicsQuality::Low,
+            ))
+            .init_resource::<crate::pause::PauseMenu>()
             .insert_resource(session)
             .insert_resource(connection)
             .insert_resource(time)
@@ -1108,6 +1042,51 @@ mod tests {
         app.world_mut().run_schedule(Update);
         assert!(
             matches!(read_message(&mut peer), ClientMessage::Input { input, .. } if input.direction[1] < -0.95)
+        );
+        // Opening the shared menu cancels held contacts and blocks newly started edits.
+        app.world_mut()
+            .resource_mut::<crate::pause::PauseMenu>()
+            .open = true;
+        for (id, phase, position) in [
+            (3, TouchPhase::Moved, movement),
+            (7, TouchPhase::Started, build),
+        ] {
+            app.world_mut().write_message(TouchInput {
+                window,
+                ..event(id, phase, position)
+            });
+        }
+        app.world_mut().run_schedule(Update);
+        assert!(
+            matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
+            if input.direction == [0.0; 2] && !input.jump && input.vertical == 0.0)
+        );
+        assert!(app.world().resource::<TouchControls>().contacts.is_empty());
+        app.world_mut()
+            .resource_mut::<Connection>()
+            .send(ClientMessage::Ping);
+        assert!(matches!(read_message(&mut peer), ClientMessage::Ping));
+        app.world_mut()
+            .resource_mut::<crate::pause::PauseMenu>()
+            .open = false;
+        app.world_mut().resource_mut::<TouchControls>().menu_open = false;
+        app.world_mut().write_message(TouchInput {
+            window,
+            ..event(3, TouchPhase::Moved, movement)
+        });
+        app.world_mut().run_schedule(Update);
+        assert!(
+            matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
+            if input.direction == [0.0; 2])
+        );
+        app.world_mut().write_message(TouchInput {
+            window,
+            ..event(3, TouchPhase::Started, movement)
+        });
+        app.world_mut().run_schedule(Update);
+        assert!(
+            matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
+            if input.direction[1] < -0.95)
         );
         app.world_mut().write_message(WindowFocused {
             window,

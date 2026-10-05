@@ -273,7 +273,7 @@ Guest access · no account or password" } else { "Guest access · no account or 
 // separate modifier key presses. Bevy's ButtonInput does not expose those flags.
 #[derive(Message)]
 pub(super) struct MenuKey {
-    input: KeyboardInput,
+    pub(super) input: KeyboardInput,
     modifiers: ModifiersState,
 }
 
@@ -982,20 +982,18 @@ pub fn leave_world(
     mut menu: ResMut<JoinScreen>,
     mut cursor: Single<&mut CursorOptions>,
     mut touch: Option<ResMut<crate::touch::TouchControls>>,
-    mut native: MessageReader<MenuKey>,
+    mut pause: Option<ResMut<crate::pause::PauseMenu>>,
 ) {
-    let back = native
-        .read()
-        .any(|key| key.input.state.is_pressed() && key.input.logical_key == Key::BrowserBack);
+    let menu_leave = pause.as_ref().is_some_and(|pause| pause.leave);
     let leave = touch.as_mut().is_some_and(|touch| {
-        let leave = touch.leave || (touch.enabled && back);
+        let leave = touch.leave;
         touch.leave = false;
         if leave {
             touch.menu_open = false;
         }
         leave
     });
-    if !keys.just_pressed(KeyCode::F10) && !leave && connection.error.is_none() {
+    if !keys.just_pressed(KeyCode::F10) && !leave && !menu_leave && connection.error.is_none() {
         return;
     }
     menu.status = connection.error.as_ref().map_or_else(
@@ -1009,6 +1007,12 @@ pub fn leave_world(
         |error| format!("Disconnected: {error}"),
     );
     menu.graphics = session.graphics;
+    if let Some(pause) = pause.as_mut() {
+        **pause = crate::pause::PauseMenu::default();
+    }
+    if let Some(touch) = touch.as_mut() {
+        touch.reset();
+    }
     for entity in &entities {
         commands.entity(entity).despawn();
     }
@@ -1610,6 +1614,7 @@ pub(crate) mod tests {
         menu.start(true);
         let mut app = App::new();
         app.insert_resource(menu)
+            .init_resource::<crate::pause::PauseMenu>()
             .init_resource::<InputFocus>()
             .init_resource::<Time>()
             .init_resource::<Assets<Font>>()
@@ -1661,10 +1666,14 @@ pub(crate) mod tests {
                 == Display::None
         );
         app.world_mut()
+            .resource_mut::<crate::pause::PauseMenu>()
+            .open = true;
+        app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::F10);
         app.update();
         assert!(!app.world().contains_resource::<Session>());
+        assert!(!app.world().resource::<crate::pause::PauseMenu>().open);
         assert!(!app.world().contains_resource::<Connection>());
         assert_eq!(
             app.world_mut()
@@ -1709,12 +1718,17 @@ pub(crate) mod tests {
         assert!(session.can_admin);
         assert!(session.players.iter().any(|player| player.id == session.id));
         assert_eq!(app.world().resource::<Visits>().0, 2);
+        assert!(!app.world().resource::<crate::pause::PauseMenu>().open);
+        app.world_mut()
+            .resource_mut::<crate::pause::PauseMenu>()
+            .open = true;
         app.world_mut()
             .resource_mut::<Connection>()
             .fail("test disconnect".into());
         app.update();
         let menu = app.world().resource::<JoinScreen>();
         assert!(menu.status.contains("test disconnect"));
+        assert!(!app.world().resource::<crate::pause::PauseMenu>().open);
         assert_eq!(menu.address, "remote.example:7878");
         assert_eq!(menu.name, "Tester");
         assert!(!app.world().contains_resource::<Session>());

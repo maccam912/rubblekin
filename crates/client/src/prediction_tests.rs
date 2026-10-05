@@ -1,4 +1,5 @@
 use super::*;
+use rubblekin_core::physics::{characters_overlap, move_character};
 use rubblekin_core::world::{Block, BlockPos};
 
 fn snapshot(body: Body, last_input_sequence: u64) -> PlayerSnapshot {
@@ -48,24 +49,28 @@ fn delayed_stop_snapshot_preserves_unacknowledged_press_and_release() {
         ..Default::default()
     };
     let first = prediction
-        .advance(&world, &mut body, walking, 0.0, 0.04)
+        .advance(&world, &mut body, walking, 0.0, 0.04, &[])
         .unwrap();
     execute(&world, &mut server, first);
     // Server has seen the first movement but not the later tap and key release.
     let second = prediction
-        .advance(&world, &mut body, walking, 0.0, 0.03)
+        .advance(&world, &mut body, walking, 0.0, 0.03, &[])
         .unwrap();
     let third = prediction
-        .advance(&world, &mut body, stopped, 0.0, 0.01)
+        .advance(&world, &mut body, stopped, 0.0, 0.01, &[])
         .unwrap();
     let stopped_at = body.clone();
     for _ in 0..3 {
-        prediction.reconcile(&world, &mut body, &server).unwrap();
+        prediction
+            .reconcile(&world, &mut body, &server, &[])
+            .unwrap();
         assert_same_body(&body, &stopped_at);
     }
     execute(&world, &mut server, second);
     execute(&world, &mut server, third);
-    prediction.reconcile(&world, &mut body, &server).unwrap();
+    prediction
+        .reconcile(&world, &mut body, &server, &[])
+        .unwrap();
     assert_same_body(&body, &stopped_at);
     assert!(prediction.pending.is_empty());
 }
@@ -123,7 +128,9 @@ fn uneven_frames_and_delayed_snapshots_do_not_pull_back_on_stairs_or_cliffs() {
             while inbound.front().is_some_and(|(at, _)| *at <= now) {
                 let (_, state) = inbound.pop_front().unwrap();
                 let before = body.clone();
-                prediction.reconcile(&world, &mut body, &state).unwrap();
+                prediction
+                    .reconcile(&world, &mut body, &state, &[])
+                    .unwrap();
                 assert_same_body(&body, &before);
             }
             let input = MoveInput {
@@ -133,7 +140,7 @@ fn uneven_frames_and_delayed_snapshots_do_not_pull_back_on_stairs_or_cliffs() {
                 ..Default::default()
             };
             let command = prediction
-                .advance(&world, &mut body, input, 0.0, dt)
+                .advance(&world, &mut body, input, 0.0, dt, &[])
                 .unwrap();
             outbound.push_back((now + latency, command));
             highest = highest.max(body.position[1]);
@@ -172,13 +179,65 @@ fn genuine_authoritative_correction_still_applies_and_replays_newer_input() {
             },
             0.0,
             0.05,
+            &[],
         )
         .unwrap();
     let corrected = snapshot(Body::new([0.25, 12.0, 0.25]), 0);
     let mut expected = corrected.clone();
     execute(&world, &mut expected, command);
-    prediction.reconcile(&world, &mut body, &corrected).unwrap();
+    prediction
+        .reconcile(&world, &mut body, &corrected, &[])
+        .unwrap();
     assert_same_body(&body, &expected.body);
+}
+
+#[test]
+fn predicted_movement_and_acknowledgment_replay_stop_at_other_characters() {
+    let world = World::new(1);
+    let start = Body::new([0.25, 8.0, 0.25]);
+    let obstacles = [[1.25, 8.0, 0.25]];
+    let mut body = start.clone();
+    let mut server = snapshot(start, 0);
+    let mut prediction = Prediction::default();
+    let input = MoveInput {
+        direction: [1.0, 0.0],
+        fly: true,
+        ..Default::default()
+    };
+    let mut commands = VecDeque::new();
+    for _ in 0..8 {
+        commands.push_back(
+            prediction
+                .advance(&world, &mut body, input, 0.0, 0.05, &obstacles)
+                .unwrap(),
+        );
+        assert!(!characters_overlap(body.position, obstacles[0]));
+    }
+    let stopped_at = body.clone();
+    // Replaying the full unacknowledged walk must keep the same contact point.
+    prediction
+        .reconcile(&world, &mut body, &server, &obstacles)
+        .unwrap();
+    assert_same_body(&body, &stopped_at);
+    for command in commands {
+        let ClientMessage::Input {
+            sequence,
+            input,
+            dt,
+            ..
+        } = command
+        else {
+            panic!("expected movement");
+        };
+        move_character_with_obstacles(&world, &mut server.body, input, dt, &obstacles);
+        server.last_input_sequence = sequence;
+        prediction
+            .reconcile(&world, &mut body, &server, &obstacles)
+            .unwrap();
+        assert_same_body(&body, &stopped_at);
+        assert!(!characters_overlap(body.position, obstacles[0]));
+    }
+    assert!(body.position[0] < obstacles[0][0] - rubblekin_core::physics::PLAYER_RADIUS);
 }
 
 #[test]
@@ -188,38 +247,38 @@ fn prediction_backlog_and_invalid_acknowledgments_are_bounded() {
     let mut prediction = Prediction::default();
     for _ in 0..8 {
         prediction
-            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.25)
+            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.25, &[])
             .unwrap();
     }
     let before = body.clone();
     assert!(
         prediction
-            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.01)
+            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.01, &[])
             .is_err()
     );
     assert_same_body(&body, &before);
     assert!(
         prediction
-            .reconcile(&world, &mut body, &snapshot(before.clone(), 9))
+            .reconcile(&world, &mut body, &snapshot(before.clone(), 9), &[])
             .is_err()
     );
     prediction
-        .reconcile(&world, &mut body, &snapshot(before.clone(), 8))
+        .reconcile(&world, &mut body, &snapshot(before.clone(), 8), &[])
         .unwrap();
     assert!(
         prediction
-            .reconcile(&world, &mut body, &snapshot(before, 7))
+            .reconcile(&world, &mut body, &snapshot(before, 7), &[])
             .is_err()
     );
     let mut prediction = Prediction::default();
     for _ in 0..MAX_PENDING_INPUTS {
         prediction
-            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.001)
+            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.001, &[])
             .unwrap();
     }
     assert!(
         prediction
-            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.001)
+            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.001, &[])
             .is_err()
     );
 }

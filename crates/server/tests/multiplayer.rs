@@ -9,7 +9,7 @@ use std::{
 };
 
 use rubblekin_core::{
-    physics::{MoveInput, move_character},
+    physics::{MoveInput, PLAYER_RADIUS, characters_overlap, move_character},
     protocol::*,
     world::{Block, BlockPos, CELL_SIZE, World, WorldGeneration},
 };
@@ -138,6 +138,295 @@ fn nearby_air() -> BlockPos {
     )
 }
 
+fn assert_distinct_bodies(positions: impl IntoIterator<Item = [f32; 3]>) {
+    let positions: Vec<_> = positions.into_iter().collect();
+    for (index, position) in positions.iter().enumerate() {
+        for other in &positions[index + 1..] {
+            assert!(
+                !characters_overlap(*position, *other),
+                "Bodies overlap: {position:?} / {other:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn joining_players_get_free_space_and_server_movement_stops_at_other_players() {
+    let save = TestSave::new();
+    let server = spawn(save.config(false)).unwrap();
+    let (mut first, welcome) = Client::connect(server.addr, "First body");
+    let first_id = match welcome {
+        ServerMessage::Welcome { session_id, .. } => session_id,
+        _ => unreachable!(),
+    };
+    let (mut second, welcome) = Client::connect(server.addr, "Second body");
+    let (second_id, mut positions) = match welcome {
+        ServerMessage::Welcome {
+            session_id,
+            players,
+            npc,
+            ..
+        } => {
+            for (index, player) in players.iter().enumerate() {
+                assert!(!characters_overlap(player.body.position, npc.position));
+                for other in &players[index + 1..] {
+                    assert!(!characters_overlap(
+                        player.body.position,
+                        other.body.position
+                    ));
+                }
+            }
+            (session_id, players)
+        }
+        _ => unreachable!(),
+    };
+    let first_position = positions
+        .iter()
+        .find(|p| p.id == first_id)
+        .unwrap()
+        .body
+        .position;
+    let second_position = positions
+        .iter()
+        .find(|p| p.id == second_id)
+        .unwrap()
+        .body
+        .position;
+    // Align the second body beside the first. Neither spawn overlaps, and this
+    // movement remains outside the first body's horizontal extent.
+    let z_distance = first_position[2] - second_position[2];
+    second.send(ClientMessage::Input {
+        sequence: 1,
+        dt: z_distance.abs() / 7.0,
+        input: MoveInput {
+            direction: [0.0, z_distance.signum()],
+            fly: true,
+            ..Default::default()
+        },
+        yaw: 0.0,
+    });
+    if let ServerMessage::State { players, .. } = second.until(|message| {
+        matches!(message, ServerMessage::State { players, .. }
+            if players.iter().any(|p| p.id == second_id && p.last_input_sequence == 1))
+    }) {
+        positions = players;
+    }
+    let blocker = positions
+        .iter()
+        .find(|p| p.id == second_id)
+        .unwrap()
+        .body
+        .position;
+    assert!((blocker[2] - first_position[2]).abs() < 0.001);
+    for sequence in 1..=2 {
+        first.send(ClientMessage::Input {
+            sequence,
+            dt: MAX_INPUT_DT,
+            input: MoveInput {
+                direction: [-1.0, 0.0],
+                fly: true,
+                ..Default::default()
+            },
+            yaw: 0.0,
+        });
+    }
+    let state = first.until(|message| {
+        matches!(message, ServerMessage::State { players, .. }
+            if players.iter().any(|p| p.id == first_id && p.last_input_sequence == 2))
+    });
+    if let ServerMessage::State { players, .. } = state {
+        let mover = players
+            .iter()
+            .find(|p| p.id == first_id)
+            .unwrap()
+            .body
+            .position;
+        let blocker = players
+            .iter()
+            .find(|p| p.id == second_id)
+            .unwrap()
+            .body
+            .position;
+        assert!(!characters_overlap(mover, blocker));
+        assert!(mover[0] >= blocker[0] + PLAYER_RADIUS * 2.0 - 0.001);
+        assert!(mover[0] < first_position[0]);
+    }
+    server.stop().unwrap();
+}
+
+#[test]
+fn server_movement_cannot_pass_through_a_resting_npc() {
+    let save = TestSave::new();
+    let server = spawn(save.config(true)).unwrap();
+    let (mut client, welcome) = Client::connect(server.addr, "NPC collision");
+    let id = match welcome {
+        ServerMessage::Welcome { session_id, .. } => session_id,
+        _ => unreachable!(),
+    };
+    client.send(ClientMessage::Admin {
+        action: AdminAction::SetNpcGoal {
+            goal: Some(NpcAction::Rest),
+        },
+    });
+    client.until(|message| {
+        matches!(message, ServerMessage::State { npc, .. }
+        if npc.forced && npc.action == NpcAction::Rest)
+    });
+    for sequence in 1..=2 {
+        client.send(ClientMessage::Input {
+            sequence,
+            dt: MAX_INPUT_DT,
+            input: MoveInput {
+                direction: [1.0, 0.0],
+                fly: true,
+                ..Default::default()
+            },
+            yaw: 0.0,
+        });
+    }
+    let state = client.until(|message| {
+        matches!(message, ServerMessage::State { players, .. }
+            if players.iter().any(|p| p.id == id && p.last_input_sequence == 2))
+    });
+    if let ServerMessage::State { players, npc, .. } = state {
+        let position = players.iter().find(|p| p.id == id).unwrap().body.position;
+        assert!(!characters_overlap(position, npc.position));
+        assert!(position[0] <= npc.position[0] - PLAYER_RADIUS * 2.0 + 0.001);
+        assert!(position[0] > 1.0);
+    }
+    server.stop().unwrap();
+}
+
+#[test]
+fn old_village_save_recovers_coincident_residents_before_welcoming_players() {
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV3;
+    let server = spawn(config.clone()).unwrap();
+    server.stop().unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    let world = World::generate(42, WorldGeneration::GeographyV3);
+    let position = serde_json::to_value(world.spawn_position()).unwrap();
+    // Old residents had no needs and could coexist at the same waypoint.
+    // Recreate that case beside player spawn with valid saved route identities.
+    for resident in value["villages"]["residents"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .take(2)
+    {
+        resident["snapshot"]["position"] = position.clone();
+        resident["body"]["position"] = position.clone();
+        resident["phase"] = "ToWork".into();
+        resident["waypoint"] = 0.into();
+        resident["elapsed"] = 0.into();
+        let snapshot = resident["snapshot"].as_object_mut().unwrap();
+        snapshot.remove("hunger");
+        snapshot.remove("energy");
+        snapshot.remove("reason");
+    }
+    fs::write(&config.save_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let server = spawn(config).unwrap();
+    let (_client, welcome) = Client::connect(server.addr, "Resident collision spawn");
+    if let ServerMessage::Welcome {
+        players,
+        npc,
+        residents,
+        ..
+    } = welcome
+    {
+        assert_distinct_bodies(
+            players
+                .iter()
+                .map(|player| player.body.position)
+                .chain(std::iter::once(npc.position))
+                .chain(residents.iter().map(|resident| resident.position)),
+        );
+        assert!(
+            residents
+                .iter()
+                .all(|resident| resident.hunger.is_finite() && resident.energy.is_finite())
+        );
+    }
+    server.stop().unwrap();
+}
+
+#[test]
+fn idle_gravity_lands_on_another_player_without_merging_bodies() {
+    let save = TestSave::new();
+    let server = spawn(save.config(false)).unwrap();
+    let (mut first, welcome) = Client::connect(server.addr, "Landing body");
+    let id = match welcome {
+        ServerMessage::Welcome { session_id, .. } => session_id,
+        _ => unreachable!(),
+    };
+    let (_second, welcome) = Client::connect(server.addr, "Supporting body");
+    let (start, target, second_id) = match welcome {
+        ServerMessage::Welcome {
+            players,
+            session_id,
+            ..
+        } => (
+            players
+                .iter()
+                .find(|player| player.id == id)
+                .unwrap()
+                .body
+                .position,
+            players
+                .iter()
+                .find(|player| player.id == session_id)
+                .unwrap()
+                .body
+                .position,
+            session_id,
+        ),
+        _ => unreachable!(),
+    };
+    first.send(ClientMessage::Input {
+        sequence: 1,
+        dt: MAX_INPUT_DT,
+        input: MoveInput {
+            fly: true,
+            vertical: 1.0,
+            ..Default::default()
+        },
+        yaw: 0.0,
+    });
+    let direction = [target[0] - start[0], target[2] - start[2]];
+    let distance = direction[0].hypot(direction[1]);
+    first.send(ClientMessage::Input {
+        sequence: 2,
+        dt: distance / 7.0,
+        input: MoveInput {
+            fly: true,
+            direction: direction.map(|value| value / distance),
+            ..Default::default()
+        },
+        yaw: 0.0,
+    });
+    let state = first.until(|message| matches!(message, ServerMessage::State { players, .. }
+        if players.iter().any(|player| player.id == id && player.last_input_sequence == 2 && player.body.on_ground)));
+    if let ServerMessage::State { players, .. } = state {
+        let landed = players
+            .iter()
+            .find(|player| player.id == id)
+            .unwrap()
+            .body
+            .position;
+        let supporting = players
+            .iter()
+            .find(|player| player.id == second_id)
+            .unwrap()
+            .body
+            .position;
+        assert!(!characters_overlap(landed, supporting));
+        assert!((landed[1] - supporting[1] - rubblekin_core::physics::PLAYER_HEIGHT).abs() < 0.002);
+    }
+    server.stop().unwrap();
+}
+
 #[test]
 fn geographic_world_replicates_edits_and_preserves_its_generator_across_restart() {
     assert_geographic_world_restart(WorldGeneration::GeographyV1);
@@ -174,6 +463,7 @@ fn village_people_and_economy_replicate_simulate_idle_and_survive_restart() {
                     .sum::<usize>()
             );
             assert!(residents.len() <= 60);
+            assert_distinct_bodies(residents.iter().map(|resident| resident.position));
             (residents, villages, world_time)
         }
         _ => unreachable!(),
@@ -188,6 +478,21 @@ fn village_people_and_economy_replicate_simulate_idle_and_survive_restart() {
     for client in [&mut first, &mut second] {
         let state = client.until(|message| matches!(message, ServerMessage::State { residents, world_time, .. }
             if *world_time > started + 0.1 && residents.iter().zip(&initial_residents).any(|(a,b)| a.position != b.position)));
+        if let ServerMessage::State {
+            players,
+            npc,
+            residents,
+            ..
+        } = &state
+        {
+            assert_distinct_bodies(
+                players
+                    .iter()
+                    .map(|player| player.body.position)
+                    .chain(std::iter::once(npc.position))
+                    .chain(residents.iter().map(|resident| resident.position)),
+            );
+        }
         assert!(serde_json::to_vec(&state).unwrap().len() < MAX_MESSAGE_BYTES);
     }
     drop(first);

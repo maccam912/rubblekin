@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 
 use rubblekin_core::{
-    physics::{Body, MoveInput, move_character},
+    physics::{Body, MoveInput, move_character_with_obstacles},
     protocol::{ClientMessage, MAX_INPUT_DT, PlayerSnapshot},
     world::World,
 };
@@ -34,6 +34,7 @@ impl Prediction {
         input: MoveInput,
         yaw: f32,
         dt: f32,
+        obstacles: &[[f32; 3]],
     ) -> Result<ClientMessage, &'static str> {
         if !dt.is_finite() || dt <= 0.0 || dt > MAX_INPUT_DT {
             return Err("Invalid movement duration");
@@ -47,7 +48,7 @@ impl Prediction {
             .sequence
             .checked_add(1)
             .ok_or("Input sequence exhausted")?;
-        move_character(world, body, input, dt);
+        move_character_with_obstacles(world, body, input, dt, obstacles);
         self.pending.push_back(PendingInput {
             sequence: self.sequence,
             input,
@@ -67,6 +68,7 @@ impl Prediction {
         world: &World,
         body: &mut Body,
         authoritative: &PlayerSnapshot,
+        obstacles: &[[f32; 3]],
     ) -> Result<(), &'static str> {
         let acknowledged = authoritative.last_input_sequence;
         if acknowledged < self.acknowledged || acknowledged > self.sequence {
@@ -83,7 +85,7 @@ impl Prediction {
         }
         *body = authoritative.body.clone();
         for input in &self.pending {
-            move_character(world, body, input.input, input.dt);
+            move_character_with_obstacles(world, body, input.input, input.dt, obstacles);
         }
         Ok(())
     }

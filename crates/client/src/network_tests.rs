@@ -175,7 +175,7 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
     let mut reconcile = |prediction: &mut Prediction, body: &mut Body, state: PlayerSnapshot| {
         let before = body.clone();
         acknowledged = state.last_input_sequence;
-        prediction.reconcile(&world, body, &state).unwrap();
+        prediction.reconcile(&world, body, &state, &[]).unwrap();
         assert_eq!(
             body.position, before.position,
             "localhost snapshot moved the predicted player"
@@ -205,7 +205,7 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
         };
         connection.send(
             prediction
-                .advance(&world, &mut body, input, 0.0, dt)
+                .advance(&world, &mut body, input, 0.0, dt, &[])
                 .unwrap(),
         );
         assert!(connection.error.is_none(), "{:?}", connection.error);

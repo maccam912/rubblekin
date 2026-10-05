@@ -385,13 +385,64 @@ mod tests {
     }
 
     #[test]
+    fn version_three_village_saves_add_need_defaults_without_resetting_the_world() {
+        let path = TestPath::new();
+        let sim = Simulation::load(&path.0, 42, WorldGeneration::GeographyV3).unwrap();
+        sim.save(&path.0).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        for resident in value["villages"]["residents"].as_array_mut().unwrap() {
+            let state = resident.as_object_mut().unwrap();
+            state.remove("resume");
+            state.remove("farm_waypoint");
+            let snapshot = state["snapshot"].as_object_mut().unwrap();
+            for field in ["hunger", "energy", "reason"] {
+                snapshot.remove(field);
+            }
+        }
+        for economy in value["villages"]["villages"].as_array_mut().unwrap() {
+            economy.as_object_mut().unwrap().remove("planted");
+        }
+        fs::write(&path.0, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut loaded = Simulation::load(&path.0, 999, WorldGeneration::GeographyV2).unwrap();
+        assert_eq!(loaded.world.seed, 42);
+        assert_eq!(loaded.world.generation(), WorldGeneration::GeographyV3);
+        assert_eq!(loaded.villages.villages(), sim.villages.villages());
+        let residents = loaded.villages.residents();
+        for (resident, original) in residents.iter().zip(sim.villages.residents()) {
+            assert_eq!(resident.id, original.id);
+            assert_eq!(resident.position, original.position);
+            assert_eq!(resident.carrying, original.carrying);
+            assert_eq!(resident.hunger, 25.0);
+            assert_eq!(resident.energy, 85.0);
+        }
+        for _ in 0..40 {
+            loaded.villages.tick(&loaded.world, 0.05);
+        }
+        assert!(loaded.villages.validate(&loaded.world));
+        loaded.save(&path.0).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        assert!(saved["villages"]["residents"][0]["snapshot"]["hunger"].is_number());
+    }
+
+    #[test]
     fn invalid_village_save_is_rejected_and_left_untouched() {
         let path = TestPath::new();
         let sim = Simulation::load(&path.0, 42, WorldGeneration::GeographyV3).unwrap();
         sim.save(&path.0).unwrap();
         let original: serde_json::Value =
             serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        let mutations = ["missing", "id", "route", "stock"];
+        let mutations = [
+            "missing",
+            "id",
+            "route",
+            "stock",
+            "hunger",
+            "energy",
+            "farm_waypoint",
+            "resume",
+            "reason",
+        ];
         for mutation in mutations {
             let mut value = original.clone();
             match mutation {
@@ -401,6 +452,19 @@ mod tests {
                 "id" => value["villages"]["residents"][0]["snapshot"]["id"] = 999_999.into(),
                 "route" => value["villages"]["residents"][0]["waypoint"] = 999_999.into(),
                 "stock" => value["villages"]["villages"][0]["snapshot"]["food"] = (-1).into(),
+                "hunger" => value["villages"]["residents"][0]["snapshot"]["hunger"] = 101.into(),
+                "energy" => value["villages"]["residents"][0]["snapshot"]["energy"] = (-1).into(),
+                "farm_waypoint" => {
+                    value["villages"]["residents"][0]["farm_waypoint"] = 999_999.into()
+                }
+                "resume" => {
+                    value["villages"]["residents"][0]["resume"] =
+                        serde_json::json!({ "phase": "ToTrade", "waypoint": 0, "elapsed": 0.0 })
+                }
+                "reason" => {
+                    value["villages"]["residents"][0]["snapshot"]["reason"] =
+                        "invalid\nreason".into()
+                }
                 _ => unreachable!(),
             }
             let bytes = serde_json::to_vec(&value).unwrap();

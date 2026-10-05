@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -153,6 +153,12 @@ pub enum ResidentAction {
     Trading,
     Resting,
     Blocked,
+    Eating,
+    SeekingFood,
+    GoingHome,
+    Planting,
+    Tending,
+    Harvesting,
 }
 
 impl ResidentAction {
@@ -164,6 +170,12 @@ impl ResidentAction {
             Self::Trading => "Trading",
             Self::Resting => "Resting at home",
             Self::Blocked => "Path blocked",
+            Self::Eating => "Eating a meal",
+            Self::SeekingFood => "Going for food",
+            Self::GoingHome => "Going home to sleep",
+            Self::Planting => "Planting crops",
+            Self::Tending => "Tending crops",
+            Self::Harvesting => "Harvesting crops",
         }
     }
 }
@@ -184,6 +196,22 @@ pub struct ResidentSnapshot {
     pub action: ResidentAction,
     pub target: Option<[f32; 3]>,
     pub carrying: Option<ResourceCargo>,
+    #[serde(default = "resident_initial_hunger")]
+    pub hunger: f32,
+    #[serde(default = "resident_initial_energy")]
+    pub energy: f32,
+    #[serde(default = "resident_initial_reason")]
+    pub reason: String,
+}
+
+fn resident_initial_hunger() -> f32 {
+    25.0
+}
+fn resident_initial_energy() -> f32 {
+    85.0
+}
+fn resident_initial_reason() -> String {
+    "Heading to the next job".into()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,6 +1,8 @@
 # Local compilation and persistent worlds (Cargo.lock is intentionally tracked).
 /target/
 /saves/
+/graphics.json
+/graphics.json.tmp
 
 # Keep only the curated screenshots linked from the project documentation.
 /artifacts/*
@@ -29,6 +31,9 @@
 !/artifacts/map-lod-near.png
 !/artifacts/map-lod-forest.png
 !/artifacts/map-lod-ground.png
+!/artifacts/pause-menu.png
+!/artifacts/pause-menu-touch.png
+!/artifacts/npc-needs-native.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

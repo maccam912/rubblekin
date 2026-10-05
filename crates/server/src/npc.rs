@@ -1,5 +1,5 @@
 use rubblekin_core::{
-    physics::{Body, MoveInput, move_character},
+    physics::{Body, MoveInput, move_character_with_obstacles, resolve_character_overlaps},
     protocol::{AdminAction, NpcAction, NpcSnapshot},
     world::{CELL_SIZE, World},
 };
@@ -150,7 +150,26 @@ impl Forager {
         };
     }
 
+    pub fn resolve_overlaps(&mut self, world: &World, obstacles: &[[f32; 3]]) {
+        // Reuse terrain recovery too: a center-column spawn can straddle a
+        // higher neighboring column. This normalization does not advance needs.
+        move_character_with_obstacles(
+            world,
+            &mut self.body,
+            MoveInput::default(),
+            0.000001,
+            obstacles,
+        );
+        resolve_character_overlaps(world, &mut self.body, obstacles);
+        self.snapshot.position = self.body.position;
+    }
+
+    #[cfg(test)]
     pub fn tick(&mut self, world: &World, dt: f32) {
+        self.tick_with_obstacles(world, dt, &[]);
+    }
+
+    pub fn tick_with_obstacles(&mut self, world: &World, dt: f32, obstacles: &[[f32; 3]]) {
         self.snapshot.hunger = (self.snapshot.hunger + dt * 0.18).min(100.0);
         self.snapshot.energy = (self.snapshot.energy - dt * 0.10).max(0.0);
         self.decision_elapsed += dt;
@@ -194,7 +213,7 @@ impl Forager {
             }
         }
         let previous = self.body.position;
-        move_character(world, &mut self.body, input, dt);
+        move_character_with_obstacles(world, &mut self.body, input, dt, obstacles);
         if input.direction != [0.0, 0.0]
             && self.body.on_ground
             && horizontal_distance(previous, self.body.position) < 0.01
@@ -214,6 +233,38 @@ fn horizontal_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forager_stops_at_an_embodied_character_without_overlapping() {
+        let world = World::new(42);
+        let mut npc = Forager::new(&world);
+        npc.snapshot.action = NpcAction::Wander;
+        npc.forced_goal = Some(NpcAction::Wander);
+        npc.snapshot.target = Some([
+            npc.body.position[0] + 4.0,
+            npc.body.position[1],
+            npc.body.position[2],
+        ]);
+        let blocker = [
+            npc.body.position[0] + 1.0,
+            npc.body.position[1],
+            npc.body.position[2],
+        ];
+        let start = npc.body.position;
+        // Keep this short enough to avoid an unrelated periodic goal change.
+        for _ in 0..8 {
+            npc.tick_with_obstacles(&world, 0.05, &[blocker]);
+            assert!(!rubblekin_core::physics::characters_overlap(
+                npc.snapshot.position,
+                blocker
+            ));
+        }
+        assert!(npc.snapshot.position[0] > start[0]);
+        assert!(
+            npc.snapshot.position[0]
+                <= blocker[0] - rubblekin_core::physics::PLAYER_RADIUS * 2.0 + 0.001
+        );
+    }
 
     #[test]
     fn forager_moves_harvests_and_eats_without_a_player() {

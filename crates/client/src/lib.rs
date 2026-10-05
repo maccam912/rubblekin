@@ -4,6 +4,7 @@ mod graphics;
 mod join;
 mod network;
 mod observer;
+mod pause;
 mod platform;
 mod prediction;
 mod terrain;
@@ -12,24 +13,27 @@ mod terrain_material;
 mod touch;
 mod ui;
 
+#[cfg(test)]
+mod avatar_tests;
+
 use bevy::{
     app::AppExit,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
-    light::{
-        CascadeShadowConfig, DirectionalLightShadowMap, NotShadowCaster, ShadowFilteringMethod,
-    },
+    light::{DirectionalLightShadowMap, NotShadowCaster},
     prelude::*,
     render::view::screenshot::{Screenshot, save_to_disk},
     window::{CursorGrabMode, CursorOptions},
 };
 use follow_camera::CameraFollow;
-use graphics::GraphicsQuality;
+use graphics::{GraphicsQuality, GraphicsSettings};
 use network::Connection;
 use observer::ObserverCamera;
 use prediction::Prediction;
 use rubblekin_core::{
-    physics::{Body, EYE_HEIGHT, MoveInput},
+    physics::{
+        Body, EYE_HEIGHT, MoveInput, character_position_is_clear, resolve_character_overlaps,
+    },
     protocol::*,
     world::{Block, BlockPos, CELL_SIZE, World as GameWorld},
 };
@@ -79,6 +83,18 @@ pub struct Session {
     next_request: u64,
 }
 
+impl Session {
+    fn character_obstacles(&self) -> Vec<[f32; 3]> {
+        self.players
+            .iter()
+            .filter(|player| player.id != self.id)
+            .map(|player| player.body.position)
+            .chain(std::iter::once(self.npc.position))
+            .chain(self.residents.iter().map(|resident| resident.position))
+            .collect()
+    }
+}
+
 #[derive(Resource, Default)]
 struct Avatars {
     players: HashMap<u64, Entity>,
@@ -98,6 +114,7 @@ struct CarriedGoods;
 #[derive(Component)]
 struct Limb {
     phase: f32,
+    arm: bool,
 }
 #[derive(Resource)]
 struct Capture {
@@ -115,17 +132,14 @@ struct Options {
     name: Option<String>,
     screenshot: Option<String>,
     exit_after: Option<f32>,
-    graphics: GraphicsQuality,
+    graphics: Option<GraphicsQuality>,
     seed: Option<u32>,
     observe: bool,
     touch: bool,
 }
 
 fn options() -> Result<Options, String> {
-    let mut result = Options {
-        graphics: platform::default_graphics(),
-        ..default()
-    };
+    let mut result = Options::default();
     #[cfg(target_os = "android")]
     let mut args = std::iter::empty::<String>();
     #[cfg(not(target_os = "android"))]
@@ -161,12 +175,12 @@ fn options() -> Result<Options, String> {
                 }
                 result.exit_after = Some(seconds);
             }
-            "--low" => result.graphics = GraphicsQuality::Low,
-            "--balanced" => result.graphics = GraphicsQuality::Balanced,
-            "--high" => result.graphics = GraphicsQuality::High,
+            "--low" => result.graphics = Some(GraphicsQuality::Low),
+            "--balanced" => result.graphics = Some(GraphicsQuality::Balanced),
+            "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nEscape release cursor | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nEscape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -190,6 +204,10 @@ pub fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     platform::prepare_data_directory()?;
     let options = options().map_err(std::io::Error::other)?;
+    let mut graphics = GraphicsSettings::load(platform::default_graphics());
+    if let Some(quality) = options.graphics {
+        graphics.set_quality(quality);
+    }
     let mut menu = join::JoinScreen::new(
         options
             .connect
@@ -205,7 +223,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             generation: rubblekin_core::world::WorldGeneration::GeographyV3,
             allow_admin: true,
         },
-        options.graphics,
+        graphics.quality,
         if options.observe {
             SessionMode::Observer
         } else {
@@ -230,9 +248,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             ..default()
         })
         .insert_resource(DirectionalLightShadowMap {
-            size: options.graphics.shadow_map_size(),
+            size: graphics.quality.shadow_map_size(),
         })
         .insert_resource(menu)
+        .insert_resource(graphics)
+        .init_resource::<pause::PauseMenu>()
         .insert_resource(Capture {
             path: screenshot,
             taken: false,
@@ -258,11 +278,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 join::interact,
                 join::android_text_input,
                 join::poll_connection,
-                (setup, ui::setup_ui, touch::setup).run_if(resource_added::<Session>),
+                (setup, ui::setup_ui, touch::setup, pause::setup).run_if(resource_added::<Session>),
                 touch::read,
                 (
                     receive_network,
+                    pause::read,
                     controls,
+                    graphics::apply_settings,
+                    graphics::save_changed,
                     camera,
                     terrain::stream_terrain,
                     edit_blocks,
@@ -271,6 +294,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ui::update_ui,
                     ui::scroll_panels,
                     touch::refresh,
+                    pause::refresh,
                     join::leave_world,
                 )
                     .chain()
@@ -285,10 +309,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     mut commands: Commands,
     world: Res<VoxelWorld>,
     session: Res<Session>,
+    graphics: Res<GraphicsSettings>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut terrain_materials: ResMut<Assets<terrain_material::TerrainMaterial>>,
@@ -307,6 +333,7 @@ fn setup(
         &mut images,
         &world.0,
         center,
+        graphics.near_radius_chunks(),
     );
     commands.insert_resource(terrain);
     info!("Terrain generated in {:.2}s", start.elapsed().as_secs_f32());
@@ -315,10 +342,10 @@ fn setup(
         DirectionalLight {
             illuminance: 10500.0,
             color: Color::srgb(1.0, 0.94, 0.85),
-            shadow_maps_enabled: session.graphics.shadows(),
+            shadow_maps_enabled: graphics.quality.shadows(),
             ..default()
         },
-        session.graphics.cascades(),
+        graphics.cascades(),
         Transform::from_xyz(-40.0, 65.0, 25.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
@@ -353,8 +380,8 @@ fn setup(
             },
             ..default()
         },
-        session.graphics.msaa(),
-        session.graphics.shadow_filter(),
+        graphics.quality.msaa(),
+        graphics.quality.shadow_filter(),
         Transform::from_translation(
             Vec3::from_array(session.body.position) + Vec3::new(0.0, 4.0, 6.0),
         ),
@@ -422,10 +449,11 @@ fn receive_network(
     // the newest acknowledgment, with all received terrain edits available.
     if let Some(authoritative) = latest_authoritative {
         let session = &mut *session;
+        let obstacles = session.character_obstacles();
         if let Err(error) =
             session
                 .prediction
-                .reconcile(&world.0, &mut session.body, &authoritative)
+                .reconcile(&world.0, &mut session.body, &authoritative, &obstacles)
         {
             connection.fail(error.into());
         }
@@ -448,21 +476,30 @@ fn controls(
     world: Res<VoxelWorld>,
     mut session: ResMut<Session>,
     mut connection: ResMut<Connection>,
-    mut lights: Query<(&mut DirectionalLight, &mut CascadeShadowConfig)>,
-    mut cameras: Query<(&mut Msaa, &mut ShadowFilteringMethod), With<GameCamera>>,
-    mut shadow_map: ResMut<DirectionalLightShadowMap>,
+    mut graphics: ResMut<GraphicsSettings>,
+    pause: Option<Res<pause::PauseMenu>>,
     diagnostics: Res<DiagnosticsStore>,
     touch: Res<touch::TouchControls>,
 ) {
     let dt = time.delta_secs().min(MAX_INPUT_DT);
     let observing = session.observer.is_some();
+    let blocked = pause
+        .as_ref()
+        .is_some_and(|menu| menu.open || menu.input_blocked);
+    let resumed = pause.as_ref().is_some_and(|menu| menu.just_closed);
     if touch.enabled {
-        session.captured = window.focused && !touch.menu_open && connection.error.is_none();
+        session.captured =
+            window.focused && !blocked && !touch.menu_open && connection.error.is_none();
         if !cfg!(target_os = "android") {
             cursor.grab_mode = CursorGrabMode::None;
             cursor.visible = true;
         }
-    } else if keys.just_pressed(KeyCode::Escape) || !window.focused {
+    } else if resumed && window.focused && connection.error.is_none() {
+        session.captured = true;
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
+        session.edit_clock = 0.3;
+    } else if blocked || !window.focused {
         session.captured = false;
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
@@ -472,7 +509,7 @@ fn controls(
         cursor.visible = false;
         session.edit_clock = 0.3;
     }
-    if session.captured {
+    if session.captured && !blocked {
         let motion = if touch.enabled {
             touch.look
         } else {
@@ -510,13 +547,16 @@ fn controls(
             session.camera_distance = (session.camera_distance - scroll * 0.45).clamp(1.0, 9.0);
         }
     }
-    if !observing && (keys.just_pressed(KeyCode::KeyF) || touch.flight) {
+    if !blocked
+        && window.focused
+        && !observing
+        && (keys.just_pressed(KeyCode::KeyF) || touch.flight)
+    {
         session.flying = !session.flying;
     }
     if observing
         && window.focused
-        && (keys.just_pressed(KeyCode::Home)
-            || keys.just_pressed(KeyCode::KeyR)
+        && ((!blocked && (keys.just_pressed(KeyCode::Home) || keys.just_pressed(KeyCode::KeyR)))
             || touch.return_spawn)
     {
         session.observer = Some(ObserverCamera::new(world.0.spawn_position()));
@@ -525,7 +565,7 @@ fn controls(
     }
     if observing
         && window.focused
-        && (keys.just_pressed(KeyCode::KeyV) || touch.next_village)
+        && ((!blocked && keys.just_pressed(KeyCode::KeyV)) || touch.next_village)
         && let Some(plan) = world.0.settlements()
         && !plan.villages.is_empty()
     {
@@ -555,14 +595,14 @@ fn controls(
         );
         session.status_until = time.elapsed_secs_f64() + 8.0;
     }
-    if keys.just_pressed(KeyCode::Tab) {
+    if !blocked && window.focused && keys.just_pressed(KeyCode::Tab) {
         session.inspector = !session.inspector;
     }
     if touch.inspect {
         session.inspector = !(session.inspector && !session.help);
         session.help = false;
     }
-    if keys.just_pressed(KeyCode::KeyH) {
+    if !blocked && window.focused && keys.just_pressed(KeyCode::KeyH) {
         session.help = !session.help;
     }
     if touch.help {
@@ -571,18 +611,11 @@ fn controls(
             session.inspector = false;
         }
     }
-    if keys.just_pressed(KeyCode::F2) || touch.graphics {
-        session.graphics = session.graphics.next();
-        shadow_map.size = session.graphics.shadow_map_size();
-        for (mut light, mut cascades) in &mut lights {
-            light.shadow_maps_enabled = session.graphics.shadows();
-            *cascades = session.graphics.cascades();
-        }
-        for (mut msaa, mut filter) in &mut cameras {
-            *msaa = session.graphics.msaa();
-            *filter = session.graphics.shadow_filter();
-        }
+    if window.focused && keys.just_pressed(KeyCode::F2) {
+        let quality = graphics.quality.next();
+        graphics.set_quality(quality);
     }
+    session.graphics = graphics.quality;
     for (i, key) in [
         KeyCode::Digit1,
         KeyCode::Digit2,
@@ -594,14 +627,14 @@ fn controls(
     .iter()
     .enumerate()
     {
-        if keys.just_pressed(*key) {
+        if !blocked && window.focused && keys.just_pressed(*key) {
             session.selected = i;
         }
     }
-    if let Some(selected) = touch.selected {
+    if !blocked && let Some(selected) = touch.selected {
         session.selected = selected;
     }
-    if session.can_admin && !observing {
+    if !blocked && window.focused && session.can_admin && !observing {
         let goal = if keys.just_pressed(KeyCode::F6) {
             Some(Some(NpcAction::Forage))
         } else if keys.just_pressed(KeyCode::F7) {
@@ -643,10 +676,11 @@ fn controls(
     }
     let mut input = MoveInput::default();
     let mut observer_input = Vec3::ZERO;
-    if session.captured && window.focused && connection.error.is_none() && touch.enabled {
+    if !blocked && session.captured && window.focused && connection.error.is_none() && touch.enabled
+    {
         input = touch.movement_input(session.yaw, session.flying);
         observer_input = Vec3::new(touch.movement.x, touch.vertical, touch.movement.y);
-    } else if session.captured && window.focused && connection.error.is_none() {
+    } else if !blocked && session.captured && window.focused && connection.error.is_none() {
         let forward = Vec2::new(session.yaw.sin(), -session.yaw.cos());
         let right = Vec2::new(session.yaw.cos(), session.yaw.sin());
         let x = f32::from(keys.pressed(KeyCode::KeyD)) - f32::from(keys.pressed(KeyCode::KeyA));
@@ -665,10 +699,15 @@ fn controls(
         if let Some(observer) = &mut session.observer {
             observer.advance(observer_input, session.yaw, session.pitch, input.sprint, dt);
         } else {
-            match session
-                .prediction
-                .advance(&world.0, &mut session.body, input, session.yaw, dt)
-            {
+            let obstacles = session.character_obstacles();
+            match session.prediction.advance(
+                &world.0,
+                &mut session.body,
+                input,
+                session.yaw,
+                dt,
+                &obstacles,
+            ) {
                 Ok(message) => connection.send(message),
                 Err(error) => connection.fail(error.into()),
             }
@@ -716,7 +755,12 @@ fn edit_blocks(
     mut connection: ResMut<Connection>,
     mut gizmos: Gizmos,
     touch: Res<touch::TouchControls>,
+    pause: Option<Res<pause::PauseMenu>>,
 ) {
+    if pause.is_some_and(|menu| menu.open || menu.input_blocked) {
+        session.target = None;
+        return;
+    }
     if session.inspector
         && let Some(target) = session.npc.target
     {
@@ -918,7 +962,7 @@ fn character_with_role(
                 Mesh3d(cube.clone()),
                 MeshMaterial3d(boots.clone()),
                 Transform::from_xyz(x, 0.38, 0.0).with_scale(Vec3::new(0.18, 0.66, 0.22)),
-                Limb { phase },
+                Limb { phase, arm: false },
             ));
             parent.spawn((
                 Mesh3d(cube.clone()),
@@ -927,11 +971,46 @@ fn character_with_role(
                     .with_scale(Vec3::new(0.16, 0.52, 0.20)),
                 Limb {
                     phase: phase + std::f32::consts::PI,
+                    arm: true,
                 },
             ));
         }
     });
     id
+}
+
+// A clear authoritative pose is the fallback when smoothing would cut through
+// another person or a terrain step. Keep earlier rendered poses in the obstacle
+// list too, so two individually clear interpolations cannot cross each other.
+fn smoothed_avatar_position(
+    world: &GameWorld,
+    current: Vec3,
+    positions: &mut [[f32; 3]],
+    index: usize,
+    blend: f32,
+) -> Vec3 {
+    let desired = Vec3::from_array(positions[index]);
+    let obstacles: Vec<_> = positions
+        .iter()
+        .enumerate()
+        .filter(|(other, _)| *other != index)
+        .map(|(_, position)| *position)
+        .collect();
+    let candidate = if current.distance_squared(desired) > 64.0 {
+        desired
+    } else {
+        current.lerp(desired, blend)
+    };
+    let mut body = Body::new(
+        if character_position_is_clear(world, candidate.to_array(), &obstacles) {
+            candidate.to_array()
+        } else {
+            desired.to_array()
+        },
+    );
+    resolve_character_overlaps(world, &mut body, &obstacles);
+    positions[index] = body.position;
+    Vec3::from_array(body.position)
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -948,6 +1027,20 @@ fn update_avatars(
     mut materials: ResMut<Assets<StandardMaterial>>,
     time: Res<Time>,
 ) {
+    let mut positions: Vec<_> = session
+        .players
+        .iter()
+        .map(|player| {
+            if player.id == session.id {
+                session.body.position
+            } else {
+                player.body.position
+            }
+        })
+        .chain(std::iter::once(session.npc.position))
+        .chain(session.residents.iter().map(|resident| resident.position))
+        .collect();
+    let mut moving = Vec::new();
     let live: Vec<u64> = session.players.iter().map(|p| p.id).collect();
     avatars.players.retain(|id, entity| {
         if !live.contains(id) {
@@ -957,36 +1050,61 @@ fn update_avatars(
             true
         }
     });
-    for player in &session.players {
-        let entity = *avatars
-            .players
-            .entry(player.id)
-            .or_insert_with(|| character(&mut commands, &mut meshes, &mut materials, false));
+    for (index, player) in session.players.iter().enumerate() {
+        let entity = *avatars.players.entry(player.id).or_insert_with(|| {
+            let entity = character(&mut commands, &mut meshes, &mut materials, false);
+            commands
+                .entity(entity)
+                .insert(Transform::from_translation(Vec3::from_array(
+                    positions[index],
+                )));
+            entity
+        });
         if let Ok(mut transform) = transforms.get_mut(entity) {
             let (position, yaw) = if player.id == session.id {
                 (session.body.position, session.yaw)
             } else {
                 (player.body.position, player.yaw)
             };
+            let previous = transform.translation;
             transform.translation = if player.id == session.id {
                 Vec3::from_array(position)
             } else {
-                transform.translation.lerp(
-                    Vec3::from_array(position),
+                smoothed_avatar_position(
+                    &world.0,
+                    previous,
+                    &mut positions,
+                    index,
                     (time.delta_secs() * 15.0).min(1.0),
                 )
             };
+            if previous.xz().distance_squared(transform.translation.xz()) > 0.000001 {
+                moving.push(entity);
+            }
             transform.rotation = Quat::from_rotation_y(-yaw);
         }
     }
-    let npc = *avatars
-        .npc
-        .get_or_insert_with(|| character(&mut commands, &mut meshes, &mut materials, true));
+    let npc = *avatars.npc.get_or_insert_with(|| {
+        let entity = character(&mut commands, &mut meshes, &mut materials, true);
+        commands
+            .entity(entity)
+            .insert(Transform::from_translation(Vec3::from_array(
+                session.npc.position,
+            )));
+        entity
+    });
     if let Ok(mut transform) = transforms.get_mut(npc) {
-        transform.translation = transform.translation.lerp(
-            Vec3::from_array(session.npc.position),
+        let previous = transform.translation;
+        transform.translation = smoothed_avatar_position(
+            &world.0,
+            previous,
+            &mut positions,
+            session.players.len(),
             (time.delta_secs() * 12.0).min(1.0),
         );
+        if previous.xz().distance_squared(transform.translation.xz()) > 0.000001 {
+            moving.push(npc);
+        }
         if let Some(target) = session.npc.target {
             let delta = Vec3::from_array(target) - transform.translation;
             if delta.x * delta.x + delta.z * delta.z > 0.03 {
@@ -1003,7 +1121,7 @@ fn update_avatars(
             true
         }
     });
-    for resident in &session.residents {
+    for (index, resident) in session.residents.iter().enumerate() {
         let desired = Vec3::from_array(resident.position);
         let entity = *avatars.residents.entry(resident.id).or_insert_with(|| {
             let entity = character_with_role(
@@ -1019,12 +1137,16 @@ fn update_avatars(
             entity
         });
         if let Ok(mut transform) = transforms.get_mut(entity) {
-            if transform.translation.distance_squared(desired) > 64.0 {
-                transform.translation = desired;
-            } else {
-                transform.translation = transform
-                    .translation
-                    .lerp(desired, (time.delta_secs() * 12.0).min(1.0));
+            let previous = transform.translation;
+            transform.translation = smoothed_avatar_position(
+                &world.0,
+                previous,
+                &mut positions,
+                session.players.len() + 1 + index,
+                (time.delta_secs() * 12.0).min(1.0),
+            );
+            if previous.xz().distance_squared(transform.translation.xz()) > 0.000001 {
+                moving.push(entity);
             }
             if let Some(target) = resident.target {
                 let delta = Vec3::from_array(target) - transform.translation;
@@ -1081,33 +1203,28 @@ fn update_avatars(
         };
     }
     for (mut transform, limb, parent) in &mut limbs {
-        let moving = if Some(parent.parent()) == avatars.npc {
-            session.npc.action != NpcAction::Rest && session.npc.target.is_some()
-        } else if let Some(resident) = session
+        let resident = session
             .residents
             .iter()
-            .find(|r| avatars.residents.get(&r.id) == Some(&parent.parent()))
-        {
-            matches!(
-                resident.action,
-                ResidentAction::Walking | ResidentAction::Delivering | ResidentAction::Trading
-            ) && resident.target.is_some()
+            .find(|r| avatars.residents.get(&r.id) == Some(&parent.parent()));
+        let work_angle = if limb.arm {
+            resident.and_then(|resident| {
+                let phase = time.elapsed_secs() * 4.0 + resident.id as f32 * 0.6;
+                match resident.action {
+                    ResidentAction::Planting => Some(0.75 + phase.sin() * 0.28),
+                    ResidentAction::Tending => Some(0.85 + phase.sin() * 0.38),
+                    ResidentAction::Harvesting => Some(1.1 + phase.sin() * 0.4),
+                    ResidentAction::Working => Some(0.65 + (phase + limb.phase).sin() * 0.45),
+                    ResidentAction::Eating => Some(1.8 + phase.sin() * 0.12),
+                    _ => None,
+                }
+            })
         } else {
-            session
-                .players
-                .iter()
-                .find(|p| avatars.players.get(&p.id) == Some(&parent.parent()))
-                .map(|p| {
-                    let v = if p.id == session.id {
-                        session.body.velocity
-                    } else {
-                        p.body.velocity
-                    };
-                    v[0].abs() + v[2].abs() > 0.1
-                })
-                .unwrap_or(false)
+            None
         };
-        transform.rotation = Quat::from_rotation_x(if moving {
+        transform.rotation = Quat::from_rotation_x(if let Some(angle) = work_angle {
+            angle
+        } else if moving.contains(&parent.parent()) {
             (time.elapsed_secs() * 9.0 + limb.phase).sin() * 0.4
         } else {
             0.0

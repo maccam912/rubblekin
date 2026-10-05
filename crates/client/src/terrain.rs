@@ -2,7 +2,10 @@
 //! Geographic worlds stream a bounded local square; legacy saves retain their valley.
 use std::collections::HashMap;
 
-use crate::terrain_material::{TerrainMaterial, terrain_material};
+use crate::{
+    graphics::GraphicsSettings,
+    terrain_material::{TerrainMaterial, terrain_material},
+};
 use bevy::{
     asset::RenderAssetUsages,
     light::NotShadowCaster,
@@ -19,6 +22,7 @@ use rubblekin_core::{
     },
 };
 
+#[cfg(test)]
 const DETAIL_RADIUS: i32 = 6;
 const DETAIL_JOBS: usize = 2;
 const CHUNK_METERS: f32 = CHUNK_SIZE as f32 * CELL_SIZE;
@@ -41,7 +45,7 @@ pub struct TerrainScene {
     glass_material: Handle<StandardMaterial>,
     water_material: Handle<StandardMaterial>,
     landscape: Option<Landscape>,
-    pending_landscape: Option<Task<(ChunkKey, Geometry, Geometry)>>,
+    pending_landscape: Option<LandscapeJob>,
     pending_chunks: HashMap<ChunkKey, Task<ChunkGeometry>>,
     pub triangle_count: usize,
 }
@@ -57,15 +61,22 @@ struct ChunkMesh {
 
 struct Landscape {
     center: ChunkKey,
+    near_radius: i32,
     terrain: Handle<Mesh>,
     water: Handle<Mesh>,
     triangles: usize,
+}
+
+struct LandscapeJob {
+    near_radius: i32,
+    task: Task<(ChunkKey, Geometry, Geometry)>,
 }
 
 /// Legacy decorative geometry is never added to a geographic world.
 #[derive(Component)]
 struct DistantScenery;
 
+#[allow(clippy::too_many_arguments)]
 pub fn setup_terrain(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -74,6 +85,7 @@ pub fn setup_terrain(
     images: &mut Assets<Image>,
     world: &World,
     center: [f32; 3],
+    near_radius: i32,
 ) -> TerrainScene {
     let opaque_material = terrain_materials.add(terrain_material(None));
     let glass_material = materials.add(StandardMaterial {
@@ -106,7 +118,7 @@ pub fn setup_terrain(
         let map_water_material = terrain_materials.add(map_water);
         let landscape_material = terrain_materials.add(terrain_material(Some(albedo)));
         let center = chunk_key(center);
-        let (land, water) = landscape_geometry(world, center);
+        let (land, water) = landscape_geometry(world, center, near_radius);
         let triangles = (land.indices.len() + water.indices.len()) / 3;
         let terrain = meshes.add(land.into_mesh());
         let water = meshes.add(water.into_mesh());
@@ -124,12 +136,13 @@ pub fn setup_terrain(
         ));
         scene.landscape = Some(Landscape {
             center,
+            near_radius,
             terrain,
             water,
             triangles,
         });
         scene.triangle_count += triangles;
-        move_local_square(&mut scene, center, world, commands, meshes);
+        move_local_square(&mut scene, center, near_radius, world, commands, meshes);
     } else {
         let first = (-WORLD_RADIUS).div_euclid(CHUNK_SIZE);
         let last = (WORLD_RADIUS - 1).div_euclid(CHUNK_SIZE);
@@ -167,6 +180,7 @@ pub fn setup_terrain(
 pub fn stream_terrain(
     world: Res<crate::VoxelWorld>,
     session: Res<crate::Session>,
+    settings: Res<GraphicsSettings>,
     mut scene: ResMut<TerrainScene>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -179,8 +193,19 @@ pub fn stream_terrain(
         .as_ref()
         .map_or(session.body.position, |camera| camera.position.to_array());
     let center = chunk_key(position);
-    if let Some((ready_center, land, water)) =
-        scene.pending_landscape.as_mut().and_then(check_ready)
+    let near_radius = settings.near_radius_chunks();
+    if scene
+        .pending_landscape
+        .as_ref()
+        .is_some_and(|job| job.near_radius != near_radius)
+    {
+        // A cancelled distance change must not install an obsolete cutout.
+        scene.pending_landscape = None;
+    }
+    if let Some((ready_center, land, water)) = scene
+        .pending_landscape
+        .as_mut()
+        .and_then(|job| check_ready(&mut job.task))
     {
         scene.pending_landscape = None;
         // Install the cutout and its local replacement together: no empty ring
@@ -188,6 +213,7 @@ pub fn stream_terrain(
         move_local_square(
             &mut scene,
             ready_center,
+            near_radius,
             &world.0,
             &mut commands,
             &mut meshes,
@@ -196,6 +222,7 @@ pub fn stream_terrain(
         let landscape = scene.landscape.as_mut().unwrap();
         let old_triangles = landscape.triangles;
         landscape.center = ready_center;
+        landscape.near_radius = near_radius;
         landscape.triangles = next_triangles;
         if let Some(mut mesh) = meshes.get_mut(&landscape.terrain) {
             *mesh = land.into_mesh();
@@ -205,12 +232,18 @@ pub fn stream_terrain(
         }
         scene.triangle_count = scene.triangle_count - old_triangles + next_triangles;
     }
-    if scene.pending_landscape.is_none() && scene.landscape.as_ref().unwrap().center != center {
+    let landscape = scene.landscape.as_ref().unwrap();
+    if scene.pending_landscape.is_none()
+        && (landscape.center != center || landscape.near_radius != near_radius)
+    {
         let snapshot = world.0.clone();
-        scene.pending_landscape = Some(AsyncComputeTaskPool::get().spawn(async move {
-            let (land, water) = landscape_geometry(&snapshot, center);
-            (center, land, water)
-        }));
+        scene.pending_landscape = Some(LandscapeJob {
+            near_radius,
+            task: AsyncComputeTaskPool::get().spawn(async move {
+                let (land, water) = landscape_geometry(&snapshot, center, near_radius);
+                (center, land, water)
+            }),
+        });
     }
     let ready: Vec<_> = scene
         .pending_chunks
@@ -252,12 +285,12 @@ fn chunk_key(position: [f32; 3]) -> ChunkKey {
     )
 }
 
-fn local_keys(center: ChunkKey, world: &World) -> Vec<ChunkKey> {
+fn local_keys(center: ChunkKey, near_radius: i32, world: &World) -> Vec<ChunkKey> {
     let first = (-world.radius_cells()).div_euclid(CHUNK_SIZE);
     let last = (world.radius_cells() - 1).div_euclid(CHUNK_SIZE);
     let mut keys = Vec::new();
-    for x in center.0.saturating_sub(DETAIL_RADIUS)..=center.0.saturating_add(DETAIL_RADIUS) {
-        for z in center.1.saturating_sub(DETAIL_RADIUS)..=center.1.saturating_add(DETAIL_RADIUS) {
+    for x in center.0.saturating_sub(near_radius)..=center.0.saturating_add(near_radius) {
+        for z in center.1.saturating_sub(near_radius)..=center.1.saturating_add(near_radius) {
             if (first..=last).contains(&x) && (first..=last).contains(&z) {
                 keys.push((x, z));
             }
@@ -269,11 +302,12 @@ fn local_keys(center: ChunkKey, world: &World) -> Vec<ChunkKey> {
 fn move_local_square(
     scene: &mut TerrainScene,
     center: ChunkKey,
+    near_radius: i32,
     world: &World,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) {
-    let wanted = local_keys(center, world);
+    let wanted = local_keys(center, near_radius, world);
     let expired: Vec<_> = scene
         .chunks
         .keys()
@@ -558,13 +592,13 @@ impl CellCache {
 
 /// A quadtree concentrates samples around the camera, with at most eight
 /// samples across each leaf. Every leaf uses the authoritative geography.
-fn landscape_geometry(world: &World, center: ChunkKey) -> (Geometry, Geometry) {
+fn landscape_geometry(world: &World, center: ChunkKey, near_radius: i32) -> (Geometry, Geometry) {
     let geography = world.geography().expect("geographic landscape");
     let mut land = Geometry::default();
     let mut water = Geometry::default();
     let first = (-world.radius_cells()).div_euclid(CHUNK_SIZE);
     let side = world.radius_cells() * 2 / CHUNK_SIZE;
-    let tiles = landscape_tiles(first, first, side, center);
+    let tiles = landscape_tiles(first, first, side, center, near_radius);
     let tile_lookup: HashMap<_, _> = tiles.iter().map(|&(x, z, size)| ((x, z), size)).collect();
     let mut surfaces = HashMap::with_capacity(tiles.len());
     for (x, z, size) in tiles {
@@ -583,11 +617,18 @@ fn landscape_geometry(world: &World, center: ChunkKey) -> (Geometry, Geometry) {
         );
         surfaces.insert((x, z), surface);
     }
-    add_landscape_trees(world, center, &tile_lookup, &surfaces, &mut land);
+    add_landscape_trees(
+        world,
+        center,
+        near_radius,
+        &tile_lookup,
+        &surfaces,
+        &mut land,
+    );
     add_village_proxies(
         world,
         center,
-        ProxyClip::Outside(local_bounds(center)),
+        ProxyClip::Outside(local_bounds(center, near_radius)),
         &mut land,
     );
     (land, water)
@@ -672,23 +713,24 @@ fn lod_tree_cells(center: ChunkKey) -> Vec<(i32, i32)> {
     cells
 }
 
-fn local_bounds(center: ChunkKey) -> [f32; 4] {
+fn local_bounds(center: ChunkKey, near_radius: i32) -> [f32; 4] {
     [
-        (center.0 - DETAIL_RADIUS) as f32 * CHUNK_METERS,
-        (center.1 - DETAIL_RADIUS) as f32 * CHUNK_METERS,
-        (center.0 + DETAIL_RADIUS + 1) as f32 * CHUNK_METERS,
-        (center.1 + DETAIL_RADIUS + 1) as f32 * CHUNK_METERS,
+        (center.0 - near_radius) as f32 * CHUNK_METERS,
+        (center.1 - near_radius) as f32 * CHUNK_METERS,
+        (center.0 + near_radius + 1) as f32 * CHUNK_METERS,
+        (center.1 + near_radius + 1) as f32 * CHUNK_METERS,
     ]
 }
 
 fn add_landscape_trees(
     world: &World,
     center: ChunkKey,
+    near_radius: i32,
     tiles: &HashMap<ChunkKey, i32>,
     surfaces: &HashMap<ChunkKey, SampledSurface>,
     land: &mut Geometry,
 ) {
-    let cutout = local_bounds(center);
+    let cutout = local_bounds(center, near_radius);
     let mut trees = 0;
     for (gx, gz) in lod_tree_cells(center) {
         if trees >= MAX_LOD_TREES {
@@ -908,12 +950,25 @@ fn cuboid_outside_local(
     }
 }
 
-fn landscape_tiles(x: i32, z: i32, size: i32, center: ChunkKey) -> Vec<(i32, i32, i32)> {
-    fn visit(x: i32, z: i32, size: i32, center: ChunkKey, output: &mut Vec<(i32, i32, i32)>) {
-        let low_x = center.0.saturating_sub(DETAIL_RADIUS);
-        let low_z = center.1.saturating_sub(DETAIL_RADIUS);
-        let high_x = center.0.saturating_add(DETAIL_RADIUS + 1);
-        let high_z = center.1.saturating_add(DETAIL_RADIUS + 1);
+fn landscape_tiles(
+    x: i32,
+    z: i32,
+    size: i32,
+    center: ChunkKey,
+    near_radius: i32,
+) -> Vec<(i32, i32, i32)> {
+    fn visit(
+        x: i32,
+        z: i32,
+        size: i32,
+        center: ChunkKey,
+        near_radius: i32,
+        output: &mut Vec<(i32, i32, i32)>,
+    ) {
+        let low_x = center.0.saturating_sub(near_radius);
+        let low_z = center.1.saturating_sub(near_radius);
+        let high_x = center.0.saturating_add(near_radius + 1);
+        let high_z = center.1.saturating_add(near_radius + 1);
         if x >= low_x && z >= low_z && x + size <= high_x && z + size <= high_z {
             return;
         }
@@ -924,14 +979,14 @@ fn landscape_tiles(x: i32, z: i32, size: i32, center: ChunkKey) -> Vec<(i32, i32
         if size > 1 && (size > MAX_LOD_TILE_CHUNKS || intersects || distance < size as f64 * 2.0) {
             let half = size / 2;
             for (dx, dz) in [(0, 0), (half, 0), (0, half), (half, half)] {
-                visit(x + dx, z + dz, half, center, output);
+                visit(x + dx, z + dz, half, center, near_radius, output);
             }
         } else {
             output.push((x, z, size));
         }
     }
     let mut tiles = Vec::new();
-    visit(x, z, size, center, &mut tiles);
+    visit(x, z, size, center, near_radius, &mut tiles);
     tiles
 }
 
@@ -1956,31 +2011,33 @@ mod tests {
             (-2400, 0),
             (100_000, 100_000),
         ] {
-            let tiles = landscape_tiles(FIRST, FIRST, SIDE, center);
-            assert!(tiles.len() < 1800, "far terrain work stays bounded");
-            let clipped_side = |c: i32| {
-                ((c + DETAIL_RADIUS + 1).min(FIRST + SIDE) - (c - DETAIL_RADIUS).max(FIRST)).max(0)
-                    as i64
-            };
-            let expected =
-                SIDE as i64 * SIDE as i64 - clipped_side(center.0) * clipped_side(center.1);
-            assert_eq!(
-                tiles.iter().map(|t| t.2 as i64 * t.2 as i64).sum::<i64>(),
-                expected
-            );
-            for &(x, z, size) in &tiles {
-                assert!(
-                    x >= FIRST
-                        && z >= FIRST
-                        && x + size <= FIRST + SIDE
-                        && z + size <= FIRST + SIDE
+            for near_radius in [3, DETAIL_RADIUS, 12] {
+                let tiles = landscape_tiles(FIRST, FIRST, SIDE, center, near_radius);
+                assert!(tiles.len() < 1800, "far terrain work stays bounded");
+                let clipped_side = |c: i32| {
+                    ((c + near_radius + 1).min(FIRST + SIDE) - (c - near_radius).max(FIRST)).max(0)
+                        as i64
+                };
+                let expected =
+                    SIDE as i64 * SIDE as i64 - clipped_side(center.0) * clipped_side(center.1);
+                assert_eq!(
+                    tiles.iter().map(|t| t.2 as i64 * t.2 as i64).sum::<i64>(),
+                    expected
                 );
-                assert!(
-                    x + size <= center.0 - DETAIL_RADIUS
-                        || x > center.0 + DETAIL_RADIUS
-                        || z + size <= center.1 - DETAIL_RADIUS
-                        || z > center.1 + DETAIL_RADIUS
-                );
+                for &(x, z, size) in &tiles {
+                    assert!(
+                        x >= FIRST
+                            && z >= FIRST
+                            && x + size <= FIRST + SIDE
+                            && z + size <= FIRST + SIDE
+                    );
+                    assert!(
+                        x + size <= center.0 - near_radius
+                            || x > center.0 + near_radius
+                            || z + size <= center.1 - near_radius
+                            || z > center.1 + near_radius
+                    );
+                }
             }
         }
         assert_eq!(chunk_key([-0.01, 1000., -8.01]), (-1, -2));
@@ -2032,7 +2089,7 @@ mod tests {
                 center.0 as f32 * CHUNK_METERS,
                 center.1 as f32 * CHUNK_METERS,
             );
-            let (land, water) = landscape_geometry(&world, center);
+            let (land, water) = landscape_geometry(&world, center, DETAIL_RADIUS);
             let triangles = (land.indices.len() + water.indices.len()) / 3;
             eprintln!("{name}: {triangles} landscape triangles");
             assert!(triangles < 350_000, "stitched heightmap stays bounded");
@@ -2177,8 +2234,8 @@ mod tests {
         let world = World::generate(42, WorldGeneration::GeographyV2);
         let original_center = chunk_key(world.spawn_position());
         let entering_center = (original_center.0 + 8, original_center.1);
-        let original_bounds = local_bounds(original_center);
-        let entering_keys = local_keys(entering_center, &world);
+        let original_bounds = local_bounds(original_center, DETAIL_RADIUS);
+        let entering_keys = local_keys(entering_center, DETAIL_RADIUS, &world);
         let tree = lod_tree_cells(entering_center)
             .into_iter()
             .filter_map(|(x, z)| world.tree_at(x, z))
@@ -2206,6 +2263,7 @@ mod tests {
             &mut images,
             &world,
             world.spawn_position(),
+            DETAIL_RADIUS,
         );
         queue.apply(&mut ecs);
         assert!(
@@ -2217,6 +2275,7 @@ mod tests {
         move_local_square(
             &mut scene,
             entering_center,
+            DETAIL_RADIUS,
             &world,
             &mut commands,
             &mut meshes,
@@ -2434,6 +2493,69 @@ mod tests {
     }
 
     #[test]
+    fn near_distance_changes_keep_retained_chunks_and_release_expired_assets() {
+        let world = World::generate(42, WorldGeneration::GeographyV1);
+        let center = chunk_key(world.spawn_position());
+        let mut ecs = bevy::prelude::World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut terrain_materials = Assets::<TerrainMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        let mut commands = Commands::new(&mut queue, &ecs);
+        let mut scene = setup_terrain(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut terrain_materials,
+            &mut images,
+            &world,
+            world.spawn_position(),
+            DETAIL_RADIUS,
+        );
+        rebuild_one(&mut scene, center, &world, &mut commands, &mut meshes);
+        queue.apply(&mut ecs);
+        let retained = scene.chunks[&center].opaque.id();
+        let retained_entity = scene.chunks[&center].entity;
+        let expired_key = (center.0 + DETAIL_RADIUS, center.1);
+        let expired_asset = scene.chunks[&expired_key].opaque.id();
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        scene.pending_chunks.insert(
+            expired_key,
+            AsyncComputeTaskPool::get().spawn(async { (Geometry::default(), Geometry::default()) }),
+        );
+        for near_radius in [3, 12, 3] {
+            let mut commands = Commands::new(&mut queue, &ecs);
+            move_local_square(
+                &mut scene,
+                center,
+                near_radius,
+                &world,
+                &mut commands,
+                &mut meshes,
+            );
+            queue.apply(&mut ecs);
+            let count = (near_radius * 2 + 1).pow(2) as usize;
+            assert_eq!(scene.chunks.len(), count);
+            assert_eq!(scene.chunks[&center].opaque.id(), retained);
+            assert_eq!(scene.chunks[&center].entity, retained_entity);
+            assert!(scene.chunks[&center].detailed);
+            assert!(meshes.get(expired_asset).is_none());
+            assert!(!scene.pending_chunks.contains_key(&expired_key));
+            assert!(meshes.len() <= 2 + count * 3);
+            assert_eq!(
+                scene.triangle_count,
+                scene.landscape.as_ref().unwrap().triangles
+                    + scene
+                        .chunks
+                        .values()
+                        .map(|chunk| chunk.triangles)
+                        .sum::<usize>()
+            );
+        }
+    }
+
+    #[test]
     fn local_streaming_discards_old_mesh_assets_and_matches_geographic_elevation() {
         use rubblekin_core::world::WorldGeneration;
         let mut world = World::generate(42, WorldGeneration::GeographyV1);
@@ -2447,7 +2569,7 @@ mod tests {
                 * CELL_SIZE;
             assert_eq!(vertex.y, expected);
         }
-        let tiles = landscape_tiles(-2048, -2048, 4096, (0, 0));
+        let tiles = landscape_tiles(-2048, -2048, 4096, (0, 0), DETAIL_RADIUS);
         let lookup: HashMap<_, _> = tiles.iter().map(|&(x, z, size)| ((x, z), size)).collect();
         let &(tx, tz, size) = tiles
             .iter()
@@ -2543,6 +2665,7 @@ mod tests {
             &mut images,
             &world,
             world.spawn_position(),
+            DETAIL_RADIUS,
         );
         assert!(scene.chunks.len() <= 169);
         assert!(scene.triangle_count < 600_000);
@@ -2554,7 +2677,14 @@ mod tests {
                 .map(|chunk| chunk.opaque.id())
                 .collect();
             let mut commands = Commands::new(&mut queue, &ecs);
-            move_local_square(&mut scene, center, &world, &mut commands, &mut meshes);
+            move_local_square(
+                &mut scene,
+                center,
+                DETAIL_RADIUS,
+                &world,
+                &mut commands,
+                &mut meshes,
+            );
             queue.apply(&mut ecs);
             assert!(scene.chunks.len() <= 169);
             assert!(

@@ -22,7 +22,10 @@ use std::{
 
 use persistence::{MAX_EDITS, Simulation};
 use rubblekin_core::{
-    physics::{Body, EYE_HEIGHT, MoveInput, PLAYER_HEIGHT, PLAYER_RADIUS, move_character},
+    physics::{
+        Body, EYE_HEIGHT, MoveInput, PLAYER_HEIGHT, PLAYER_RADIUS, character_position_is_clear,
+        move_character_with_obstacles,
+    },
     protocol::*,
     world::{Block, BlockEdit, BlockPos, CELL_SIZE, World, WorldGeneration},
 };
@@ -106,7 +109,32 @@ pub fn spawn(config: ServerConfig) -> io::Result<ServerHandle> {
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
     let save_lock = persistence::lock_save(&config.save_path)?;
-    let simulation = Simulation::load(&config.save_path, config.seed, config.generation)?;
+    let mut simulation = Simulation::load(&config.save_path, config.seed, config.generation)?;
+    // Older village saves can contain residents at the same work/home point.
+    // Separate them against terrain before saving or welcoming the first client.
+    simulation
+        .villages
+        .resolve_overlaps(&simulation.world, &[simulation.npc.snapshot.position]);
+    simulation.npc.resolve_overlaps(
+        &simulation.world,
+        &simulation.villages.positions().collect::<Vec<_>>(),
+    );
+    let npc_positions: Vec<_> = std::iter::once(simulation.npc.snapshot.position)
+        .chain(simulation.villages.positions())
+        .collect();
+    if npc_positions.iter().enumerate().any(|(index, position)| {
+        let obstacles: Vec<_> = npc_positions
+            .iter()
+            .enumerate()
+            .filter_map(|(other, position)| (other != index).then_some(*position))
+            .collect();
+        !character_position_is_clear(&simulation.world, *position, &obstacles)
+    }) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Cannot recover NPC collision with terrain or another character; original save left untouched",
+        ));
+    }
     simulation.save(&config.save_path)?;
     let stop = Arc::new(AtomicBool::new(false));
     let loop_stop = stop.clone();
@@ -317,13 +345,26 @@ fn run(
             )?;
         }
         connections.retain(|_, client| !client.dead);
-        for connection in connections.values_mut() {
+        let player_ids: Vec<_> = connections
+            .iter()
+            .filter(|(_, connection)| connection.player.is_some())
+            .map(|(&id, _)| id)
+            .collect();
+        for id in player_ids {
+            let obstacles = character_obstacles(&connections, &sim, Some(id));
+            let connection = connections.get_mut(&id).unwrap();
             if let Some(player) = &mut connection.player
                 && connection.last_input.elapsed() > Duration::from_millis(500)
             {
                 // Never extrapolate walking or a held jump. A stalled client
                 // eventually resumes neutral gravity instead of floating.
-                move_character(&sim.world, &mut player.body, MoveInput::default(), DT);
+                move_character_with_obstacles(
+                    &sim.world,
+                    &mut player.body,
+                    MoveInput::default(),
+                    DT,
+                    &obstacles,
+                );
                 // Idle simulation spends time too; retain only the bounded
                 // reserve needed to accept a resumed long client frame.
                 let now = Instant::now();
@@ -335,8 +376,17 @@ fn run(
                 connection.credit_updated = now;
             }
         }
-        sim.npc.tick(&sim.world, DT);
-        sim.villages.tick(&sim.world, DT);
+        let player_positions: Vec<_> = players(&connections)
+            .iter()
+            .map(|player| player.body.position)
+            .collect();
+        let mut npc_obstacles = player_positions.clone();
+        npc_obstacles.extend(sim.villages.positions());
+        sim.npc.tick_with_obstacles(&sim.world, DT, &npc_obstacles);
+        let mut resident_obstacles = player_positions;
+        resident_obstacles.push(sim.npc.snapshot.position);
+        sim.villages
+            .tick_with_obstacles(&sim.world, DT, &resident_obstacles);
         sim.world_time += DT as f64;
         let state = ServerMessage::State {
             players: players(&connections),
@@ -370,6 +420,52 @@ fn players(connections: &BTreeMap<u64, Connection>) -> Vec<PlayerSnapshot> {
         .filter(|c| !c.dead)
         .filter_map(|c| c.player.clone())
         .collect()
+}
+
+fn character_obstacles(
+    connections: &BTreeMap<u64, Connection>,
+    sim: &Simulation,
+    exclude_player: Option<u64>,
+) -> Vec<[f32; 3]> {
+    connections
+        .iter()
+        .filter(|(id, connection)| Some(**id) != exclude_player && !connection.dead)
+        .filter_map(|(_, connection)| connection.player.as_ref().map(|p| p.body.position))
+        .chain(std::iter::once(sim.npc.snapshot.position))
+        .chain(sim.villages.positions())
+        .collect()
+}
+
+fn free_player_spawn(world: &World, obstacles: &[[f32; 3]]) -> Option<[f32; 3]> {
+    let origin = world.spawn_position();
+    // Bounded nearest-first search keeps reconnects beside spawn while leaving
+    // existing characters in place. Observer sessions have no physical body.
+    for ring in 0_i32..=16 {
+        for z in -ring..=ring {
+            for x in -ring..=ring {
+                if x.abs().max(z.abs()) != ring {
+                    continue;
+                }
+                let px = origin[0] + x as f32 * 0.75;
+                let pz = origin[2] + z as f32 * 0.75;
+                let position = if ring == 0 {
+                    origin
+                } else {
+                    let mut floor = world.min_y() as f32 * CELL_SIZE;
+                    for dx in [-PLAYER_RADIUS, 0.0, PLAYER_RADIUS] {
+                        for dz in [-PLAYER_RADIUS, 0.0, PLAYER_RADIUS] {
+                            floor = floor.max(world.surface_height(px + dx, pz + dz));
+                        }
+                    }
+                    [px, floor + 0.02, pz]
+                };
+                if character_position_is_clear(world, position, obstacles) {
+                    return Some(position);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn broadcast(connections: &mut BTreeMap<u64, Connection>, message: &ServerMessage) {
@@ -434,12 +530,25 @@ fn handle_message(
         } else {
             name
         };
+        let spawn = if mode == SessionMode::Player {
+            let obstacles = character_obstacles(connections, sim, Some(id));
+            let Some(position) = free_player_spawn(&sim.world, &obstacles) else {
+                connections.get_mut(&id).unwrap().close_with_notice(
+                    "There is no free space near spawn. Try again after someone moves.".into(),
+                );
+                return Ok(());
+            };
+            Some(position)
+        } else {
+            None
+        };
+        let connection = connections.get_mut(&id).unwrap();
         connection.mode = Some(mode);
         if mode == SessionMode::Player {
             connection.player = Some(PlayerSnapshot {
                 id,
                 name,
-                body: Body::new(sim.world.spawn_position()),
+                body: Body::new(spawn.unwrap()),
                 yaw: 0.0,
                 last_input_sequence: 0,
             });
@@ -496,6 +605,7 @@ fn handle_message(
             input,
             yaw,
         } => {
+            let obstacles = character_obstacles(connections, sim, Some(id));
             let connection = connections.get_mut(&id).unwrap();
             let player = connection.player.as_mut().unwrap();
             if !yaw.is_finite()
@@ -524,7 +634,7 @@ fn handle_message(
             connection.input_credit = (connection.input_credit - dt as f64).max(0.0);
             // Use exactly the client's command boundaries and shared controller:
             // even a second direction normalization can change collision results.
-            move_character(&sim.world, &mut player.body, input, dt);
+            move_character_with_obstacles(&sim.world, &mut player.body, input, dt, &obstacles);
             player.last_input_sequence = sequence;
             player.yaw = yaw.rem_euclid(std::f32::consts::TAU);
             connection.last_input = now;
@@ -698,6 +808,17 @@ fn validate_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_server_spawns_every_player_in_distinct_clear_space() {
+        let world = World::new(42);
+        let mut occupied = vec![npc::Forager::new(&world).snapshot.position];
+        for _ in 0..MAX_CLIENTS {
+            let position = free_player_spawn(&world, &occupied).unwrap();
+            assert!(character_position_is_clear(&world, position, &occupied));
+            occupied.push(position);
+        }
+    }
 
     #[test]
     fn edits_require_visible_space_and_world_bounds() {
