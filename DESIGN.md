@@ -1,6 +1,6 @@
 # Rubblekin game design and project history
 
-Last updated: 2026-10-04
+Last updated: 2026-10-05
 
 This is the living design document and handoff for future conversations. It records the intended game, confirmed choices, proposed implementation, open questions, and work actually completed. Rubblekin is the working name taken from the project folder; the final name has not been decided.
 
@@ -152,7 +152,7 @@ The user selected landscape play with a left thumbstick and right-side swipe to 
 
 Implementation defaults are ARM64, Android 8.0+ (API 26), Vulkan 1.0, and Low graphics. These are packaging requirements and tuning defaults, not measured compatibility or performance guarantees. `scripts/build_android.py` builds the shared Rust client as a GameActivity library and packages a development-signed APK; the existing gated release workflow adds the APK for Android-capable commits. The stable desktop updater manifest retains its four desktop targets. Local worlds and screenshots use app-private storage; updates using the same signing key preserve saves. Production/store signing, other Android architectures, representative hardware measurements, thermals, and touch-comfort feedback remain open. See [README.md](README.md#android-client) for build and installation commands.
 
-The user also requested assessing an Android launcher on 2026-10-04. A small native update screen inside the game APK is the recommendation: one app icon, checksum-verified updates through Android's installer, and Play installed/Retry actions. A separate launcher APK is feasible but adds a second app. This architectural choice is awaiting feedback; neither Android updater is implemented. The desktop launcher's downloaded-executable path would need an Android package-installation path.
+On 2026-10-05, the user confirmed the built-in Android updater before gameplay: one app icon, verified APK updates through Android's installer, and Update/Play installed/Retry actions. It is implemented, with local tests and emulator fallback checks passing; verification of the published self-update is pending. This supersedes the earlier open choice between a built-in updater, a separate launcher APK, and direct installation. Installed play remains available when checking or updating fails; package, version, checksum, and signing checks protect the update path, and app-private worlds stay in the same package. The desktop launcher retains its existing executable-installation path.
 
 ### Development tools and architecture preferences
 
@@ -287,7 +287,6 @@ The village network, resident life, farming, and local economies are confirmed d
 - Transportation types and routes, travel times, passenger interaction, and glider handling and landing rules.
 - Admin camera feel and speed tuning, future per-user permissions or editing capabilities beyond the approved read-only scope, and the feel/performance of terrain loading during rapid movement in a larger world.
 - Android physical-device rendering, memory/thermal/frame-rate measurements, and touch-comfort feedback. Landscape thumbstick/swipe is confirmed and implemented; ARM64, Android 8.0+, Vulkan 1.0, Low graphics, and development-signed APK distribution are initial implementation defaults. Production/store signing and wider device coverage remain open.
-- Android launcher distribution: a built-in update screen is proposed; a separate launcher APK or continued direct APK installation remain alternatives pending user feedback.
 - World progression during server downtime and recovery from interrupted saves.
 - Representative client hardware and measurable performance targets; expected first-server player and NPC counts.
 
@@ -332,6 +331,7 @@ These are a backlog of decisions, not a request to settle everything before prot
 | 2026-10-04 | Inhabited villages and trail network | Confirmed and implemented as an initial bounded network in GeographyV3 after the user authorized village assets, natural layouts with NPCs, and resource-based placement. The original two-village proposal was expanded to distribute settlements across different accessible opportunities. Counts, visuals, spacing, and economic rates are tuning defaults; live expansion and richer player interactions remain open. |
 | 2026-10-04 | Geographic reasons for settlement | Confirmed preference: villages and trails should plausibly relate to water, resources, and terrain. Suitability scoring, trade-driven routes, capacity-based growth, and an abstract setup history were proposed approaches; the user subsequently approved the geography-first approach and established starts. Exact live growth and economy rules remain open. |
 | 2026-10-04 | Android client | User requested implementation and selected landscape with a left thumbstick and right swipe to look. Implemented shared Rust/GameActivity client, native keyboard join form, multitouch gameplay and menus, and ARM64 APK packaging/release support. Android 8.0+, Vulkan 1.0, Low graphics, and development signing are implementation defaults; physical-device performance and comfort remain unverified. |
+| 2026-10-05 | Android built-in updater | Confirmed and implemented. Put the update screen inside the game APK to keep one app icon, use Android's installer, and retain Play installed/Retry actions. This supersedes the separate-launcher alternative. Local tests and emulator fallback checks pass; published self-update verification is pending. |
 
 ## Work log
 
@@ -506,8 +506,15 @@ These are a backlog of decisions, not a request to settle everything before prot
 ### 2026-10-05 — Android CI and publication verification
 
 - [GitHub Actions run 37262094893](https://github.com/maccam912/rubblekin/actions/runs/37262094893) completed successfully for `13af12894811df4568f7d50e50c5fd488028e9bf`: all ten checks, the Android ARM64 APK, four desktop client/launcher packages, both server image builds, and publication passed.
-- The [published Android APK](https://github.com/maccam912/rubblekin/releases/download/client-13af12894811df4568f7d50e50c5fd488028e9bf/rubblekin-client-aarch64-linux-android.apk) is 56,510,629 bytes. CI verified development signing and 16 KB alignment and included it in release checksums. A downloaded copy matches the published SHA-256 (`1782cd6edc2b4b85a368aec05dd3c6a60d7cc2f3c4501f4b53d414786c26f14d`). Android launcher feasibility was assessed; the proposed built-in update screen and separate-launcher alternative remain awaiting user feedback, with neither implemented.
+- The [published Android APK](https://github.com/maccam912/rubblekin/releases/download/client-13af12894811df4568f7d50e50c5fd488028e9bf/rubblekin-client-aarch64-linux-android.apk) is 56,510,629 bytes. CI verified development signing and 16 KB alignment and included it in release checksums. A downloaded copy matches the published SHA-256 (`1782cd6edc2b4b85a368aec05dd3c6a60d7cc2f3c4501f4b53d414786c26f14d`). This verification preceded the user's subsequent confirmation of the built-in updater on 2026-10-05.
 - Installed the actual CI APK over the earlier locally built APK in the Android 15 ARM64 emulator. A copied legacy-world save retained the exact same bytes; the installed package reports version code 13 and `0.1.0-13af12894811`. The native client rendered its join screen without a logged startup crash. This adds cross-machine packaging/update evidence; physical-device validation remains open.
+
+### 2026-10-05 — Built-in Android updater
+
+- User confirmed the built-in updater. Added a native landscape launch screen with Update, Play installed, Retry, progress, and cancel. Bevy loads after Play; failed or offline checks keep installed play available. Android confirms installation and the first update uses its app-specific installation permission screen.
+- Downloads use the public latest Android manifest and immutable GitHub APK asset, with bounded HTTPS redirects, size/SHA-256 checks, package/version checks, and comparison against the installed signing certificate. Completed cache metadata survives process recreation; partial and stale files are cleaned, corrupt cached APKs can be downloaded again, and older builds are rejected. App-private worlds remain in the same package.
+- Release tooling inspects actual APK version metadata, preserves the desktop manifest schema, publishes a separate checksummed `android-manifest.json`, and gates publication on every platform. CI runs Android unit tests before packaging and checks the pinned single development signer and 16 KB alignment.
+- Local verification: all eight Android unit tests, Android lint without errors, 51 release/CI Python tests, workflow syntax, APK signing, and 16 KB alignment passed. The Android 15 ARM64 emulator showed readable controls, failed/offline check recovery, and actual Play installed startup without a crash. Java-only packaging used the previously verified CI native library to avoid including concurrent renderer edits. GitHub publication and a full in-app update from its published APK remain to be verified after this commit; physical-device testing remains open.
 
 ## Technical references
 

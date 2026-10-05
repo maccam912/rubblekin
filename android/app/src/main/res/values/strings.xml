@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="updater_title">Rubblekin</string>
+    <string name="updater_update">Update</string>
+    <string name="updater_play">Play installed</string>
+    <string name="updater_retry">Retry</string>
+    <string name="updater_cancel">Cancel download</string>
+    <string name="updater_help">You can play the installed game at any time. Choosing Play stops an active download. Android confirms each installation.</string>
+</resources>

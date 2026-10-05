@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from package import ANDROID_ASSET, TARGETS, archive_name, assemble_manifest, validate_commit
+from package import ANDROID_ASSET, ANDROID_MANIFEST, TARGETS, archive_name, assemble_manifest, validate_commit
 
 
 def command(arguments, **kwargs):
@@ -86,16 +86,19 @@ def reserve_tag(repository, commit):
         ) from error
 
 
-def publish(directory, commit, repository, android=False):
+def publish(directory, commit, repository, android=False, android_updater=False, expected_version_code=None):
     validate_commit(commit)
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("invalid GitHub repository")
-    manifest = assemble_manifest(directory, commit, require_android=android)
+    manifest = assemble_manifest(directory, commit, require_android=android,
+                                 require_android_updater=android_updater, expected_version_code=expected_version_code)
     tag = manifest["tag"]
     assets = [directory / "client-manifest.json", directory / "SHA256SUMS"]
     assets += [directory / archive_name(target, launcher) for target in TARGETS for launcher in (False, True)]
-    if android:
+    if android or android_updater:
         assets.append(directory / ANDROID_ASSET)
+    if android_updater:
+        assets.append(directory / ANDROID_MANIFEST)
     release = find_release(repository, tag)
     if release is None:
         notes = (
@@ -109,12 +112,14 @@ def publish(directory, commit, repository, android=False):
             f"[Usage and current limits](https://github.com/{repository}/blob/{commit}/README.md). "
             "`SHA256SUMS` covers the archives and update manifest.\n"
         )
-        if android:
+        if android or android_updater:
             notes += (
                 "\nAndroid: sideload the ARM64 APK on Android 8 or newer with Vulkan support. "
                 "This prototype uses a public development signing key and is debuggable; it is not a store release. "
                 "Successive builds retain the same signing identity so updates preserve local worlds.\n"
             )
+        if android_updater:
+            notes += "The Android app checks for updates before play; Android asks for installation approval.\n"
         release = api(repository, "releases", "POST", {
             "tag_name": tag,
             "target_commitish": commit,
@@ -153,9 +158,12 @@ def main():
     parser.add_argument("--commit", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--android", action="store_true", help="Require and publish the Android APK alongside desktop packages")
+    parser.add_argument("--android-updater", action="store_true", help="Require and publish the separate Android update manifest")
+    parser.add_argument("--expected-version-code", type=int, help="Full first-parent count of the exact release commit")
     arguments = parser.parse_args()
     try:
-        publish(arguments.directory, arguments.commit, arguments.repository, arguments.android)
+        publish(arguments.directory, arguments.commit, arguments.repository, arguments.android, arguments.android_updater,
+                arguments.expected_version_code)
     except RuntimeError as error:
         if any(status in str(error) for status in ("HTTP 403", "HTTP 404")):
             raise RuntimeError(

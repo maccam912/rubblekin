@@ -23,6 +23,11 @@ TARGETS = (
 )
 ANDROID_TARGET = "aarch64-linux-android"
 ANDROID_ASSET = f"rubblekin-client-{ANDROID_TARGET}.apk"
+ANDROID_MANIFEST = "android-manifest.json"
+ANDROID_PACKAGE_ID = "net.rubblekin.client"
+ANDROID_SIGNING = "public-development-key"
+ANDROID_MAX_VERSION_CODE = 2_147_483_647
+ANDROID_MAX_APK_SIZE = 256 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -130,7 +135,34 @@ def package(binary_dir, output_dir, target, commit, sign=True):
     return metadata
 
 
-def package_android(apk, output_dir, commit):
+def validate_version_code(version_code):
+    if type(version_code) is not int or not 1 <= version_code <= ANDROID_MAX_VERSION_CODE:
+        raise ValueError("Android version code must be a positive integer no larger than 2147483647")
+    return version_code
+
+
+def validate_apk_size(size):
+    if type(size) is not int or not 1 <= size <= ANDROID_MAX_APK_SIZE:
+        raise ValueError("Android APK size must be an integer from 1 byte to 256 MiB")
+    return size
+
+
+def apk_version_code(apk, aapt2, expected_version_code):
+    """Read the compiled manifest; don't trust a version supplied by the build."""
+    validate_version_code(expected_version_code)
+    result = subprocess.run([str(aapt2), "dump", "badging", str(apk)], capture_output=True, text=True)
+    if result.returncode:
+        raise ValueError(f"aapt2 could not inspect APK: {result.stderr.strip()}")
+    matched = re.search(r"^package: name='([^']+)' versionCode='([0-9]+)'(?:\s|$)", result.stdout, re.MULTILINE)
+    if matched is None or matched[1] != ANDROID_PACKAGE_ID:
+        raise ValueError("APK package identity or version code is invalid")
+    version_code = validate_version_code(int(matched[2]))
+    if version_code != expected_version_code:
+        raise ValueError("APK version code does not match the commit's full first-parent count")
+    return version_code
+
+
+def package_android(apk, output_dir, commit, *, updater=False, aapt2=None, expected_version_code=None):
     """Record an installable prototype APK separately from desktop updates."""
     validate_commit(commit)
     if not apk.is_file() or apk.is_symlink():
@@ -142,6 +174,12 @@ def package_android(apk, output_dir, commit):
         with archive.open("lib/arm64-v8a/librubblekin_client.so") as library:
             if library.read(4) != b"\x7fELF":
                 raise ValueError("APK native library is not an ELF binary")
+    version_code = None
+    if updater:
+        if aapt2 is None:
+            raise ValueError("Updater APK metadata requires aapt2 inspection")
+        validate_apk_size(apk.stat().st_size)
+        version_code = apk_version_code(apk, aapt2, expected_version_code)
     output_dir.mkdir(parents=True, exist_ok=True)
     destination = output_dir / ANDROID_ASSET
     if apk.resolve() != destination.resolve():
@@ -152,15 +190,19 @@ def package_android(apk, output_dir, commit):
         "client": {
             "asset": ANDROID_ASSET,
             "sha256": digest(destination),
-            "package_id": "net.rubblekin.client",
-            "signing": "public-development-key",
+            "package_id": ANDROID_PACKAGE_ID,
+            "signing": ANDROID_SIGNING,
         },
     }
+    if updater:
+        metadata["version_code"] = version_code
+        metadata["client"]["size"] = validate_apk_size(destination.stat().st_size)
     (output_dir / f"{ANDROID_TARGET}.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return metadata
 
 
-def assemble_manifest(directory, commit, require_android=False):
+def assemble_manifest(directory, commit, require_android=False, require_android_updater=False,
+                      expected_version_code=None):
     """Fail closed if any platform is missing, mixed, or changed in transit."""
     validate_commit(commit)
     platforms = {}
@@ -186,7 +228,7 @@ def assemble_manifest(directory, commit, require_android=False):
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     assets = [manifest_path]
     assets += [directory / archive_name(target, launcher) for target in TARGETS for launcher in (False, True)]
-    if require_android:
+    if require_android or require_android_updater:
         metadata = json.loads((directory / f"{ANDROID_TARGET}.json").read_text())
         expected = {
             "commit": commit,
@@ -194,13 +236,31 @@ def assemble_manifest(directory, commit, require_android=False):
             "client": {
                 "asset": ANDROID_ASSET,
                 "sha256": digest(directory / ANDROID_ASSET),
-                "package_id": "net.rubblekin.client",
-                "signing": "public-development-key",
+                "package_id": ANDROID_PACKAGE_ID,
+                "signing": ANDROID_SIGNING,
             },
         }
+        if require_android_updater:
+            expected["version_code"] = validate_version_code(metadata.get("version_code"))
+            if expected["version_code"] != validate_version_code(expected_version_code):
+                raise ValueError("Android metadata version code does not match the commit's full first-parent count")
+            expected["client"]["size"] = validate_apk_size((directory / ANDROID_ASSET).stat().st_size)
+            validate_apk_size(metadata.get("client", {}).get("size"))
         if metadata != expected:
             raise ValueError("package metadata mismatch for Android")
         assets.append(directory / ANDROID_ASSET)
+        if require_android_updater:
+            android_manifest = {
+                "schema_version": 1,
+                "commit": commit,
+                "tag": f"client-{commit}",
+                "target": ANDROID_TARGET,
+                "version_code": expected["version_code"],
+                "client": expected["client"],
+            }
+            android_path = directory / ANDROID_MANIFEST
+            android_path.write_text(json.dumps(android_manifest, indent=2, sort_keys=True) + "\n")
+            assets.append(android_path)
     checksums = "".join(f"{digest(path)}  {path.name}\n" for path in sorted(assets))
     (directory / "SHA256SUMS").write_text(checksums)
     return manifest
@@ -218,17 +278,24 @@ def main():
     android.add_argument("--apk", type=Path, required=True)
     android.add_argument("--output-dir", type=Path, required=True)
     android.add_argument("--commit", required=True)
+    android.add_argument("--android-updater", action="store_true")
+    android.add_argument("--aapt2", type=Path)
+    android.add_argument("--expected-version-code", type=int)
     manifest = subcommands.add_parser("manifest")
     manifest.add_argument("--directory", type=Path, required=True)
     manifest.add_argument("--commit", required=True)
     manifest.add_argument("--android", action="store_true")
+    manifest.add_argument("--android-updater", action="store_true")
+    manifest.add_argument("--expected-version-code", type=int)
     arguments = parser.parse_args()
     if arguments.command == "package":
         package(arguments.binary_dir, arguments.output_dir, arguments.target, arguments.commit)
     elif arguments.command == "android":
-        package_android(arguments.apk, arguments.output_dir, arguments.commit)
+        package_android(arguments.apk, arguments.output_dir, arguments.commit, updater=arguments.android_updater,
+                        aapt2=arguments.aapt2, expected_version_code=arguments.expected_version_code)
     else:
-        assemble_manifest(arguments.directory, arguments.commit, arguments.android)
+        assemble_manifest(arguments.directory, arguments.commit, arguments.android, arguments.android_updater,
+                          arguments.expected_version_code)
 
 
 if __name__ == "__main__":

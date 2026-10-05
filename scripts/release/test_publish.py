@@ -96,9 +96,54 @@ class PromotionTests(unittest.TestCase):
         api.side_effect = [None, [], {"id": 7, "draft": True}, {"id": 7, "draft": False}, {"tag_name": f"client-{NEW}"}]
         command.side_effect = ["", "", "\n".join(HISTORY)]
         publish.publish(Path("dist"), NEW, "owner/repository", android=True)
-        manifest.assert_called_once_with(Path("dist"), NEW, require_android=True)
+        manifest.assert_called_once_with(Path("dist"), NEW, require_android=True,
+                                         require_android_updater=False, expected_version_code=None)
         self.assertIn("dist/" + publish.ANDROID_ASSET, command.call_args_list[0].args[0])
+        self.assertNotIn("dist/" + publish.ANDROID_MANIFEST, command.call_args_list[0].args[0])
         self.assertIn("public development signing key", api.call_args_list[2].args[3]["body"])
+        self.assertNotIn("checks for updates before play", api.call_args_list[2].args[3]["body"])
+
+    @patch("publish.assemble_manifest", return_value={"tag": f"client-{NEW}"})
+    @patch("publish.command")
+    @patch("publish.api")
+    def test_updater_release_requires_and_uploads_separate_android_manifest(self, api, command, manifest):
+        api.side_effect = [None, [], {"id": 7, "draft": True}, {"id": 7, "draft": False}, {"tag_name": f"client-{NEW}"}]
+        command.side_effect = ["", "", "\n".join(HISTORY)]
+        publish.publish(Path("dist"), NEW, "owner/repository", android_updater=True, expected_version_code=42)
+        manifest.assert_called_once_with(Path("dist"), NEW, require_android=False,
+                                         require_android_updater=True, expected_version_code=42)
+        assets = command.call_args_list[0].args[0]
+        self.assertIn("dist/" + publish.ANDROID_ASSET, assets)
+        self.assertIn("dist/" + publish.ANDROID_MANIFEST, assets)
+        self.assertIn("dist/client-manifest.json", assets)
+        self.assertIn("dist/SHA256SUMS", assets)
+        self.assertIn("checks for updates before play", api.call_args_list[2].args[3]["body"])
+
+    @patch("publish.assemble_manifest", return_value={"tag": f"client-{NEW}"})
+    @patch("publish.command")
+    @patch("publish.api")
+    def test_published_updater_release_requires_manifest_even_if_all_other_assets_exist(self, api, command, _manifest):
+        filenames = ["client-manifest.json", "SHA256SUMS", publish.ANDROID_ASSET]
+        filenames += [publish.archive_name(target, launcher) for target in publish.TARGETS for launcher in (False, True)]
+        api.return_value = {"id": 7, "draft": False, "assets": [
+            {"name": name, "state": "uploaded"} for name in filenames
+        ]}
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            publish.publish(Path("dist"), NEW, "owner/repository", android_updater=True, expected_version_code=42)
+        command.assert_not_called()
+
+    @patch("publish.assemble_manifest", return_value={"tag": f"client-{NEW}"})
+    @patch("publish.command")
+    @patch("publish.api")
+    def test_complete_published_updater_release_preserves_immutable_assets(self, api, command, _manifest):
+        filenames = ["client-manifest.json", "SHA256SUMS", publish.ANDROID_ASSET, publish.ANDROID_MANIFEST]
+        filenames += [publish.archive_name(target, launcher) for target in publish.TARGETS for launcher in (False, True)]
+        api.side_effect = [{"id": 7, "draft": False, "assets": [
+            {"name": name, "state": "uploaded"} for name in filenames
+        ]}, {"tag_name": f"client-{NEW}"}]
+        command.side_effect = ["", "\n".join(HISTORY)]
+        publish.publish(Path("dist"), NEW, "owner/repository", android_updater=True, expected_version_code=42)
+        self.assertFalse(any(call.args[0][:3] == ["gh", "release", "upload"] for call in command.call_args_list))
 
 
 class TagAndPermissionTests(unittest.TestCase):

@@ -2,8 +2,10 @@ import json
 from pathlib import Path
 import plistlib
 import stat
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 import package
@@ -101,6 +103,121 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(manifest["schema_version"], 1)
         self.assertEqual(set(manifest["platforms"]), set(package.TARGETS))
         self.assertIn(package.ANDROID_ASSET, (self.output / "SHA256SUMS").read_text())
+        self.assertFalse((self.output / package.ANDROID_MANIFEST).exists())
+
+    def updater_apk(self):
+        with patch("package.subprocess.run", return_value=subprocess.CompletedProcess(
+            [], 0, "package: name='net.rubblekin.client' versionCode='42' versionName='0.1.0-test'\n", ""
+        )):
+            return package.package_android(self.android_apk(), self.output, COMMIT, updater=True,
+                                           aapt2=Path("sdk/aapt2"), expected_version_code=42)
+
+    def test_updater_manifest_has_verified_apk_identity_and_independent_schema(self):
+        self.all_packages()
+        metadata = self.updater_apk()
+        desktop = package.assemble_manifest(self.output, COMMIT, require_android_updater=True,
+                                            expected_version_code=42)
+        self.assertEqual(desktop["schema_version"], 1)
+        self.assertEqual(set(desktop["platforms"]), set(package.TARGETS))
+        self.assertNotIn("version_code", desktop)
+        self.assertEqual(json.loads((self.output / package.ANDROID_MANIFEST).read_text()), {
+            "schema_version": 1,
+            "commit": COMMIT,
+            "tag": f"client-{COMMIT}",
+            "target": package.ANDROID_TARGET,
+            "version_code": 42,
+            "client": {
+                "asset": package.ANDROID_ASSET,
+                "sha256": package.digest(self.output / package.ANDROID_ASSET),
+                "size": (self.output / package.ANDROID_ASSET).stat().st_size,
+                "package_id": "net.rubblekin.client",
+                "signing": "public-development-key",
+            },
+        })
+        self.assertEqual(metadata["version_code"], 42)
+        checksums = dict(line.split("  ")[::-1] for line in (self.output / "SHA256SUMS").read_text().splitlines())
+        self.assertEqual(len(checksums), 11)
+        self.assertEqual(checksums[package.ANDROID_MANIFEST], package.digest(self.output / package.ANDROID_MANIFEST))
+        self.assertEqual(checksums[package.ANDROID_ASSET], package.digest(self.output / package.ANDROID_ASSET))
+
+    def test_updater_release_requires_new_metadata_and_first_parent_count(self):
+        self.all_packages()
+        package.package_android(self.android_apk(), self.output, COMMIT)
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            package.assemble_manifest(self.output, COMMIT, require_android_updater=True, expected_version_code=42)
+        self.updater_apk()
+        with self.assertRaisesRegex(ValueError, "first-parent count"):
+            package.assemble_manifest(self.output, COMMIT, require_android_updater=True, expected_version_code=43)
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            package.assemble_manifest(self.output, COMMIT, require_android_updater=True)
+
+    def test_updater_metadata_rejects_version_size_digest_and_identity_changes(self):
+        self.all_packages()
+        original = self.updater_apk()
+        metadata_path = self.output / f"{package.ANDROID_TARGET}.json"
+        changes = [
+            ("version_code", None), ("version_code", True), ("version_code", 0),
+            ("version_code", -1), ("version_code", "42"), ("version_code", 42.0),
+            ("version_code", package.ANDROID_MAX_VERSION_CODE + 1),
+            ("commit", "b" * 40), ("target", package.TARGETS[0]), ("extra", "unsupported"),
+            ("client.size", original["client"]["size"] + 1),
+            ("client.size", float(original["client"]["size"])),
+            ("client.size", 0), ("client.size", True), ("client.size", "1"),
+            ("client.size", package.ANDROID_MAX_APK_SIZE + 1),
+            ("client.sha256", "b" * 64), ("client.package_id", "net.other.client"),
+            ("client.asset", "other.apk"), ("client.signing", "unknown-key"),
+        ]
+        for field, value in changes:
+            with self.subTest(field=field, value=value):
+                metadata = json.loads(json.dumps(original))
+                if field.startswith("client."):
+                    metadata["client"][field.split(".")[1]] = value
+                else:
+                    metadata[field] = value
+                metadata_path.write_text(json.dumps(metadata))
+                with self.assertRaises(ValueError):
+                    package.assemble_manifest(self.output, COMMIT, require_android_updater=True,
+                                              expected_version_code=42)
+
+    def test_updater_apk_is_inspected_with_aapt2_before_metadata_is_written(self):
+        apk = self.android_apk()
+        result = subprocess.CompletedProcess([], 0,
+            "package: name='net.rubblekin.client' versionCode='42' versionName='0.1.0-test'\n", "")
+        with patch("package.subprocess.run", return_value=result) as run:
+            metadata = package.package_android(apk, self.output, COMMIT, updater=True,
+                                               aapt2=Path("sdk/aapt2"), expected_version_code=42)
+        run.assert_called_once_with(["sdk/aapt2", "dump", "badging", str(apk)], capture_output=True, text=True)
+        self.assertEqual(metadata["version_code"], 42)
+        self.assertEqual(metadata["client"]["size"], apk.stat().st_size)
+
+    def test_updater_apk_inspection_rejects_wrong_or_unreadable_compiled_metadata(self):
+        apk = self.android_apk()
+        bad_results = [
+            subprocess.CompletedProcess([], 1, "", "invalid compiled manifest"),
+            subprocess.CompletedProcess([], 0, "", ""),
+            subprocess.CompletedProcess([], 0, "package: name='net.other.client' versionCode='42'\n", ""),
+            subprocess.CompletedProcess([], 0, "package: name='net.rubblekin.client' versionCode='0'\n", ""),
+            subprocess.CompletedProcess([], 0, "package: name='net.rubblekin.client' versionCode='-1'\n", ""),
+            subprocess.CompletedProcess([], 0, "package: name='net.rubblekin.client' versionCode='43'\n", ""),
+        ]
+        for result in bad_results:
+            with self.subTest(result=result), patch("package.subprocess.run", return_value=result):
+                with self.assertRaises(ValueError):
+                    package.package_android(apk, self.output, COMMIT, updater=True,
+                                            aapt2=Path("sdk/aapt2"), expected_version_code=42)
+                self.assertFalse(self.output.exists())
+
+    def test_updater_metadata_requires_inspection_tool_and_expected_version(self):
+        apk = self.android_apk()
+        with self.assertRaisesRegex(ValueError, "aapt2"):
+            package.package_android(apk, self.output, COMMIT, updater=True, expected_version_code=42)
+        for expected in (None, 0, -1, True, "42", package.ANDROID_MAX_VERSION_CODE + 1):
+            with self.subTest(expected=expected), patch("package.subprocess.run") as run:
+                with self.assertRaisesRegex(ValueError, "positive integer"):
+                    package.package_android(apk, self.output, COMMIT, updater=True,
+                                            aapt2=Path("sdk/aapt2"), expected_version_code=expected)
+                run.assert_not_called()
+        self.assertFalse(self.output.exists())
 
     def test_android_apk_commit_and_checksum_must_match_release(self):
         self.all_packages()

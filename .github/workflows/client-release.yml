@@ -159,10 +159,21 @@ jobs:
         if: steps.android.outputs.supported == 'true'
         shell: bash
         run: |
+          android_args=()
+          # Old Android commits lack both the updater and its metadata fields.
+          if test -f android/app/src/main/java/net/rubblekin/client/LaunchActivity.java; then
+            version_code="$(git rev-list --first-parent --count HEAD)"
+            android/gradlew --no-daemon --console=plain -p android -PrubblekinVersionCode="$version_code" testDebugUnitTest
+            android_args=(--android-updater --aapt2 "$ANDROID_HOME/build-tools/36.0.0/aapt2" --expected-version-code "$version_code")
+          fi
           python scripts/build_android.py --output-dir dist
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose dist/rubblekin-client-aarch64-linux-android.apk
+          signing_output="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs dist/rubblekin-client-aarch64-linux-android.apk)"
+          printf '%s\n' "$signing_output"
+          # The updater requires one signer matching the stable public key.
+          test "$(grep -Ec '^Signer #[0-9]+ certificate SHA-256 digest:' <<< "$signing_output")" = 1
+          grep -Fxq 'Signer #1 certificate SHA-256 digest: 36bf02be798e34ae69ed06c1533df861bf92bc9ca28126075556bd6bb82ffc90' <<< "$signing_output"
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 dist/rubblekin-client-aarch64-linux-android.apk
-          python scripts/release/package.py android --apk dist/rubblekin-client-aarch64-linux-android.apk --output-dir dist --commit "$COMMIT"
+          python scripts/release/package.py android --apk dist/rubblekin-client-aarch64-linux-android.apk --output-dir dist --commit "$COMMIT" "${android_args[@]}"
       - uses: actions/upload-artifact@v7
         if: steps.android.outputs.supported == 'true'
         with:
@@ -214,5 +225,8 @@ jobs:
           android_args=()
           if git cat-file -e "$COMMIT:scripts/build_android.py" 2>/dev/null; then
             android_args=(--android)
+          fi
+          if git cat-file -e "$COMMIT:android/app/src/main/java/net/rubblekin/client/LaunchActivity.java" 2>/dev/null; then
+            android_args+=(--android-updater --expected-version-code "$(git rev-list --first-parent --count "$COMMIT")")
           fi
           python scripts/release/publish.py --directory dist --commit "$COMMIT" --repository "$GITHUB_REPOSITORY" "${android_args[@]}"
