@@ -2,6 +2,7 @@
 //! Geographic worlds stream a bounded local square; legacy saves retain their valley.
 use std::collections::HashMap;
 
+use crate::terrain_material::{TerrainMaterial, terrain_material};
 use bevy::{
     asset::RenderAssetUsages,
     light::NotShadowCaster,
@@ -23,9 +24,11 @@ const DETAIL_JOBS: usize = 2;
 const CHUNK_METERS: f32 = CHUNK_SIZE as f32 * CELL_SIZE;
 // Eight samples across a maximum1024m leaf retain128m mountain detail.
 const MAX_LOD_TILE_CHUNKS: i32 = 128;
-const LOD_TREE_DISTANCE: f32 = 1_024.0;
+const LOD_TREE_DISTANCE: f32 = 4_096.0;
+const LOD_SIMPLE_TREE_DISTANCE: f32 = 1_024.0;
 const LOD_FULL_TREE_DISTANCE: f32 = 384.0;
 const MAX_LOD_TREES: usize = 4_096;
+const MAX_FAR_LOD_TREES: usize = 1_024;
 const TREE_GRID_METERS: f32 = 12.0;
 
 type ChunkKey = (i32, i32);
@@ -35,7 +38,7 @@ type ChunkGeometry = (Geometry, Geometry);
 #[derive(Resource)]
 pub struct TerrainScene {
     chunks: HashMap<ChunkKey, ChunkMesh>,
-    opaque_material: Handle<StandardMaterial>,
+    opaque_material: Handle<TerrainMaterial>,
     glass_material: Handle<StandardMaterial>,
     water_material: Handle<StandardMaterial>,
     landscape: Option<Landscape>,
@@ -68,15 +71,12 @@ pub fn setup_terrain(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    terrain_materials: &mut Assets<TerrainMaterial>,
+    images: &mut Assets<Image>,
     world: &World,
     center: [f32; 3],
 ) -> TerrainScene {
-    let opaque_material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        perceptual_roughness: 1.0,
-        reflectance: 0.12,
-        ..default()
-    });
+    let opaque_material = terrain_materials.add(terrain_material(None));
     let glass_material = materials.add(StandardMaterial {
         base_color: Color::srgba(0.77, 0.94, 0.95, 0.36),
         alpha_mode: AlphaMode::Blend,
@@ -101,6 +101,8 @@ pub fn setup_terrain(
         triangle_count: 0,
     };
     if world.geography().is_some() {
+        let albedo = images.add(crate::terrain_albedo::distant_albedo(world));
+        let landscape_material = terrain_materials.add(terrain_material(Some(albedo)));
         let center = chunk_key(center);
         let (land, water) = landscape_geometry(world, center);
         let triangles = (land.indices.len() + water.indices.len()) / 3;
@@ -109,7 +111,7 @@ pub fn setup_terrain(
         commands.spawn((
             crate::GameEntity,
             Mesh3d(terrain.clone()),
-            MeshMaterial3d(scene.opaque_material.clone()),
+            MeshMaterial3d(landscape_material),
             NotShadowCaster,
         ));
         commands.spawn((
@@ -306,6 +308,14 @@ fn move_local_square(
             &mut water,
         );
         add_chunk_tree_proxies(world, key, &surface, &mut terrain);
+        let x = key.0 as f32 * CHUNK_METERS;
+        let z = key.1 as f32 * CHUNK_METERS;
+        add_village_proxies(
+            world,
+            center,
+            ProxyClip::Inside([x, z, x + CHUNK_METERS, z + CHUNK_METERS]),
+            &mut terrain,
+        );
         install_chunk(
             scene,
             key,
@@ -572,7 +582,60 @@ fn landscape_geometry(world: &World, center: ChunkKey) -> (Geometry, Geometry) {
         surfaces.insert((x, z), surface);
     }
     add_landscape_trees(world, center, &tile_lookup, &surfaces, &mut land);
+    add_village_proxies(
+        world,
+        center,
+        ProxyClip::Outside(local_bounds(center)),
+        &mut land,
+    );
     (land, water)
+}
+
+/// Coarse silhouettes keep settlements visible through 4km and while detailed
+/// chunks load; the exact editable assets replace these within the local square.
+fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometry: &mut Geometry) {
+    let Some(plan) = world.settlements() else {
+        return;
+    };
+    let camera = Vec2::new(
+        center.0 as f32 * CHUNK_METERS,
+        center.1 as f32 * CHUNK_METERS,
+    );
+    for village in &plan.villages {
+        if Vec2::new(village.center[0], village.center[2]).distance(camera) > 4096.0 {
+            continue;
+        }
+        for building in &village.buildings {
+            let [width, height, depth] = building.dimensions();
+            let base = Vec3::new(
+                building.origin.x as f32,
+                building.origin.y as f32,
+                building.origin.z as f32,
+            ) * CELL_SIZE;
+            let size = Vec3::new(width as f32, height as f32, depth as f32) * CELL_SIZE;
+            let walls = (size.y * 0.58).min(3.5);
+            proxy_cuboid(
+                geometry,
+                base + Vec3::new(size.x * 0.5, walls * 0.5, size.z * 0.5),
+                Vec3::new(size.x, walls, size.z),
+                Block::Sand.color(),
+                clip,
+            );
+            // Stepped roof silhouettes agree with the fine assets' warm palette.
+            let tiers = 4;
+            for tier in 0..tiers {
+                let y = walls + (size.y - walls) * (tier as f32 + 0.5) / tiers as f32;
+                let roof_width = size.x * (1.0 - tier as f32 * 0.18);
+                proxy_cuboid(
+                    geometry,
+                    base + Vec3::new(size.x * 0.5, y, size.z * 0.5),
+                    Vec3::new(roof_width, (size.y - walls) / tiers as f32, size.z),
+                    Block::Brick.color(),
+                    clip,
+                );
+            }
+        }
+    }
 }
 
 fn lod_tree_cells(center: ChunkKey) -> Vec<(i32, i32)> {
@@ -591,11 +654,16 @@ fn lod_tree_cells(center: ChunkKey) -> Vec<(i32, i32)> {
             if distance_squared > LOD_TREE_DISTANCE.powi(2) {
                 continue;
             }
-            // A nested, world-aligned subset retains stable tree locations
-            // while reducing small silhouettes beyond the middle distance.
-            if distance_squared > LOD_FULL_TREE_DISTANCE.powi(2)
-                && (gx.rem_euclid(4) != 0 || gz.rem_euclid(4) != 0)
-            {
+            // Nested world-aligned subsets keep actual tree locations stable
+            // while reducing subpixel silhouettes across the outer bands.
+            let stride = if distance_squared > LOD_SIMPLE_TREE_DISTANCE.powi(2) {
+                8
+            } else if distance_squared > LOD_FULL_TREE_DISTANCE.powi(2) {
+                4
+            } else {
+                1
+            };
+            if gx.rem_euclid(stride) != 0 || gz.rem_euclid(stride) != 0 {
                 continue;
             }
             cells.push((gx, gz));
@@ -630,39 +698,65 @@ fn add_landscape_trees(
     land: &mut Geometry,
 ) {
     let cutout = local_bounds(center);
-    let mut trees = 0;
+    let camera = Vec2::new(
+        (center.0 as f32 + 0.5) * CHUNK_METERS,
+        (center.1 as f32 + 0.5) * CHUNK_METERS,
+    );
+    let mut near = Vec::new();
+    let mut far = Vec::new();
     for (gx, gz) in lod_tree_cells(center) {
-        if trees >= MAX_LOD_TREES {
-            break;
-        }
         let Some(tree) = world.tree_at(gx, gz) else {
             continue;
         };
         let x = (tree.base.x as f32 + 0.5) * CELL_SIZE;
         let z = (tree.base.z as f32 + 0.5) * CELL_SIZE;
-        let chunk = chunk_key([x, 0.0, z]);
-        let mut size = 1;
-        let mut ground = tree.base.y as f32 * CELL_SIZE;
-        while size <= MAX_LOD_TILE_CHUNKS {
-            let origin = (
-                chunk.0.div_euclid(size) * size,
-                chunk.1.div_euclid(size) * size,
-            );
-            if tiles.get(&origin) == Some(&size) {
-                ground = surfaces[&origin].height_at(x, z);
+        if Vec2::new(x, z).distance_squared(camera) > LOD_SIMPLE_TREE_DISTANCE.powi(2) {
+            far.push((hash(gx, 0, gz, world.seed), tree));
+        } else {
+            near.push(tree);
+        }
+    }
+    // A separate outer budget preserves nearby density. World-aligned hash
+    // order spreads capped far crowns across the whole band instead of ending
+    // a dense forest at the distance of the closest 1,024 trees.
+    far.sort_unstable_by(|(a, tree_a), (b, tree_b)| {
+        a.total_cmp(b)
+            .then((tree_a.base.x, tree_a.base.z).cmp(&(tree_b.base.x, tree_b.base.z)))
+    });
+    let far = far.into_iter().map(|(_, tree)| tree).collect();
+    for (candidates, cap, simplified) in
+        [(near, MAX_LOD_TREES, false), (far, MAX_FAR_LOD_TREES, true)]
+    {
+        let mut trees = 0;
+        for tree in candidates {
+            if trees >= cap {
                 break;
             }
-            size *= 2;
+            let x = (tree.base.x as f32 + 0.5) * CELL_SIZE;
+            let z = (tree.base.z as f32 + 0.5) * CELL_SIZE;
+            let chunk = chunk_key([x, 0.0, z]);
+            let mut size = 1;
+            let mut ground = tree.base.y as f32 * CELL_SIZE;
+            while size <= MAX_LOD_TILE_CHUNKS {
+                let origin = (
+                    chunk.0.div_euclid(size) * size,
+                    chunk.1.div_euclid(size) * size,
+                );
+                if tiles.get(&origin) == Some(&size) {
+                    ground = surfaces[&origin].height_at(x, z);
+                    break;
+                }
+                size *= 2;
+            }
+            let before = land.indices.len();
+            let foliage = tree_leaf_color(world, tree.kind);
+            if simplified {
+                add_far_tree_proxy(land, tree, ground, ProxyClip::Outside(cutout), foliage);
+            } else {
+                add_tree_proxy(land, tree, ground, ProxyClip::Outside(cutout), foliage);
+            }
+            trees += usize::from(land.indices.len() > before);
         }
-        let before = land.indices.len();
-        add_tree_proxy(
-            land,
-            tree,
-            ground,
-            ProxyClip::Outside(cutout),
-            tree_leaf_color(world, tree.kind),
-        );
-        trees += usize::from(land.indices.len() > before);
     }
 }
 
@@ -740,7 +834,9 @@ fn placeholder_ground_height(geography: &Geography, x: f32, z: f32) -> f32 {
 }
 
 fn tree_leaf_color(world: &World, kind: TreeKind) -> [f32; 4] {
-    if world.generation() == WorldGeneration::GeographyV2 {
+    if world.generation() == WorldGeneration::GeographyV2
+        || world.generation() == WorldGeneration::GeographyV3
+    {
         kind.leaf_color()
     } else {
         [0.24, 0.40, 0.31, 1.0]
@@ -797,6 +893,42 @@ fn add_tree_proxy(
             tier_bottom = y;
             previous_radius = radius;
         }
+    }
+}
+
+/// Kilometer-distance crowns retain the generated dimensions and species with
+/// one box, or two tapered conifer tiers. Their subpixel trunks are omitted.
+fn add_far_tree_proxy(
+    land: &mut Geometry,
+    tree: GeneratedTree,
+    ground: f32,
+    clip: ProxyClip,
+    foliage: [f32; 4],
+) {
+    let Some((bottom, top)) = tree.leaf_bounds(0, 0) else {
+        return;
+    };
+    let x = (tree.base.x as f32 + 0.5) * CELL_SIZE;
+    let z = (tree.base.z as f32 + 0.5) * CELL_SIZE;
+    let tiers: &[(i32, i32, i32)] = if tree.kind == TreeKind::Conifer {
+        &[
+            (bottom, tree.crown_y() - 1, tree.crown_radius),
+            (tree.crown_y() - 1, top + 1, tree.crown_radius / 2),
+        ]
+    } else {
+        &[(bottom, top + 1, tree.crown_radius)]
+    };
+    for &(low, high, radius) in tiers {
+        let low_y = ground + (low - tree.base.y) as f32 * CELL_SIZE;
+        let high_y = ground + (high - tree.base.y) as f32 * CELL_SIZE;
+        let width = (radius * 2 + 1) as f32 * CELL_SIZE;
+        proxy_cuboid(
+            land,
+            Vec3::new(x, (low_y + high_y) * 0.5, z),
+            Vec3::new(width, high_y - low_y, width),
+            foliage,
+            clip,
+        );
     }
 }
 
@@ -1114,6 +1246,7 @@ fn surface_tile(
     land: &mut Geometry,
     water: &mut Geometry,
 ) -> SampledSurface {
+    let land_start = land.positions.len();
     let step = size / steps as f32;
     let mut vertices = Vec::with_capacity((steps + 1) * (steps + 1));
     for iz in 0..=steps {
@@ -1189,6 +1322,7 @@ fn surface_tile(
             );
         }
     }
+    land.uvs[land_start..].fill([1.0, 0.0]);
     SampledSurface {
         origin: [x, z],
         step,
@@ -1228,6 +1362,40 @@ const FACES: [([i32; 3], [[f32; 3]; 4]); 6] = [
 
 fn occludes(block: Block) -> bool {
     block != Block::Air && block != Block::Glass
+}
+
+/// Keep drops readable when their vertical face points away from the camera.
+/// Existing top vertices provide a soft lip only at actual exposed edges;
+/// continuous ground does not acquire a grid. Foliage and transparent blocks
+/// retain their existing colors, and side contrast is independent of sun angle.
+fn terrain_shape_shade(
+    cache: &CellCache,
+    position: BlockPos,
+    block: Block,
+    normal: [i32; 3],
+    corner: [f32; 3],
+) -> f32 {
+    if !matches!(
+        block,
+        Block::Grass | Block::Dirt | Block::Stone | Block::Sand | Block::Snow
+    ) {
+        return 1.0;
+    }
+    if normal[1] == 0 {
+        return 0.76;
+    }
+    if normal != [0, 1, 0] {
+        return 1.0;
+    }
+    let dx = if corner[0] < 0.5 { -1 } else { 1 };
+    let dz = if corner[2] < 0.5 { -1 } else { 1 };
+    if !occludes(cache.get(position.x + dx, position.y, position.z))
+        || !occludes(cache.get(position.x, position.y, position.z + dz))
+    {
+        0.80
+    } else {
+        1.0
+    }
 }
 
 fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
@@ -1275,13 +1443,15 @@ fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
                     if y == terrain_height
                         && block == world.surface_block(x, z)
                         && let Some(biome) = geographic_biome
+                        && (matches!(block, Block::Grass | Block::Sand | Block::Snow)
+                            || (block == Block::Stone && biome == Biome::Alpine))
                     {
                         color = biome.color();
                     }
                     if block == Block::Grass && normal[1] == 0 {
                         let soil = Block::Dirt.color();
                         for i in 0..3 {
-                            color[i] = color[i] * 0.90 + soil[i] * 0.10;
+                            color[i] = color[i] * 0.65 + soil[i] * 0.35;
                         }
                     }
                     let variation = 0.98 + hash(x, y, z, world.seed) * 0.04;
@@ -1318,7 +1488,15 @@ fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
                             a as u8 + b as u8 + solid(diagonal) as u8
                         };
                         // Baked corner shading adds depth without another render pass.
-                        let shade = variation * [1.0, 0.88, 0.76, 0.64][level as usize];
+                        let shade = variation
+                            * [1.0, 0.88, 0.76, 0.64][level as usize]
+                            * terrain_shape_shade(
+                                &cache,
+                                BlockPos::new(x, y, z),
+                                block,
+                                normal,
+                                *corner,
+                            );
                         for channel in &mut colors[index][..3] {
                             *channel *= shade;
                         }
@@ -1387,17 +1565,19 @@ fn add_meadow_details(
         return;
     }
     let chance = hash(x, 713, z, world.seed);
-    let (density, flower_density, foliage, height_scale) =
-        if world.generation() == WorldGeneration::GeographyV2 {
-            match biome {
-                Some(Biome::Shrubland) => (0.01, 0.0, [0.60, 0.58, 0.33, 1.0], 0.85),
-                Some(Biome::Tundra) => (0.012, 0.0, [0.52, 0.55, 0.40, 1.0], 0.65),
-                Some(Biome::PineForest) => (0.014, 0.0, [0.31, 0.46, 0.30, 1.0], 0.65),
-                _ => (0.036, 0.009, [0.46, 0.58, 0.29, 1.0], 1.0),
-            }
-        } else {
-            (0.036, 0.009, [0.46, 0.58, 0.29, 1.0], 1.0)
-        };
+    let (density, flower_density, foliage, height_scale) = if world.generation()
+        == WorldGeneration::GeographyV2
+        || world.generation() == WorldGeneration::GeographyV3
+    {
+        match biome {
+            Some(Biome::Shrubland) => (0.01, 0.0, [0.60, 0.58, 0.33, 1.0], 0.85),
+            Some(Biome::Tundra) => (0.012, 0.0, [0.52, 0.55, 0.40, 1.0], 0.65),
+            Some(Biome::PineForest) => (0.014, 0.0, [0.31, 0.46, 0.30, 1.0], 0.65),
+            _ => (0.036, 0.009, [0.46, 0.58, 0.29, 1.0], 1.0),
+        }
+    } else {
+        (0.036, 0.009, [0.46, 0.58, 0.29, 1.0], 1.0)
+    };
     if chance > density || (world.geography().is_none() && y > 50) {
         return;
     }
@@ -1524,10 +1704,12 @@ fn distant_mountains(seed: u32) -> Mesh {
 }
 
 #[derive(Default)]
-struct Geometry {
+pub(crate) struct Geometry {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
+    // Landscape mask for the distant albedo; actual sampling is world-aligned.
+    uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
 }
 
@@ -1546,6 +1728,7 @@ impl Geometry {
         self.positions.extend(vertices);
         self.normals.extend(normals);
         self.colors.extend(colors);
+        self.uvs.extend([[0.0; 2]; 4]);
         self.indices.extend(diagonal.map(|index| start + index));
     }
 
@@ -1560,10 +1743,11 @@ impl Geometry {
             .extend([a.to_array(), b.to_array(), c.to_array()]);
         self.normals.extend([normal; 3]);
         self.colors.extend([color; 3]);
+        self.uvs.extend([[0.0; 2]; 3]);
         self.indices.extend([start, start + 1, start + 2]);
     }
 
-    fn cuboid(&mut self, center: Vec3, dimensions: Vec3, color: [f32; 4]) {
+    pub(crate) fn cuboid(&mut self, center: Vec3, dimensions: Vec3, color: [f32; 4]) {
         for (normal, corners) in FACES {
             let vertices = corners.map(|p| {
                 (center + (Vec3::from_array(p) - Vec3::splat(0.5)) * dimensions).to_array()
@@ -1572,8 +1756,7 @@ impl Geometry {
         }
     }
 
-    fn into_mesh(self) -> Mesh {
-        let count = self.positions.len();
+    pub(crate) fn into_mesh(self) -> Mesh {
         Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
@@ -1581,7 +1764,7 @@ impl Geometry {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0., 0.]; count])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
         .with_inserted_indices(Indices::U32(self.indices))
     }
 }
@@ -1616,6 +1799,40 @@ fn hash(x: i32, y: i32, z: i32, seed: u32) -> f32 {
 mod tests {
     use super::*;
     use rubblekin_core::world::MAX_Y;
+
+    #[test]
+    fn distant_albedo_marks_ground_without_recoloring_batched_foliage() {
+        let world = World::generate(42, WorldGeneration::GeographyV2);
+        let mut land = Geometry::default();
+        surface_tile(
+            world.geography().unwrap(),
+            [2400.0, -1800.0, 64.0],
+            8,
+            [None; 4],
+            &mut land,
+            &mut Geometry::default(),
+        );
+        let ground_vertices = land.positions.len();
+        assert!(ground_vertices > 0);
+        assert!(land.uvs.iter().all(|&uv| uv == [1.0, 0.0]));
+        add_far_tree_proxy(
+            &mut land,
+            GeneratedTree {
+                base: BlockPos::new(4820, 400, -3580),
+                trunk_height: 20,
+                crown_radius: 4,
+                kind: TreeKind::Broadleaf,
+            },
+            200.0,
+            ProxyClip::Outside([0.0, 0.0, 1.0, 1.0]),
+            TreeKind::Broadleaf.leaf_color(),
+        );
+        assert!(land.uvs.len() > ground_vertices);
+        assert!(land.uvs[ground_vertices..].iter().all(|&uv| uv == [0.0; 2]));
+        let count = land.positions.len();
+        let mesh = land.into_mesh();
+        assert_eq!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap().len(), count);
+    }
 
     #[test]
     fn both_ao_diagonals_keep_every_face_winding_outward() {
@@ -1654,6 +1871,168 @@ mod tests {
         let corner = affected_chunks(BlockPos { x: 0, y: 4, z: 0 });
         assert!(corner.contains(&(-1, -1)));
         assert_eq!(corner.len(), 4);
+    }
+
+    fn rendered_face_colors(
+        mesh: &Geometry,
+        position: BlockPos,
+        normal: [i32; 3],
+    ) -> [[f32; 4]; 4] {
+        let normal = Vec3::from_array(normal.map(|n| n as f32));
+        let center = Vec3::new(
+            position.x as f32 + 0.5,
+            position.y as f32 + 0.5,
+            position.z as f32 + 0.5,
+        ) * CELL_SIZE
+            + normal * CELL_SIZE * 0.5;
+        let index = mesh
+            .positions
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(mesh.normals.as_chunks::<4>().0)
+            .position(|(points, normals)| {
+                let face_center = points.iter().copied().map(Vec3::from_array).sum::<Vec3>() * 0.25;
+                face_center.distance(center) < 0.001 && normals[0] == normal.to_array()
+            })
+            .expect("the requested block face is visible");
+        mesh.colors[index * 4..index * 4 + 4].try_into().unwrap()
+    }
+
+    fn level_platform(position: BlockPos, block: Block) -> World {
+        let mut world = World::new(7);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                for y in position.y - 1..=position.y {
+                    world
+                        .set_block(BlockPos::new(position.x + dx, y, position.z + dz), block)
+                        .unwrap();
+                }
+            }
+        }
+        world
+    }
+
+    #[test]
+    fn level_ground_keeps_uniform_top_colors_without_false_drop_edges() {
+        let position = BlockPos::new(2, MAX_Y - 4, 2);
+        for block in [
+            Block::Grass,
+            Block::Dirt,
+            Block::Stone,
+            Block::Sand,
+            Block::Snow,
+        ] {
+            let world = level_platform(position, block);
+            let mesh = chunk_geometry(&world, 0, 0).0;
+            let colors = rendered_face_colors(&mesh, position, [0, 1, 0]);
+            assert!(colors.iter().all(|color| *color == colors[0]));
+            let base = srgb_linear(if block == Block::Grass {
+                [0.36, 0.50, 0.36, 1.0]
+            } else {
+                block.color()
+            });
+            let variation = 0.98 + hash(position.x, position.y, position.z, world.seed) * 0.04;
+            assert!((colors[0][0] / base[0] - variation).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn descending_steps_have_top_edge_cues_in_all_four_directions() {
+        let position = BlockPos::new(2, MAX_Y - 4, 2);
+        let platform = level_platform(position, Block::Stone);
+        let flat_colors =
+            rendered_face_colors(&chunk_geometry(&platform, 0, 0).0, position, [0, 1, 0]);
+        let top_corners = FACES
+            .iter()
+            .find(|(normal, _)| *normal == [0, 1, 0])
+            .unwrap()
+            .1;
+        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let mut world = platform.clone();
+            let lowered = BlockPos::new(position.x + dx, position.y, position.z + dz);
+            world.set_block(lowered, Block::Air).unwrap();
+            assert_eq!(
+                world.block(BlockPos::new(lowered.x, lowered.y - 1, lowered.z)),
+                Block::Stone,
+                "the neighbor is a real one-cell descent"
+            );
+            let colors = rendered_face_colors(&chunk_geometry(&world, 0, 0).0, position, [0, 1, 0]);
+            for (index, corner) in top_corners.iter().enumerate() {
+                let borders_drop = (dx == 1 && corner[0] == 1.0)
+                    || (dx == -1 && corner[0] == 0.0)
+                    || (dz == 1 && corner[2] == 1.0)
+                    || (dz == -1 && corner[2] == 0.0);
+                let brightness = colors[index][0] / flat_colors[index][0];
+                if borders_drop {
+                    assert!(brightness < 0.85, "the downhill top edge is visibly darker");
+                } else {
+                    assert!(
+                        (brightness - 1.0).abs() < 0.001,
+                        "the opposite edge stays unchanged"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn top_drop_cues_follow_edits_across_negative_chunk_boundaries() {
+        let position = BlockPos::new(-1, MAX_Y - 4, -1);
+        let mut world = level_platform(position, Block::Stone);
+        let before = rendered_face_colors(&chunk_geometry(&world, -1, -1).0, position, [0, 1, 0]);
+        let neighbor = BlockPos::new(0, position.y, -1);
+        assert!(affected_chunks(neighbor).contains(&(-1, -1)));
+        world.set_block(neighbor, Block::Air).unwrap();
+        let after = rendered_face_colors(&chunk_geometry(&world, -1, -1).0, position, [0, 1, 0]);
+        assert!(after[1][0] < before[1][0] && after[2][0] < before[2][0]);
+        assert_eq!(after[0], before[0]);
+        assert_eq!(after[3], before[3]);
+        world.set_block(neighbor, Block::Stone).unwrap();
+        let restored = rendered_face_colors(&chunk_geometry(&world, -1, -1).0, position, [0, 1, 0]);
+        assert_eq!(restored, before);
+    }
+
+    #[test]
+    fn ground_side_contrast_is_axis_independent_and_excludes_foliage_and_glass() {
+        let position = BlockPos::new(2, MAX_Y - 4, 2);
+        for block in [
+            Block::Grass,
+            Block::Dirt,
+            Block::Stone,
+            Block::Sand,
+            Block::Snow,
+            Block::Wood,
+            Block::Leaves,
+            Block::Brick,
+            Block::Glass,
+        ] {
+            let mut world = World::new(7);
+            world.set_block(position, block).unwrap();
+            let geometry = chunk_geometry(&world, 0, 0);
+            let mesh = if block == Block::Glass {
+                &geometry.1
+            } else {
+                &geometry.0
+            };
+            let top = rendered_face_colors(mesh, position, [0, 1, 0]);
+            let side = rendered_face_colors(mesh, position, [1, 0, 0]);
+            for normal in [[-1, 0, 0], [0, 0, 1], [0, 0, -1]] {
+                assert_eq!(rendered_face_colors(mesh, position, normal), side);
+            }
+            if matches!(
+                block,
+                Block::Wood | Block::Leaves | Block::Brick | Block::Glass
+            ) {
+                assert_eq!(
+                    side, top,
+                    "decorative and transparent blocks keep their colors"
+                );
+            } else {
+                let brightness = |color: [f32; 4]| color[..3].iter().sum::<f32>();
+                assert!(brightness(side[0]) < brightness(top[0]));
+            }
+        }
     }
 
     #[test]
@@ -1766,7 +2145,7 @@ mod tests {
             let cells = lod_tree_cells(center);
             assert_eq!(cells, lod_tree_cells(center));
             assert!(
-                cells.len() < 4_700,
+                cells.len() < 10_000,
                 "candidate work is bounded before tree sampling"
             );
             let camera = Vec2::new(
@@ -1779,9 +2158,183 @@ mod tests {
                     (z as f32 + 0.5) * TREE_GRID_METERS,
                 );
                 assert!(position.distance(camera) <= LOD_TREE_DISTANCE + 0.1);
-                if position.distance(camera) > LOD_FULL_TREE_DISTANCE {
+                if position.distance(camera) > LOD_SIMPLE_TREE_DISTANCE {
+                    assert_eq!((x.rem_euclid(8), z.rem_euclid(8)), (0, 0));
+                } else if position.distance(camera) > LOD_FULL_TREE_DISTANCE {
                     assert_eq!((x.rem_euclid(4), z.rem_euclid(4)), (0, 0));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn far_crowns_retain_generated_extents_and_taper_with_a_small_mesh() {
+        for kind in [TreeKind::Broadleaf, TreeKind::Conifer, TreeKind::Scrub] {
+            let tree = GeneratedTree {
+                base: BlockPos::new(-30, 1000, 12),
+                trunk_height: if kind == TreeKind::Scrub { 5 } else { 20 },
+                kind,
+                crown_radius: if kind == TreeKind::Scrub { 2 } else { 4 },
+            };
+            let ground = 71.5;
+            let mut geometry = Geometry::default();
+            add_far_tree_proxy(
+                &mut geometry,
+                tree,
+                ground,
+                ProxyClip::Outside([0., 0., 1., 1.]),
+                kind.leaf_color(),
+            );
+            assert!(geometry.indices.len() / 3 <= 24);
+            let (bottom, top) = tree.leaf_bounds(0, 0).unwrap();
+            let min_y = geometry
+                .positions
+                .iter()
+                .map(|p| p[1])
+                .fold(f32::INFINITY, f32::min);
+            let max_y = geometry
+                .positions
+                .iter()
+                .map(|p| p[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert_eq!(min_y, ground + (bottom - tree.base.y) as f32 * CELL_SIZE);
+            assert_eq!(max_y, ground + (top + 1 - tree.base.y) as f32 * CELL_SIZE);
+            let center_x = (tree.base.x as f32 + 0.5) * CELL_SIZE;
+            let half_width = (tree.crown_radius as f32 + 0.5) * CELL_SIZE;
+            assert!(
+                geometry
+                    .positions
+                    .iter()
+                    .any(|p| p[0] == center_x - half_width)
+            );
+            assert!(
+                geometry
+                    .positions
+                    .iter()
+                    .any(|p| p[0] == center_x + half_width)
+            );
+            if kind == TreeKind::Conifer {
+                let tip_half_width = (tree.crown_radius / 2) as f32 * CELL_SIZE + CELL_SIZE * 0.5;
+                assert!(
+                    geometry
+                        .positions
+                        .iter()
+                        .filter(|p| p[1] == max_y)
+                        .all(|p| { (p[0] - center_x).abs() <= tip_half_width })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn distant_forests_render_real_crowns_beyond_the_former_kilometer_limit() {
+        let world = World::generate(42, WorldGeneration::GeographyV2);
+        let geo = world.geography().unwrap();
+        let peak = geo
+            .heights()
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            .unwrap()
+            .0;
+        let [peak_x, peak_z] = geo.grid_position(peak);
+        let centers = [
+            ("spawn", chunk_key(world.spawn_position())),
+            ("forest", chunk_key([-10_606., 0., -3_150.])),
+            ("peak", chunk_key([peak_x, 0., peak_z])),
+        ];
+        for (name, center) in centers {
+            let camera = Vec2::new(
+                (center.0 as f32 + 0.5) * CHUNK_METERS,
+                (center.1 as f32 + 0.5) * CHUNK_METERS,
+            );
+            let candidates = lod_tree_cells(center);
+            let actual = candidates
+                .iter()
+                .filter_map(|&(gx, gz)| world.tree_at(gx, gz))
+                .collect::<Vec<_>>();
+            let distant = actual
+                .iter()
+                .filter(|tree| {
+                    let x = (tree.base.x as f32 + 0.5) * CELL_SIZE;
+                    let z = (tree.base.z as f32 + 0.5) * CELL_SIZE;
+                    Vec2::new(x, z).distance(camera) > LOD_SIMPLE_TREE_DISTANCE + 32.0
+                })
+                .count();
+            let (land, water) = landscape_geometry(&world, center);
+            let triangles = (land.indices.len() + water.indices.len()) / 3;
+            eprintln!(
+                "{name}: {} candidates, {} actual trees, {distant} past 1km, {triangles} landscape triangles",
+                candidates.len(),
+                actual.len()
+            );
+            assert!(
+                triangles < 550_000,
+                "far surface and capped trees stay bounded"
+            );
+            if name == "forest" {
+                assert!(distant > 100, "generated forest has distant real trees");
+                let tiles = landscape_tiles(-2048, -2048, 4096, center);
+                let lookup = tiles.iter().map(|&(x, z, size)| ((x, z), size)).collect();
+                // Verify actual emitted foliage beyond 3km, including its
+                // grounding on the represented surface. A full near forest
+                // must not consume the outer-band budget.
+                let beyond_three_km = actual
+                    .iter()
+                    .filter(|tree| {
+                        let x = (tree.base.x as f32 + 0.5) * CELL_SIZE;
+                        let z = (tree.base.z as f32 + 0.5) * CELL_SIZE;
+                        Vec2::new(x, z).distance(camera) > 3_000.0
+                    })
+                    .collect::<Vec<_>>();
+                assert!(beyond_three_km.len() > 100);
+                let rendered_far_crown = beyond_three_km.into_iter().any(|tree| {
+                    let x = (tree.base.x as f32 + 0.5) * CELL_SIZE;
+                    let z = (tree.base.z as f32 + 0.5) * CELL_SIZE;
+                    let &(tx, tz, size) = tiles
+                        .iter()
+                        .find(|&&(tx, tz, size)| {
+                            x >= tx as f32 * CHUNK_METERS
+                                && x < (tx + size) as f32 * CHUNK_METERS
+                                && z >= tz as f32 * CHUNK_METERS
+                                && z < (tz + size) as f32 * CHUNK_METERS
+                        })
+                        .unwrap();
+                    let surface = surface_tile(
+                        geo,
+                        [
+                            tx as f32 * CHUNK_METERS,
+                            tz as f32 * CHUNK_METERS,
+                            size as f32 * CHUNK_METERS,
+                        ],
+                        8,
+                        neighbor_steps(&lookup, tx, tz, size),
+                        &mut Geometry::default(),
+                        &mut Geometry::default(),
+                    );
+                    let mut expected = Geometry::default();
+                    add_far_tree_proxy(
+                        &mut expected,
+                        *tree,
+                        surface.height_at(x, z),
+                        ProxyClip::Outside(local_bounds(center)),
+                        tree_leaf_color(&world, tree.kind),
+                    );
+                    let top_y = expected
+                        .positions
+                        .iter()
+                        .map(|p| p[1])
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    expected
+                        .positions
+                        .iter()
+                        .filter(|p| p[1] == top_y)
+                        .all(|vertex| land.positions.contains(vertex))
+                });
+                assert!(
+                    rendered_far_crown,
+                    "real distant forest remains visible beyond 3km on its represented ground"
+                );
             }
         }
     }
@@ -1933,11 +2486,15 @@ mod tests {
         let mut queue = bevy::ecs::world::CommandQueue::default();
         let mut meshes = Assets::<Mesh>::default();
         let mut materials = Assets::<StandardMaterial>::default();
+        let mut terrain_materials = Assets::<TerrainMaterial>::default();
+        let mut images = Assets::<Image>::default();
         let mut commands = Commands::new(&mut queue, &ecs);
         let mut scene = setup_terrain(
             &mut commands,
             &mut meshes,
             &mut materials,
+            &mut terrain_materials,
+            &mut images,
             &world,
             world.spawn_position(),
         );
@@ -2266,11 +2823,15 @@ mod tests {
         let mut queue = bevy::ecs::world::CommandQueue::default();
         let mut meshes = Assets::<Mesh>::default();
         let mut materials = Assets::<StandardMaterial>::default();
+        let mut terrain_materials = Assets::<TerrainMaterial>::default();
+        let mut images = Assets::<Image>::default();
         let mut commands = Commands::new(&mut queue, &ecs);
         let mut scene = setup_terrain(
             &mut commands,
             &mut meshes,
             &mut materials,
+            &mut terrain_materials,
+            &mut images,
             &world,
             world.spawn_position(),
         );

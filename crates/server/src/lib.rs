@@ -3,6 +3,7 @@
 
 mod npc;
 mod persistence;
+mod villages;
 
 pub use npc::berry_patch_positions;
 
@@ -52,7 +53,7 @@ impl Default for ServerConfig {
             bind_addr: "127.0.0.1:7878".into(),
             save_path: "saves/world.json".into(),
             seed: 42,
-            generation: WorldGeneration::GeographyV2,
+            generation: WorldGeneration::GeographyV3,
             allow_admin: false,
         }
     }
@@ -335,10 +336,13 @@ fn run(
             }
         }
         sim.npc.tick(&sim.world, DT);
+        sim.villages.tick(&sim.world, DT);
         sim.world_time += DT as f64;
         let state = ServerMessage::State {
             players: players(&connections),
             npc: sim.npc.snapshot.clone(),
+            residents: sim.villages.residents(),
+            villages: sim.villages.villages(),
             world_time: sim.world_time,
         };
         broadcast(&mut connections, &state);
@@ -449,6 +453,8 @@ fn handle_message(
             edits: sim.world.edits(),
             players: players(connections),
             npc: sim.npc.snapshot.clone(),
+            residents: sim.villages.residents(),
+            villages: sim.villages.villages(),
             world_time: sim.world_time,
             can_admin: config.allow_admin && mode == SessionMode::Player,
         };
@@ -553,7 +559,8 @@ fn handle_message(
                 players(connections)
                     .iter()
                     .map(|p| p.body.position)
-                    .chain(std::iter::once(sim.npc.snapshot.position)),
+                    .chain(std::iter::once(sim.npc.snapshot.position))
+                    .chain(sim.villages.positions()),
             );
             if let Err(reason) = result {
                 reject(connections, id, request_id, reason);

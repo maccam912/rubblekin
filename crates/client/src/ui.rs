@@ -116,9 +116,9 @@ pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, session
         Node { position_type: PositionType::Absolute, bottom: px(28), left: px(28), padding: UiRect::all(px(17)), flex_direction: FlexDirection::Column, row_gap: px(8), border_radius: BorderRadius::all(px(8)), ..default() },
         BackgroundColor(panel()), HelpPanel,
         children![
-            (Text::new(if observing { "OBSERVE THE VALLEY" } else { "MAKE YOURSELF AT HOME" }), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.90, 0.73, 0.42))),
+            (Text::new(if observing { "OBSERVE THE WORLD" } else { "MAKE YOURSELF AT HOME" }), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.90, 0.73, 0.42))),
             (Text::new(if observing {
-                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect forager     •     F2   graphics\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
+                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect village / forager     •     F2   graphics\nV   visit next village\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
                 "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nEsc   release mouse     •     H   hide controls\nF10   leave world / choose another server"
             }), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
@@ -236,6 +236,7 @@ pub fn setup_ui(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, session
 #[allow(clippy::type_complexity)]
 pub fn update_ui(
     session: Res<Session>,
+    world: Res<crate::VoxelWorld>,
     time: Res<Time>,
     mut refresh: Local<f32>,
     mut texts: ParamSet<(
@@ -269,8 +270,56 @@ pub fn update_ui(
         );
     }
     for mut text in &mut texts.p1() {
-        set_text(
-            &mut text,
+        let position = session
+            .observer
+            .as_ref()
+            .map_or(session.body.position, |camera| camera.position.to_array());
+        let village = world.0.settlements().and_then(|plan| {
+            plan.villages.iter().min_by(|a, b| {
+                let distance =
+                    |p: [f32; 3]| (p[0] - position[0]).powi(2) + (p[2] - position[2]).powi(2);
+                distance(a.center).total_cmp(&distance(b.center))
+            })
+        });
+        let value = if let Some(village) =
+            village.filter(|v| (v.center[0] - position[0]).hypot(v.center[2] - position[2]) < 300.0)
+        {
+            let stores = session.villages.iter().find(|v| v.id == village.id);
+            let resident = session
+                .residents
+                .iter()
+                .filter(|r| r.village_id == village.id)
+                .min_by(|a, b| {
+                    let d = |r: &rubblekin_core::protocol::ResidentSnapshot| {
+                        (r.position[0] - position[0]).powi(2)
+                            + (r.position[2] - position[2]).powi(2)
+                    };
+                    d(a).total_cmp(&d(b))
+                });
+            let mut value = format!(
+                "{}  ·  {:?}\n\nFreshwater  {:.0} m away\nLand  {:.0}% · Timber  {:.0}%\nStone {:.0}% · Clay {:.0}% · Iron {:.0}%",
+                village.name,
+                village.kind,
+                village.freshwater_distance,
+                village.resources.farming * 100.0,
+                village.resources.timber * 100.0,
+                village.resources.stone * 100.0,
+                village.resources.clay * 100.0,
+                village.resources.iron * 100.0
+            );
+            if let Some(s) = stores {
+                value.push_str(&format!("\n\n{} residents · housing for {}\nFood {:.0} · Timber {:.0}\nStone {:.0} · Clay {:.0} · Iron {:.0}\nCrop growth {:.0}%", s.population, s.housing_capacity, s.food, s.timber, s.stone, s.clay, s.iron, s.crop_growth * 100.0));
+            }
+            if let Some(r) = resident {
+                value.push_str(&format!(
+                    "\n\n{} · {}\n{}",
+                    r.name,
+                    r.role.label(),
+                    r.action.label()
+                ));
+            }
+            value
+        } else {
             format!(
                 "{}  ·  {}{}\n\nHunger   {:3.0} / 100\nEnergy    {:3.0} / 100\nBerries gathered   {}\n\n{}{}",
                 session.npc.name,
@@ -289,8 +338,9 @@ pub fn update_ui(
                 } else {
                     ""
                 }
-            ),
-        );
+            )
+        };
+        set_text(&mut text, value);
     }
     for mut text in &mut texts.p2() {
         let value = if time.elapsed_secs_f64() < session.status_until {

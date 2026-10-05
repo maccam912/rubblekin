@@ -1,10 +1,11 @@
 use crate::{
     physics::{Body, MoveInput},
+    settlement::ResourceKind,
     world::{Block, BlockEdit, BlockPos, WorldGeneration},
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -52,12 +53,20 @@ pub enum ServerMessage {
         edits: Vec<BlockEdit>,
         players: Vec<PlayerSnapshot>,
         npc: NpcSnapshot,
+        #[serde(default)]
+        residents: Vec<ResidentSnapshot>,
+        #[serde(default)]
+        villages: Vec<VillageSnapshot>,
         world_time: f64,
         can_admin: bool,
     },
     State {
         players: Vec<PlayerSnapshot>,
         npc: NpcSnapshot,
+        #[serde(default)]
+        residents: Vec<ResidentSnapshot>,
+        #[serde(default)]
+        villages: Vec<VillageSnapshot>,
         world_time: f64,
     },
     BlockChanged {
@@ -113,6 +122,83 @@ pub struct NpcSnapshot {
     pub berries: u32,
     pub forced: bool,
     pub target: Option<[f32; 3]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResidentRole {
+    Farmer,
+    Woodcutter,
+    Quarrier,
+    Miner,
+    Trader,
+}
+
+impl ResidentRole {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Farmer => "Farmer",
+            Self::Woodcutter => "Woodcutter",
+            Self::Quarrier => "Quarrier",
+            Self::Miner => "Miner",
+            Self::Trader => "Trader",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResidentAction {
+    Walking,
+    Working,
+    Delivering,
+    Trading,
+    Resting,
+    Blocked,
+}
+
+impl ResidentAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Walking => "Walking to work",
+            Self::Working => "Working",
+            Self::Delivering => "Delivering goods",
+            Self::Trading => "Trading",
+            Self::Resting => "Resting at home",
+            Self::Blocked => "Path blocked",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResourceCargo {
+    pub kind: ResourceKind,
+    pub amount: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResidentSnapshot {
+    pub id: u64,
+    pub village_id: u32,
+    pub name: String,
+    pub position: [f32; 3],
+    pub role: ResidentRole,
+    pub action: ResidentAction,
+    pub target: Option<[f32; 3]>,
+    pub carrying: Option<ResourceCargo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VillageSnapshot {
+    pub id: u32,
+    pub food: f32,
+    pub timber: f32,
+    pub stone: f32,
+    pub clay: f32,
+    pub iron: f32,
+    pub crop_growth: f32,
+    pub population: u32,
+    pub housing_capacity: u32,
+    pub food_reserve: f32,
+    pub capacity_for_growth: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

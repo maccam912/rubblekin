@@ -2,6 +2,7 @@
 //! public floating point positions and ray distances are in meters.
 
 use crate::geography::{Biome, Geography};
+use crate::settlement::{ConstructionColumn, ResourceKind, SettlementPlan};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -27,6 +28,7 @@ pub enum WorldGeneration {
     ValleyV1,
     GeographyV1,
     GeographyV2,
+    GeographyV3,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -42,6 +44,8 @@ pub enum Block {
     Brick,
     Glass,
     Snow,
+    Clay,
+    IronOre,
 }
 
 impl Block {
@@ -62,6 +66,8 @@ impl Block {
             Self::Brick => [0.62, 0.32, 0.23, 1.0],
             Self::Glass => [0.57, 0.78, 0.83, 1.0],
             Self::Snow => [0.87, 0.91, 0.94, 1.0],
+            Self::Clay => [0.64, 0.47, 0.34, 1.0],
+            Self::IronOre => [0.45, 0.34, 0.29, 1.0],
         }
     }
 
@@ -77,6 +83,8 @@ impl Block {
             Self::Brick => "Brick",
             Self::Glass => "Glass",
             Self::Snow => "Snow",
+            Self::Clay => "Clay",
+            Self::IronOre => "Iron ore",
         }
     }
 }
@@ -113,6 +121,7 @@ pub struct World {
     pub seed: u32,
     generation: WorldGeneration,
     geography: Option<Arc<Geography>>,
+    settlements: Option<Arc<SettlementPlan>>,
     geographic_columns: Arc<RwLock<HashMap<(i32, i32), GeographicColumn>>>,
     edited_columns: HashMap<(i32, i32), BTreeMap<i32, Block>>,
     heights: Vec<i32>,
@@ -128,6 +137,8 @@ struct GeographicColumn {
     surface: Block,
     wood: Option<(i32, i32)>,
     leaves: Option<(i32, i32)>,
+    construction: Option<ConstructionColumn>,
+    deposit: Option<(ResourceKind, i32, i32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +210,10 @@ impl GeographicColumn {
         self.height
             .max(self.wood.map_or(self.height, |(_, top)| top))
             .max(self.leaves.map_or(self.height, |(_, top)| top))
+            .max(
+                self.construction
+                    .map_or(self.height, |construction| construction.top),
+            )
     }
 
     fn vegetation(self, y: i32) -> Block {
@@ -224,6 +239,7 @@ impl World {
             seed,
             generation: WorldGeneration::ValleyV1,
             geography: None,
+            settlements: None,
             geographic_columns: Arc::new(RwLock::new(HashMap::new())),
             edited_columns: HashMap::new(),
             heights: vec![0; WIDTH * WIDTH],
@@ -246,25 +262,35 @@ impl World {
     }
 
     pub fn generate(seed: u32, generation: WorldGeneration) -> Self {
-        match generation {
-            WorldGeneration::ValleyV1 => Self::new(seed),
-            WorldGeneration::GeographyV1 | WorldGeneration::GeographyV2 => Self {
-                seed,
-                generation,
-                geography: Some(Arc::new(match generation {
-                    WorldGeneration::GeographyV1 => Geography::generate(seed),
-                    WorldGeneration::GeographyV2 => Geography::generate_v2(seed),
-                    WorldGeneration::ValleyV1 => unreachable!(),
-                })),
-                geographic_columns: Arc::new(RwLock::new(HashMap::new())),
-                edited_columns: HashMap::new(),
-                heights: Vec::new(),
-                surfaces: Vec::new(),
-                column_tops: Vec::new(),
-                trees: HashMap::new(),
-                overrides: HashMap::new(),
-            },
+        if generation == WorldGeneration::ValleyV1 {
+            return Self::new(seed);
         }
+        let geography = if generation == WorldGeneration::GeographyV1 {
+            Geography::generate(seed)
+        } else {
+            Geography::generate_v2(seed)
+        };
+        let mut world = Self {
+            seed,
+            generation,
+            geography: Some(Arc::new(geography)),
+            settlements: None,
+            geographic_columns: Arc::new(RwLock::new(HashMap::new())),
+            edited_columns: HashMap::new(),
+            heights: Vec::new(),
+            surfaces: Vec::new(),
+            column_tops: Vec::new(),
+            trees: HashMap::new(),
+            overrides: HashMap::new(),
+        };
+        if generation == WorldGeneration::GeographyV3 {
+            world.settlements = Some(Arc::new(SettlementPlan::generate(&world)));
+        }
+        world
+    }
+
+    pub fn settlements(&self) -> Option<&SettlementPlan> {
+        self.settlements.as_deref()
     }
 
     pub fn generation(&self) -> WorldGeneration {
@@ -471,7 +497,13 @@ impl World {
     }
 
     pub fn spawn_position(&self) -> [f32; 3] {
-        let anchor = self.geography().map_or([0.0; 3], Geography::spawn);
+        let anchor = self
+            .settlements()
+            .and_then(|plan| plan.villages.first())
+            .map_or_else(
+                || self.geography().map_or([0.0; 3], Geography::spawn),
+                |v| v.center,
+            );
         let center_x = (anchor[0] / CELL_SIZE).floor() as i32;
         let center_z = (anchor[2] / CELL_SIZE).floor() as i32;
         // A half-meter-wide character straddles neighboring columns. Account
@@ -642,6 +674,21 @@ impl World {
         }
         if self.geography.is_some() {
             let column = self.geographic_column(position.x, position.z).unwrap();
+            if let Some(block) = column
+                .construction
+                .and_then(|asset| asset.block(position.y))
+            {
+                return block;
+            }
+            if let Some((kind, low, high)) = column.deposit
+                && (low..=high).contains(&position.y)
+            {
+                return match kind {
+                    ResourceKind::Clay => Block::Clay,
+                    ResourceKind::Iron => Block::IronOre,
+                    _ => Block::Stone,
+                };
+            }
             if position.y > column.height {
                 return column.vegetation(position.y);
             }
@@ -744,8 +791,19 @@ impl World {
             surface,
             wood: None,
             leaves: None,
+            construction: None,
+            deposit: None,
         };
 
+        let mut cleared = false;
+        if let Some(plan) = self.settlements() {
+            let planned = plan.column(x, z, column.height, column.surface);
+            column.height = planned.height;
+            column.surface = planned.surface;
+            column.construction = planned.construction;
+            column.deposit = planned.deposit;
+            cleared = planned.clear;
+        }
         // Query only the tree owned by this twelve-meter square. Every crown
         // stays inside its square, including on negative coordinates.
         let grid_x = x.div_euclid(24);
@@ -753,7 +811,8 @@ impl World {
         let (_, tree_x, tree_z) = self.tree_anchor(grid_x, grid_z);
         let dx = x - tree_x;
         let dz = z - tree_z;
-        if dx * dx + dz * dz <= 24
+        if !cleared
+            && dx * dx + dz * dz <= 24
             && let Some(tree) = self.tree_at(grid_x, grid_z)
         {
             if dx == 0 && dz == 0 {
@@ -797,8 +856,17 @@ impl World {
         }
         let tree_mx = (tree_x as f32 + 0.5) * CELL_SIZE;
         let tree_mz = (tree_z as f32 + 0.5) * CELL_SIZE;
+        if self
+            .settlements()
+            .is_some_and(|plan| plan.clears_tree(tree_mx, tree_mz, 2.5))
+        {
+            return None;
+        }
         let sample = geography.sample(tree_mx, tree_mz);
-        let refined = self.generation == WorldGeneration::GeographyV2;
+        let refined = matches!(
+            self.generation,
+            WorldGeneration::GeographyV2 | WorldGeneration::GeographyV3
+        );
         let (density, kind) = match sample.biome {
             Biome::Forest => (75, TreeKind::Broadleaf),
             Biome::Rainforest => (95, TreeKind::Broadleaf),
@@ -910,7 +978,10 @@ fn column_index(x: i32, z: i32) -> Option<usize> {
 /// locations; the client draws their bushes and the server owns availability.
 pub fn berry_patch_positions(world: &World) -> Vec<[f32; 3]> {
     let center = world.geography().map_or([0.0; 3], |geography| {
-        let planned = geography.spawn();
+        let planned = world
+            .settlements()
+            .and_then(|plan| plan.villages.first())
+            .map_or_else(|| geography.spawn(), |v| v.center);
         [
             ((planned[0] / CELL_SIZE).floor() + 0.5) * CELL_SIZE,
             planned[1],

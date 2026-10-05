@@ -72,6 +72,8 @@ fn preserves_delta_for_mode(mode: SessionMode) {
                 forced: false,
                 target: Some([6.0, 2.5, 5.0]),
             },
+            residents: Vec::new(),
+            villages: Vec::new(),
             world_time: 0.0,
             can_admin: false,
         };

@@ -16,6 +16,12 @@
 !/artifacts/geography-ground.png
 !/artifacts/island-biomes-v2.png
 !/artifacts/island-detail-ground.png
+!/artifacts/terrain-readable-ground.png
+!/artifacts/distant-textured-forest.png
+!/artifacts/village-assets.svg
+!/artifacts/villages-map.png
+!/artifacts/villages-native.png
+!/artifacts/villages-overview.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

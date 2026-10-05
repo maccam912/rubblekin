@@ -25,7 +25,7 @@ On macOS, move **Rubblekin Launcher.app** to Applications. Bundles are ad-hoc si
 | Linux | `$XDG_DATA_HOME/rubblekin`, default `~/.local/share/rubblekin` |
 | macOS | `~/Library/Application Support/rubblekin` |
 
-New local islands use `game/saves/geography.json`; existing `game/saves/valley.json` worlds remain available with `--local --save saves/valley.json`. Both are retained through updates; screenshots use `game/artifacts`, and the latest client log is `logs/client.log`. Downloads use `clients/<target>/<commit>`, retaining the current and previous installed version for each architecture. Updates verify SHA-256, stage a complete installation, then atomically change the selected version. They do not modify saves. Existing checkout saves are not moved automatically; with the game stopped, copy one into `game/saves` and select it with `--save` if desired.
+New local village worlds use `game/saves/villages.json`; existing `game/saves/geography.json` and `game/saves/valley.json` worlds remain available with explicit `--save` paths. All are retained through updates; screenshots use `game/artifacts`, and the latest client log is `logs/client.log`. Downloads use `clients/<target>/<commit>`, retaining the current and previous installed version for each architecture. Updates verify SHA-256, stage a complete installation, then atomically change the selected version. They do not modify saves. Existing checkout saves are not moved automatically; with the game stopped, copy one into `game/saves` and select it with `--save` if desired.
 
 ```sh
 rubblekin-launcher --headless -- --low --connect rubblekin.oci.koski.co:7878
@@ -60,7 +60,7 @@ Use Rust/Cargo compatible with the workspace's Rust 1.95 minimum, then run from 
 cargo run --locked -p rubblekin_client
 ```
 
-The first build compiles Bevy and takes longer than subsequent launches. The client opens a join screen with `rubblekin.oci.koski.co:7878` as the default server address and a display name. Choose **Join server** to connect remotely or **Local world** to host at `127.0.0.1:7878` with the save `saves/geography.json`. New saves generate an island; an existing save retains its original generator and terrain. Names are guest display names, not authenticated accounts. Failed connections return an error on the screen so you can correct the address and retry.
+The first build compiles Bevy and takes longer than subsequent launches. The client opens a join screen with `rubblekin.oci.koski.co:7878` as the default server address and a display name. Choose **Join server** to connect remotely or **Local world** to host at `127.0.0.1:7878` with the save `saves/villages.json`. New saves generate an inhabited island; an existing save retains its original generator and terrain. Names are guest display names, not authenticated accounts. Failed connections return an error on the screen so you can correct the address and retry.
 
 Use `--local` to go straight into a local world, or `--connect HOST:PORT --name NAME` to connect immediately. Balanced graphics is the default; use `--low` for the least expensive preset. Click the game to capture the mouse; press Escape to release it. Press F10 to return to the join screen.
 
@@ -105,15 +105,31 @@ Export the actual generated geography as a shaded PPM map, with the spawn marked
 cargo run --locked -p rubblekin_core --example geography -- 42 /tmp/geography.ppm
 ```
 
-New islands use GeographyV2: visibly distinct meadows, broadleaf woods, pine forest, dry scrub, desert, wet forest, tundra, alpine rock, beaches, and snow. Pine trees have taller tiered crowns, scrub is low and sparse, and meadows have fewer trees. River water and its carved bed share a channel profile, avoiding elevated water walls at tributaries and dry banks. The nearby LOD has flat stepped ground with vertical faces; simplified blocky trees extend beyond the editable area with a bounded distance and mesh budget.
+New islands use GeographyV3, retaining GeographyV2 landforms and biomes: visibly distinct meadows, broadleaf woods, pine forest, dry scrub, desert, wet forest, tundra, alpine rock, beaches, and snow. Pine trees have taller tiered crowns, scrub is low and sparse, and meadows have fewer trees. River water and its carved bed share a channel profile, avoiding elevated water walls at tributaries and dry banks. The nearby LOD has flat stepped ground with vertical faces. Simplified blocky trees extend to 4 km; separate budgets retain up to 4,096 nearby proxies and 1,024 simpler distant crowns. A 1 MiB land-color map preserves generated biome and approximate canopy patches farther away, while shared world-aligned pixel grain gives both nearby blocks and coarse terrain surface detail.
 
-Existing islands retain GeographyV1, including their saved edits and terrain. To try the revised generator without replacing an existing world:
+Existing islands retain GeographyV1 or GeographyV2, including their saved edits and terrain. Villages and resources are added only to new GeographyV3 worlds; existing worlds are not silently converted. To try the revised generator without replacing an existing world:
 
 ```sh
 cargo run --locked -p rubblekin_client -- --local --observe --save saves/detailed-island.json
 ```
 
-Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Individual edits appear only in the nearby detailed area; very distant terrain still uses a coarse surface, and distant vegetation is simplified and thinned. Airships, gliders, roads, settlements, and an in-game world map are future work. Representative integrated-graphics measurements remain necessary. The [revised ground view](artifacts/island-detail-ground.png) and [biome map](artifacts/island-biomes-v2.png) show the current client rendering and actual generated climate regions.
+Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Individual edits appear only in the nearby detailed area; very distant terrain still uses a coarse surface, and distant vegetation is simplified and thinned. Airships, gliders, and an in-game world map remain future work. Villages and trails are now generated in GeographyV3; live physical settlement expansion remains future work. Representative integrated-graphics measurements remain necessary. The [textured ground view](artifacts/terrain-readable-ground.png), [distant forest view](artifacts/distant-textured-forest.png), and [biome map](artifacts/island-biomes-v2.png) show the current client rendering and actual generated climate regions.
+
+## Villages, resources, and residents
+
+New local play uses `saves/villages.json`. The geography-first generator places a bounded network of established villages on dry, gentle land near reachable freshwater. Farming suitability, actual generated trees, and stone/clay/iron deposits contribute to scores over terrain-accessible catchments. Placement balances useful opportunities and spacing; the existing island and mountain landforms remain intact. Terrain-following dirt trails connect feasible sites; shallow wet crossings use fords or graded wooden causeways. Static water can overlap a few road surfaces by up to 0.20 m. Voxel cottages, storehouses, workshops, market stalls, and soil plots remain editable.
+
+Each village starts with six residents and seeded stores; no chronological founding history is simulated. Farmers work fields, mature crops, and carry harvests to stores. Actual planted soil controls growth and yield; removing all planted soil destroys crop maturity. Other workers draw from bounded resource reserves, and traders carry actual surplus between villages while retaining food reserves. Stores, crop cycles, resident routes/positions, cargo, and remaining reserves persist across restart and progress while the server runs with no clients. Resource reserves are a numerical estimate of accessible supply; working a deposit does not yet remove its visible ore blocks or fell its trees. Growth capacity is reported, but new residents/buildings are not yet created. There is no currency, player harvest/trade menu, or replay of server downtime.
+
+The [village map](artifacts/villages-map.png) plots the actual seed-42 plan and resource scores; the [asset catalog](artifacts/village-assets.svg) shows the generated voxel geometry. The [native village view](artifacts/villages-native.png) shows the running client. The nearby inspector shows the village's scores, water distance, stores, growth, and a resident's current activity. In read-only observer mode, press **V** to visit the next village; **R/Home** returns to spawn.
+
+```sh
+cargo run --locked -p rubblekin_client -- --local --observe --save saves/villages.json
+cargo run --locked -p rubblekin_core --example settlements -- 42 /tmp/villages.json
+cargo run --locked -p rubblekin_core --example village_asset_catalog -- /tmp/village-assets.svg
+```
+
+Existing saves remain available with `--save saves/geography.json` or `--save saves/valley.json`. Protocol v6 requires rebuilt matching clients and servers. This source update does not itself update the public test server.
 
 ## Controls
 
@@ -128,7 +144,7 @@ Current limits: drainage follows eight directions on the 64 m grid; water is sta
 | Ctrl + hold mouse button | Repeat digging or building. |
 | 1–6 | Grass, earth, stone, wood, brick, glass. |
 | F; Q / E | Toggle creative flight; descend / ascend. |
-| Tab | Show or hide Moss's needs, chosen action, reason, and target. |
+| Tab | Show or hide the nearby village/resident inspector, or Moss's inspector elsewhere. |
 | F2 | Cycle Low → Balanced → High → Low graphics. |
 | H | Show or hide the controls panel. |
 | F10 | Disconnect and return to the join screen. |
@@ -156,15 +172,15 @@ cargo run --locked -p rubblekin_client -- --connect 127.0.0.1:7878 --observe
 
 Observer sessions require an admin-enabled server (`--allow-admin` on dedicated hosting). Local hosting enables this; the public test server has it disabled. The existing admin setting applies to everyone who can connect, so it is not per-user authentication.
 
-The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed. Tab shows Moss's inspector, F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
+The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed; **V** visits the next village in GeographyV3. Tab toggles the nearby village/resident inspector or Moss's inspector elsewhere, F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
 
 Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. In geographic worlds, nearby detailed terrain follows the camera and distant landforms cover the full 32.768 km region. The old 160 × 160 m valley renderer remains available for legacy saves.
 
-The geography handshake uses **protocol v5**. Rebuild/restart both client and server together. Save version 2 records the terrain generator; original version-1 valley saves load with their original terrain and upgrade their metadata on the next save.
+The geography handshake uses **protocol v6**. Rebuild/restart both client and server together. Save version 3 records the terrain generator and village residents/stores. Original version-1 valleys and version-2 worlds load with their original terrain and upgrade save metadata without changing their generator.
 
 ## Graphics
 
-All presets include terrain corner shading to give blocks and recesses more depth. Press F2 to change quality while playing, or select a preset at startup:
+All presets include terrain corner shading, darker ground sides, and a subtle top-edge cue at actual drops, so descending steps remain visible without sun shadows. Flat ground has no added edge outlines. World-aligned pixel grain becomes coarser with distance and fades below pixel size; the embedded shader requires no separate downloaded texture assets. Press F2 to change quality while playing, or select a preset at startup:
 
 | Preset | Startup option | Shadows and antialiasing |
 | --- | --- | --- |
@@ -204,7 +220,7 @@ Only one process can own a save file. Stop an auto-host before starting a dedica
 
 Accepted edits are saved before the server acknowledges them. The server writes a temporary file beside the save, syncs it, and atomically replaces the previous save. An OS lock on a sidecar file prevents concurrent writers. NPC state and simulation time are checkpointed every five seconds and on orderly shutdown. Corrupt or unsupported saves fail visibly and are left intact.
 
-There is no downtime catch-up: simulation advances while the server runs, even with zero players, and resumes from saved time after a restart. The save records its terrain-generation version. Version-1 valley saves keep the original terrain when read and are written as version 2 with an explicit ValleyV1 generator. New islands use GeographyV2; existing GeographyV1 islands keep their original terrain; a new client does not turn an existing valley into an island. Unknown save/generation versions fail visibly. Use a fresh save path to explore new geography.
+There is no downtime catch-up: simulation advances while the server runs, even with zero players, and resumes from saved time after a restart. The save records its terrain-generation version. Version-1 valley saves keep the original terrain when read and are written as version 3 with an explicit ValleyV1 generator. New islands use GeographyV3; existing GeographyV1/V2 islands keep their original terrain; a new client does not turn an existing valley into an island. Unknown save/generation versions fail visibly. Use a fresh save path to explore new geography.
 
 [Dockerfile](Dockerfile) tests and builds only the headless server; it excludes the renderer and game assets. The runtime runs as UID/GID 10001. [deploy/kubernetes.yaml](deploy/kubernetes.yaml) provides one replica, a 1 GiB persistent volume claim, a `Recreate` rollout strategy, startup/readiness probes, `imagePullPolicy: Always`, and a private `ClusterIP` service. Review storage settings before using this standalone template.
 
@@ -256,7 +272,7 @@ For a block edit, read these in order:
 
 Transport is newline-delimited JSON over nonblocking TCP. There is no generic message bus or automatic ECS replication. The headless server currently uses a small standard-library loop; Bevy ECS can be introduced when the simulation earns that complexity. This transport and full-world snapshot approach are prototype choices, not a global-scale networking design.
 
-Movement predicts each frame locally and sends the same numbered input and duration to the server. Server snapshots acknowledge completed inputs; [prediction.rs](crates/client/src/prediction.rs) replays newer inputs so delayed snapshots do not pull the player backward on release or step climbing. The server validates movement time, and prediction history is bounded. Protocol v5 requires matching client/server builds: restart both after updating. Existing valley saves remain compatible through the explicit legacy generator.
+Movement predicts each frame locally and sends the same numbered input and duration to the server. Server snapshots acknowledge completed inputs; [prediction.rs](crates/client/src/prediction.rs) replays newer inputs so delayed snapshots do not pull the player backward on release or step climbing. The server validates movement time, and prediction history is bounded. Protocol v6 requires matching client/server builds: restart both after updating. Existing valley saves remain compatible through the explicit legacy generator.
 
 ## Verify changes
 
@@ -266,9 +282,9 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Tests include real localhost sockets, so the test environment must permit local networking. All 104 ordinary tests pass locally on macOS: 29 core, 38 client, 25 server, and 12 launcher. The existing native package integration test remains opt-in; it previously verified a real client ZIP download, installation, bundle signature, and child process startup. Release-tooling Python tests were verified during the earlier release work and were not rerun for this terrain change.
+Tests include real localhost sockets, so the test environment must permit local networking. All 134 ordinary tests pass locally on macOS: 40 core, 48 client, 34 server, and 12 launcher. The existing native package integration test remains opt-in; it previously verified a real client ZIP download, installation, bundle signature, and child process startup. Release-tooling Python tests were verified during the earlier release work and were not rerun for this village change.
 
-Geography regressions cover the actual raised-water junction, sampled channel banks, unchanged V1 landforms, substantial V2 biome regions, shared tree shapes, dry spawn, drainage, distant collision/edits, legacy-save compatibility, and retained generation identity after restart. Renderer checks cover bounded streaming/triangles, immediate trees in pending chunks, foliage colors at biome boundaries, stale edit jobs, deep cuts, distant edge alignment, terrace wall winding, and actual water/voxel placement. Existing tests cover joining, movement reconciliation, observer permissions, multiplayer replication, NPCs, persistence, and graceful shutdown. Workspace Clippy with warnings denied, formatting, and the locked offline native build pass. The revised native macOS ground view was inspected; long-distance flight feel and lower-end performance remain unverified. The [Linux/Windows/macOS CI matrix](.github/workflows/ci.yml) and client release workflow check pushed changes.
+Geography regressions cover the actual raised-water junction, sampled channel banks, unchanged V1 landforms, substantial V2 biome regions, shared tree shapes, dry spawn, drainage, distant collision/edits, legacy-save compatibility, and retained generation identity after restart. Renderer checks cover bounded streaming/triangles, immediate trees in pending chunks, foliage colors at biome boundaries, stale edit jobs, deep cuts, distant edge alignment, terrace wall winding, and actual water/voxel placement. Existing tests cover joining, movement reconciliation, observer permissions, multiplayer replication, NPCs, persistence, and graceful shutdown. Workspace Clippy with warnings denied, formatting, and the locked offline native build pass. Village regressions cover resource-based placement, deterministic and legacy terrain, editable deposits/buildings, physical resident roundtrips on three seeds, every seed-42 trail in both directions, soil-dependent crops, real cargo conservation, blocked work, and village replication/persistence without connected players. Native macOS village views and observer visits were inspected; long-distance flight feel and lower-end performance remain unverified. The [Linux/Windows/macOS CI matrix](.github/workflows/ci.yml) and client release workflow check pushed changes.
 
 Capture a reproducible initial scene:
 
@@ -281,11 +297,11 @@ cargo run --locked -p rubblekin_client -- --local --screenshot artifacts/geograp
 ## Current limits and next feedback
 
 - **World:** new islands span 32.768 km with 50 cm editable cells and bounded local detail. Distant terrain reflects generated geography; remote edits appear only in the nearby voxel region; simplified trees extend into the LOD. Legacy 160 m valleys keep their original terrain.
-- **Simulation:** one forager, three renewable logical berry patches, and tunable needs. Berry shrubs and water are decorative; there is no plant lifecycle, fluid simulation, settlement economy, or pathfinding around complex structures yet.
+- **Simulation:** Moss retains the original foraging loop. GeographyV3 adds up to 60 village residents, shared crop growth, stores, finite extraction reserves, and physical deliveries/trade. Generated routes are fixed; player-built obstructions can block residents. Live settlement expansion, prices/currency, player farming/trade interactions, individual plant lifecycles, and flowing water remain future work.
 - **Building and ownership:** all players have unlimited materials and cooperative edit access. Claims and configurable offline property protection remain planned; no protection system is implemented. Moss does not destroy player structures.
 - **Networking:** 32 connection cap and 100,000 edited-cell cap are defensive prototype limits. There are no accounts, transport encryption, hostile-client load tests, or public-server readiness claims. Slow or malformed peers are disconnected.
 - **Compatibility and performance:** native macOS playtests exercised building/removal, NPC override/clear, a [second connected client](artifacts/two-client.png), and [restoring the edits after restarting](artifacts/restarted-world.png). The October 4 graphics playtest verified the full live Balanced → High → Low → Balanced cycle, nearby player/tree shadows, and the Low fallback; brief foreground HUD observations reached around 120 fps on an Apple M5 Pro. Focus and capture interruptions make these unsuitable for a frame-time comparison. Earlier October 3 samples at 1440 × 900 showed about 119–125 fps on the old low preset and 93–120 fps on the old high preset, with scene construction around 0.16–0.23 seconds. These are separate observations on a strong machine, not controlled benchmarks or a measured before/after speed comparison. Windows, Linux, the children's computers, representative integrated graphics, and performance during extensive building remain untested.
 
-The next useful feedback is on mountain and valley scale, river and lake appearance, biome variety, terrain transitions during travel, movement/camera feel, and whether Moss's actions are understandable. See [DESIGN.md](DESIGN.md) for the wider ambitions and unresolved choices.
+The next useful feedback is on village placement and appearance, visible resident work and trails, the first player farming/trade interaction, mountain and valley scale, and movement/camera feel. See [DESIGN.md](DESIGN.md) for the wider ambitions and unresolved choices.
 
 The bundled Atkinson Hyperlegible font is distributed under its [SIL Open Font License](assets/fonts/OFL.txt).

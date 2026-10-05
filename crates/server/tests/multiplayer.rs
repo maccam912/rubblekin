@@ -148,6 +148,136 @@ fn geography_v2_replicates_edits_and_preserves_its_generator_across_restart() {
     assert_geographic_world_restart(WorldGeneration::GeographyV2);
 }
 
+#[test]
+fn village_people_and_economy_replicate_simulate_idle_and_survive_restart() {
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV3;
+    let server = spawn(config.clone()).unwrap();
+    let (mut first, welcome) =
+        Client::connect_mode(server.addr, "Village observer", SessionMode::Observer);
+    let (initial_residents, initial_villages, started) = match welcome {
+        ServerMessage::Welcome {
+            generation,
+            residents,
+            villages,
+            world_time,
+            ..
+        } => {
+            assert_eq!(generation, WorldGeneration::GeographyV3);
+            assert!(!villages.is_empty());
+            assert_eq!(
+                residents.len(),
+                villages
+                    .iter()
+                    .map(|v| v.population as usize)
+                    .sum::<usize>()
+            );
+            assert!(residents.len() <= 60);
+            (residents, villages, world_time)
+        }
+        _ => unreachable!(),
+    };
+    let (mut second, welcome) =
+        Client::connect_mode(server.addr, "Second observer", SessionMode::Observer);
+    assert!(
+        matches!(welcome, ServerMessage::Welcome { residents, villages, .. }
+        if residents.iter().map(|r| r.id).collect::<Vec<_>>() == initial_residents.iter().map(|r| r.id).collect::<Vec<_>>()
+        && villages.iter().map(|v| v.id).collect::<Vec<_>>() == initial_villages.iter().map(|v| v.id).collect::<Vec<_>>())
+    );
+    for client in [&mut first, &mut second] {
+        let state = client.until(|message| matches!(message, ServerMessage::State { residents, world_time, .. }
+            if *world_time > started + 0.1 && residents.iter().zip(&initial_residents).any(|(a,b)| a.position != b.position)));
+        assert!(serde_json::to_vec(&state).unwrap().len() < MAX_MESSAGE_BYTES);
+    }
+    drop(first);
+    drop(second);
+    // Observe durable progress with zero clients, instead of assuming a fixed
+    // wall-clock sleep always corresponds to a fixed simulation duration.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+        let progressed = value["world_time"].as_f64().unwrap() > started + 0.2
+            && value["villages"]["villages"][0]["snapshot"]["crop_growth"]
+                .as_f64()
+                .unwrap()
+                > initial_villages[0].crop_growth as f64
+            && value["villages"]["residents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(&initial_residents)
+                .any(|(resident, initial)| {
+                    serde_json::from_value::<ResidentSnapshot>(resident["snapshot"].clone())
+                        .unwrap()
+                        .position
+                        != initial.position
+                });
+        if progressed {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Village residents/economy did not progress in the idle autosave"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    server.stop().unwrap();
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    let saved_villages = value["villages"]["villages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| serde_json::from_value::<VillageSnapshot>(v["snapshot"].clone()).unwrap())
+        .collect::<Vec<_>>();
+    let saved_residents = value["villages"]["residents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| serde_json::from_value::<ResidentSnapshot>(r["snapshot"].clone()).unwrap())
+        .collect::<Vec<_>>();
+    config.seed = 999;
+    config.generation = WorldGeneration::ValleyV1;
+    let restarted = spawn(config).unwrap();
+    let (_observer, welcome) =
+        Client::connect_mode(restarted.addr, "Returned observer", SessionMode::Observer);
+    match welcome {
+        ServerMessage::Welcome {
+            generation,
+            seed,
+            residents,
+            villages,
+            world_time,
+            ..
+        } => {
+            assert_eq!(generation, WorldGeneration::GeographyV3);
+            assert_eq!(seed, 42);
+            assert!(world_time >= value["world_time"].as_f64().unwrap());
+            for (current, saved) in residents.iter().zip(&saved_residents) {
+                assert_eq!(current.id, saved.id);
+                assert_eq!(current.role, saved.role);
+                assert!(
+                    current
+                        .position
+                        .iter()
+                        .zip(saved.position)
+                        .all(|(a, b)| (a - b).abs() < 1.0)
+                );
+            }
+            for (current, saved) in villages.iter().zip(&saved_villages) {
+                assert_eq!(current.id, saved.id);
+                assert_eq!(current.population, saved.population);
+                assert!((current.food - saved.food).abs() < 1.0);
+                assert!((current.crop_growth - saved.crop_growth).abs() < 0.02);
+            }
+        }
+        _ => unreachable!(),
+    }
+    restarted.stop().unwrap();
+}
+
 fn assert_geographic_world_restart(world_generation: WorldGeneration) {
     let save = TestSave::new();
     let mut config = save.config(true);
@@ -230,7 +360,7 @@ fn assert_geographic_world_restart(world_generation: WorldGeneration) {
     config.generation = match world_generation {
         WorldGeneration::GeographyV1 => WorldGeneration::GeographyV2,
         WorldGeneration::GeographyV2 => WorldGeneration::ValleyV1,
-        WorldGeneration::ValleyV1 => unreachable!(),
+        WorldGeneration::ValleyV1 | WorldGeneration::GeographyV3 => unreachable!(),
     };
     config.seed = 999;
     let restarted = spawn(config).unwrap();

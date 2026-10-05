@@ -408,6 +408,8 @@ fn session_from_welcome(
         edits,
         players,
         npc,
+        residents,
+        villages,
         world_time,
         can_admin,
     } = welcome
@@ -464,6 +466,8 @@ fn session_from_welcome(
             help: true,
             graphics,
             npc,
+            residents,
+            villages,
             players,
             world_time,
             status: status.into(),
@@ -591,6 +595,8 @@ mod tests {
                 forced: false,
                 target: None,
             },
+            residents: Vec::new(),
+            villages: Vec::new(),
             world_time: 0.0,
             can_admin: false,
         }

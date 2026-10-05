@@ -1,3 +1,4 @@
+mod crops;
 mod follow_camera;
 mod graphics;
 mod join;
@@ -5,6 +6,8 @@ mod network;
 mod observer;
 mod prediction;
 mod terrain;
+mod terrain_albedo;
+mod terrain_material;
 mod ui;
 
 use bevy::{
@@ -58,6 +61,8 @@ pub struct Session {
     pub help: bool,
     pub graphics: GraphicsQuality,
     pub npc: NpcSnapshot,
+    pub residents: Vec<ResidentSnapshot>,
+    pub villages: Vec<VillageSnapshot>,
     pub players: Vec<PlayerSnapshot>,
     pub world_time: f64,
     pub status: String,
@@ -76,6 +81,7 @@ pub struct Session {
 struct Avatars {
     players: HashMap<u64, Entity>,
     npc: Option<Entity>,
+    residents: HashMap<u64, Entity>,
 }
 #[derive(Component)]
 struct GameEntity;
@@ -85,6 +91,8 @@ struct GameCamera;
 struct Avatar;
 #[derive(Component)]
 struct GroundShadow;
+#[derive(Component)]
+struct CarriedGoods;
 #[derive(Component)]
 struct Limb {
     phase: f32,
@@ -148,7 +156,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = GraphicsQuality::High,
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/geography.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return\nEscape release cursor | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nEscape release cursor | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -180,9 +188,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             bind_addr: options.bind.unwrap_or_else(|| "127.0.0.1:7878".into()),
             save_path: options
                 .save
-                .unwrap_or_else(|| PathBuf::from("saves/geography.json")),
+                .unwrap_or_else(|| PathBuf::from("saves/villages.json")),
             seed: options.seed.unwrap_or(42),
-            generation: rubblekin_core::world::WorldGeneration::GeographyV2,
+            generation: rubblekin_core::world::WorldGeneration::GeographyV3,
             allow_admin: true,
         },
         options.graphics,
@@ -229,6 +237,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             ..default()
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(terrain_material::TerrainMaterialPlugin)
         .add_message::<join::MenuKey>()
         .add_systems(Startup, join::setup)
         .add_systems(
@@ -245,6 +254,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     terrain::stream_terrain,
                     edit_blocks,
                     update_avatars,
+                    crops::update_crops,
                     ui::update_ui,
                     join::leave_world,
                 )
@@ -265,14 +275,23 @@ fn setup(
     session: Res<Session>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut terrain_materials: ResMut<Assets<terrain_material::TerrainMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let start = std::time::Instant::now();
     let center = session
         .observer
         .as_ref()
         .map_or(session.body.position, |camera| camera.position.to_array());
-    let terrain =
-        terrain::setup_terrain(&mut commands, &mut meshes, &mut materials, &world.0, center);
+    let terrain = terrain::setup_terrain(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut terrain_materials,
+        &mut images,
+        &world.0,
+        center,
+    );
     commands.insert_resource(terrain);
     info!("Terrain generated in {:.2}s", start.elapsed().as_secs_f32());
     commands.spawn((
@@ -344,6 +363,8 @@ fn receive_network(
             ServerMessage::State {
                 players,
                 npc,
+                residents,
+                villages,
                 world_time,
             } => {
                 if session.observer.is_none()
@@ -354,6 +375,8 @@ fn receive_network(
                 }
                 session.players = players;
                 session.npc = npc;
+                session.residents = residents;
+                session.villages = villages;
                 session.world_time = world_time;
             }
             ServerMessage::BlockChanged { edit, .. } => {
@@ -465,6 +488,38 @@ fn controls(
         session.observer = Some(ObserverCamera::new(world.0.spawn_position()));
         session.yaw = -0.45;
         session.pitch = 0.12;
+    }
+    if observing
+        && window.focused
+        && keys.just_pressed(KeyCode::KeyV)
+        && let Some(plan) = world.0.settlements()
+        && !plan.villages.is_empty()
+    {
+        let camera = session.observer.as_ref().unwrap().position;
+        let nearest = plan
+            .villages
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                Vec3::from_array(a.center)
+                    .distance_squared(camera)
+                    .total_cmp(&Vec3::from_array(b.center).distance_squared(camera))
+            })
+            .map_or(0, |(index, _)| index);
+        let village = &plan.villages[(nearest + 1) % plan.villages.len()];
+        let center = Vec3::from_array(village.center);
+        let mut observer = ObserverCamera::new(village.center);
+        // Keep the streaming square centered on the village while showing its
+        // buildings and cultivated outskirts together.
+        observer.position = center + Vec3::new(0.0, 75.0, 8.0);
+        session.observer = Some(observer);
+        session.yaw = 0.0;
+        session.pitch = 1.43;
+        session.status = format!(
+            "{} · {:?} · freshwater {:.0}m · V visits next village",
+            village.name, village.kind, village.freshwater_distance
+        );
+        session.status_until = time.elapsed_secs_f64() + 8.0;
     }
     if keys.just_pressed(KeyCode::Tab) {
         session.inspector = !session.inspector;
@@ -684,12 +739,26 @@ fn character(
     materials: &mut Assets<StandardMaterial>,
     npc: bool,
 ) -> Entity {
+    character_with_role(commands, meshes, materials, npc, None)
+}
+
+fn character_with_role(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    npc: bool,
+    role: Option<ResidentRole>,
+) -> Entity {
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let skin = materials.add(Color::srgb(0.79, 0.56, 0.36));
-    let cloth = materials.add(if npc {
-        Color::srgb(0.74, 0.42, 0.18)
-    } else {
-        Color::srgb(0.20, 0.43, 0.47)
+    let cloth = materials.add(match role {
+        Some(ResidentRole::Farmer) => Color::srgb(0.47, 0.58, 0.25),
+        Some(ResidentRole::Woodcutter) => Color::srgb(0.69, 0.36, 0.20),
+        Some(ResidentRole::Quarrier) => Color::srgb(0.43, 0.47, 0.54),
+        Some(ResidentRole::Miner) => Color::srgb(0.31, 0.37, 0.46),
+        Some(ResidentRole::Trader) => Color::srgb(0.56, 0.33, 0.49),
+        None if npc => Color::srgb(0.74, 0.42, 0.18),
+        None => Color::srgb(0.20, 0.43, 0.47),
     });
     let boots = materials.add(Color::srgb(0.20, 0.19, 0.17));
     let hair = materials.add(Color::srgb(0.22, 0.15, 0.11));
@@ -715,6 +784,26 @@ fn character(
         ))
         .id();
     commands.entity(id).with_children(|parent| {
+        if let Some(role) = role {
+            let cap = materials.add(match role {
+                ResidentRole::Farmer => Color::srgb(0.78, 0.66, 0.37),
+                ResidentRole::Woodcutter => Color::srgb(0.24, 0.35, 0.24),
+                ResidentRole::Trader => Color::srgb(0.53, 0.31, 0.44),
+                _ => Color::srgb(0.37, 0.41, 0.46),
+            });
+            parent.spawn((
+                Mesh3d(cube.clone()),
+                MeshMaterial3d(cap),
+                Transform::from_xyz(0.0, 1.79, 0.0).with_scale(Vec3::new(0.52, 0.13, 0.48)),
+            ));
+            parent.spawn((
+                Mesh3d(cube.clone()),
+                MeshMaterial3d(boots.clone()),
+                Transform::from_xyz(0.0, 0.91, -0.40).with_scale(Vec3::splat(0.35)),
+                Visibility::Hidden,
+                CarriedGoods,
+            ));
+        }
         parent.spawn((
             Mesh3d(shadow_mesh),
             MeshMaterial3d(shadow_material),
@@ -787,14 +876,15 @@ fn character(
     id
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update_avatars(
     mut commands: Commands,
     session: Res<Session>,
     mut avatars: ResMut<Avatars>,
     mut transforms: Query<&mut Transform, With<Avatar>>,
     mut limbs: Query<(&mut Transform, &Limb, &ChildOf), Without<Avatar>>,
-    mut shadows: Query<(&mut Visibility, &ChildOf), With<GroundShadow>>,
+    mut shadows: Query<(&mut Visibility, &ChildOf), (With<GroundShadow>, Without<CarriedGoods>)>,
+    mut cargo: Query<(&mut Visibility, &ChildOf), (With<CarriedGoods>, Without<GroundShadow>)>,
     world: Res<VoxelWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -846,9 +936,69 @@ fn update_avatars(
             }
         }
     }
+    let resident_ids: Vec<_> = session.residents.iter().map(|r| r.id).collect();
+    avatars.residents.retain(|id, entity| {
+        if !resident_ids.contains(id) {
+            commands.entity(*entity).despawn();
+            false
+        } else {
+            true
+        }
+    });
+    for resident in &session.residents {
+        let desired = Vec3::from_array(resident.position);
+        let entity = *avatars.residents.entry(resident.id).or_insert_with(|| {
+            let entity = character_with_role(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                true,
+                Some(resident.role),
+            );
+            commands
+                .entity(entity)
+                .insert(Transform::from_translation(desired));
+            entity
+        });
+        if let Ok(mut transform) = transforms.get_mut(entity) {
+            if transform.translation.distance_squared(desired) > 64.0 {
+                transform.translation = desired;
+            } else {
+                transform.translation = transform
+                    .translation
+                    .lerp(desired, (time.delta_secs() * 12.0).min(1.0));
+            }
+            if let Some(target) = resident.target {
+                let delta = Vec3::from_array(target) - transform.translation;
+                if delta.x * delta.x + delta.z * delta.z > 0.03 {
+                    transform.rotation = Quat::from_rotation_y((-delta.x).atan2(-delta.z));
+                }
+            }
+        }
+    }
+    for (mut visibility, parent) in &mut cargo {
+        *visibility =
+            if session.residents.iter().any(|r| {
+                avatars.residents.get(&r.id) == Some(&parent.parent()) && r.carrying.is_some()
+            }) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+    }
     for (mut visibility, parent) in &mut shadows {
         let grounded = if Some(parent.parent()) == avatars.npc {
             let p = session.npc.position;
+            world
+                .0
+                .raycast([p[0], p[1] + 0.05, p[2]], [0.0, -1.0, 0.0], 0.15)
+                .is_some()
+        } else if let Some(resident) = session
+            .residents
+            .iter()
+            .find(|r| avatars.residents.get(&r.id) == Some(&parent.parent()))
+        {
+            let p = resident.position;
             world
                 .0
                 .raycast([p[0], p[1] + 0.05, p[2]], [0.0, -1.0, 0.0], 0.15)
@@ -875,6 +1025,15 @@ fn update_avatars(
     for (mut transform, limb, parent) in &mut limbs {
         let moving = if Some(parent.parent()) == avatars.npc {
             session.npc.action != NpcAction::Rest && session.npc.target.is_some()
+        } else if let Some(resident) = session
+            .residents
+            .iter()
+            .find(|r| avatars.residents.get(&r.id) == Some(&parent.parent()))
+        {
+            matches!(
+                resident.action,
+                ResidentAction::Walking | ResidentAction::Delivering | ResidentAction::Trading
+            ) && resident.target.is_some()
         } else {
             session
                 .players
