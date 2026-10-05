@@ -1,6 +1,10 @@
+mod airship_mesh;
+mod airships;
 mod crops;
 mod follow_camera;
 mod graphics;
+mod inspection;
+mod inspection_details;
 mod join;
 mod network;
 mod observer;
@@ -15,6 +19,8 @@ mod ui;
 
 #[cfg(test)]
 mod avatar_tests;
+#[cfg(test)]
+mod inspection_tests;
 
 use bevy::{
     app::AppExit,
@@ -31,6 +37,7 @@ use network::Connection;
 use observer::ObserverCamera;
 use prediction::Prediction;
 use rubblekin_core::{
+    airships::{AirshipNetwork, AirshipRide, deck_position, initial_deck_position},
     physics::{
         Body, EYE_HEIGHT, MoveInput, character_position_is_clear, resolve_character_overlaps,
     },
@@ -64,6 +71,8 @@ pub struct Session {
     pub captured: bool,
     pub can_admin: bool,
     pub inspector: bool,
+    pub(crate) inspected: Option<inspection::InspectTarget>,
+    inspect_requested: bool,
     pub help: bool,
     pub graphics: GraphicsQuality,
     pub npc: NpcSnapshot,
@@ -71,6 +80,10 @@ pub struct Session {
     pub villages: Vec<VillageSnapshot>,
     pub players: Vec<PlayerSnapshot>,
     pub world_time: f64,
+    pub(crate) airships: AirshipNetwork,
+    pub(crate) ride: Option<AirshipRide>,
+    pub(crate) deck_position: Option<[f32; 3]>,
+    pub(crate) airship_time: f64,
     pub status: String,
     pub status_until: f64,
     pub target: Option<(BlockPos, BlockPos)>,
@@ -88,9 +101,41 @@ impl Session {
         self.players
             .iter()
             .filter(|player| player.id != self.id)
-            .map(|player| player.body.position)
+            .map(|player| {
+                player
+                    .ride
+                    .and_then(|ride| {
+                        self.airships
+                            .ship(ride.ship_id, self.airship_time)
+                            .map(|ship| {
+                                deck_position(
+                                    &ship,
+                                    player
+                                        .deck_position
+                                        .unwrap_or(initial_deck_position(ride.seat)),
+                                )
+                            })
+                    })
+                    .unwrap_or(player.body.position)
+            })
             .chain(std::iter::once(self.npc.position))
-            .chain(self.residents.iter().map(|resident| resident.position))
+            .chain(self.residents.iter().map(|resident| {
+                resident
+                    .ride
+                    .and_then(|ride| {
+                        self.airships
+                            .ship(ride.ship_id, self.airship_time)
+                            .map(|ship| {
+                                deck_position(
+                                    &ship,
+                                    resident
+                                        .deck_position
+                                        .unwrap_or(initial_deck_position(ride.seat)),
+                                )
+                            })
+                    })
+                    .unwrap_or(resident.position)
+            }))
             .collect()
     }
 }
@@ -98,8 +143,34 @@ impl Session {
 #[derive(Resource, Default)]
 struct Avatars {
     players: HashMap<u64, Entity>,
+    player_deck_motion: HashMap<u64, DeckMotion>,
+    resident_deck_motion: HashMap<u64, DeckMotion>,
     npc: Option<Entity>,
     residents: HashMap<u64, Entity>,
+}
+
+#[derive(Default)]
+struct DeckMotion {
+    ship_id: Option<u64>,
+    position: [f32; 3],
+    moving_until: f64,
+}
+impl DeckMotion {
+    fn walking(&mut self, ride: AirshipRide, local: [f32; 3], now: f64) -> bool {
+        if self.ship_id != Some(ride.ship_id) {
+            self.ship_id = Some(ride.ship_id);
+            self.moving_until = 0.0;
+        } else if Vec2::new(local[0], local[2])
+            .distance_squared(Vec2::new(self.position[0], self.position[2]))
+            > 0.000001
+        {
+            // Remote snapshots arrive less often than render frames. Preserve
+            // the walking pose briefly between local deck position updates.
+            self.moving_until = now + 0.15;
+        }
+        self.position = local;
+        now < self.moving_until
+    }
 }
 #[derive(Component)]
 struct GameEntity;
@@ -180,7 +251,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect forager\nF2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nEscape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot\nG talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nEscape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -253,6 +324,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .insert_resource(menu)
         .insert_resource(graphics)
         .init_resource::<pause::PauseMenu>()
+        .init_resource::<airships::PilotConversation>()
         .insert_resource(Capture {
             path: screenshot,
             taken: false,
@@ -278,11 +350,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 join::interact,
                 join::android_text_input,
                 join::poll_connection,
-                (setup, ui::setup_ui, touch::setup, pause::setup).run_if(resource_added::<Session>),
+                (
+                    setup,
+                    ui::setup_ui,
+                    touch::setup,
+                    pause::setup,
+                    airships::setup,
+                )
+                    .run_if(resource_added::<Session>),
                 touch::read,
                 (
                     receive_network,
+                    airships::read,
                     pause::read,
+                    airships::advance_clock,
                     controls,
                     graphics::apply_settings,
                     graphics::save_changed,
@@ -290,11 +371,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     terrain::stream_terrain,
                     edit_blocks,
                     update_avatars,
+                    airships::update_scene,
                     crops::update_crops,
+                    inspection::update,
                     ui::update_ui,
                     ui::scroll_panels,
                     touch::refresh,
                     pause::refresh,
+                    airships::refresh,
                     join::leave_world,
                 )
                     .chain()
@@ -391,6 +475,7 @@ fn setup(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn receive_network(
     mut commands: Commands,
     mut connection: ResMut<Connection>,
@@ -399,6 +484,7 @@ fn receive_network(
     mut scene: ResMut<terrain::TerrainScene>,
     mut meshes: ResMut<Assets<Mesh>>,
     time: Res<Time>,
+    mut conversation: ResMut<airships::PilotConversation>,
 ) {
     let mut latest_authoritative = None;
     for message in connection.poll() {
@@ -421,6 +507,7 @@ fn receive_network(
                 session.residents = residents;
                 session.villages = villages;
                 session.world_time = world_time;
+                session.airship_time = world_time;
             }
             ServerMessage::BlockChanged { edit, .. } => {
                 if world.0.set_block(edit.position, edit.block).is_ok() {
@@ -442,6 +529,7 @@ fn receive_network(
                 session.status = text;
                 session.status_until = time.elapsed_secs_f64() + 5.0;
             }
+            ServerMessage::PilotDialog { ship_id, text } => conversation.reply(ship_id, text),
             _ => {}
         }
     }
@@ -450,11 +538,17 @@ fn receive_network(
     if let Some(authoritative) = latest_authoritative {
         let session = &mut *session;
         let obstacles = session.character_obstacles();
-        if let Err(error) =
-            session
-                .prediction
-                .reconcile(&world.0, &mut session.body, &authoritative, &obstacles)
-        {
+        let result = session.prediction.reconcile_airships(
+            &world.0,
+            &mut session.body,
+            &authoritative,
+            &obstacles,
+            &session.airships,
+            session.airship_time,
+            &mut session.ride,
+            &mut session.deck_position,
+        );
+        if let Err(error) = result {
             connection.fail(error.into());
         }
     }
@@ -478,6 +572,7 @@ fn controls(
     mut connection: ResMut<Connection>,
     mut graphics: ResMut<GraphicsSettings>,
     pause: Option<Res<pause::PauseMenu>>,
+    conversation: Option<Res<airships::PilotConversation>>,
     diagnostics: Res<DiagnosticsStore>,
     touch: Res<touch::TouchControls>,
 ) {
@@ -485,8 +580,14 @@ fn controls(
     let observing = session.observer.is_some();
     let blocked = pause
         .as_ref()
-        .is_some_and(|menu| menu.open || menu.input_blocked);
-    let resumed = pause.as_ref().is_some_and(|menu| menu.just_closed);
+        .is_some_and(|menu| menu.open || menu.input_blocked)
+        || conversation
+            .as_ref()
+            .is_some_and(|dialog| dialog.open() || dialog.input_blocked);
+    let resumed = pause.as_ref().is_some_and(|menu| menu.just_closed)
+        || conversation
+            .as_ref()
+            .is_some_and(|dialog| dialog.just_closed);
     if touch.enabled {
         session.captured =
             window.focused && !blocked && !touch.menu_open && connection.error.is_none();
@@ -597,9 +698,11 @@ fn controls(
     }
     if !blocked && window.focused && keys.just_pressed(KeyCode::Tab) {
         session.inspector = !session.inspector;
+        session.inspect_requested |= session.inspector;
     }
     if touch.inspect {
         session.inspector = !(session.inspector && !session.help);
+        session.inspect_requested |= session.inspector;
         session.help = false;
     }
     if !blocked && window.focused && keys.just_pressed(KeyCode::KeyH) {
@@ -700,14 +803,19 @@ fn controls(
             observer.advance(observer_input, session.yaw, session.pitch, input.sprint, dt);
         } else {
             let obstacles = session.character_obstacles();
-            match session.prediction.advance(
+            let command = session.prediction.advance_airships(
                 &world.0,
                 &mut session.body,
                 input,
                 session.yaw,
                 dt,
                 &obstacles,
-            ) {
+                &session.airships,
+                session.airship_time,
+                &mut session.ride,
+                &mut session.deck_position,
+            );
+            match command {
                 Ok(message) => connection.send(message),
                 Err(error) => connection.fail(error.into()),
             }
@@ -743,6 +851,11 @@ fn camera(
         session.pitch,
         session.camera_distance,
     );
+    if let Some(ride) = session.ride
+        && let Some(ship) = session.airships.ship(ride.ship_id, session.airship_time)
+    {
+        transform.translation = airships::camera_position(&ship, eye, transform.translation);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -756,19 +869,14 @@ fn edit_blocks(
     mut gizmos: Gizmos,
     touch: Res<touch::TouchControls>,
     pause: Option<Res<pause::PauseMenu>>,
+    conversation: Option<Res<airships::PilotConversation>>,
 ) {
-    if pause.is_some_and(|menu| menu.open || menu.input_blocked) {
+    if pause.is_some_and(|menu| menu.open || menu.input_blocked)
+        || conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
+        || session.ride.is_some()
+    {
         session.target = None;
         return;
-    }
-    if session.inspector
-        && let Some(target) = session.npc.target
-    {
-        gizmos.line(
-            Vec3::from_array(session.npc.position) + Vec3::Y,
-            Vec3::from_array(target) + Vec3::Y * 0.15,
-            Color::srgba(0.97, 0.71, 0.28, 0.8),
-        );
     }
     if session.observer.is_some() {
         session.target = None;
@@ -1033,12 +1141,38 @@ fn update_avatars(
         .map(|player| {
             if player.id == session.id {
                 session.body.position
+            } else if let Some(ride) = player.ride
+                && let Some(ship) = session.airships.ship(ride.ship_id, session.airship_time)
+            {
+                deck_position(
+                    &ship,
+                    player
+                        .deck_position
+                        .unwrap_or(initial_deck_position(ride.seat)),
+                )
             } else {
                 player.body.position
             }
         })
         .chain(std::iter::once(session.npc.position))
-        .chain(session.residents.iter().map(|resident| resident.position))
+        .chain(session.residents.iter().map(|resident| {
+            resident
+                .ride
+                .and_then(|ride| {
+                    session
+                        .airships
+                        .ship(ride.ship_id, session.airship_time)
+                        .map(|ship| {
+                            deck_position(
+                                &ship,
+                                resident
+                                    .deck_position
+                                    .unwrap_or(initial_deck_position(ride.seat)),
+                            )
+                        })
+                })
+                .unwrap_or(resident.position)
+        }))
         .collect();
     let mut moving = Vec::new();
     let live: Vec<u64> = session.players.iter().map(|p| p.id).collect();
@@ -1050,6 +1184,7 @@ fn update_avatars(
             true
         }
     });
+    avatars.player_deck_motion.retain(|id, _| live.contains(id));
     for (index, player) in session.players.iter().enumerate() {
         let entity = *avatars.players.entry(player.id).or_insert_with(|| {
             let entity = character(&mut commands, &mut meshes, &mut materials, false);
@@ -1063,11 +1198,13 @@ fn update_avatars(
         if let Ok(mut transform) = transforms.get_mut(entity) {
             let (position, yaw) = if player.id == session.id {
                 (session.body.position, session.yaw)
+            } else if player.ride.is_some() {
+                (positions[index], player.yaw)
             } else {
                 (player.body.position, player.yaw)
             };
             let previous = transform.translation;
-            transform.translation = if player.id == session.id {
+            transform.translation = if player.id == session.id || player.ride.is_some() {
                 Vec3::from_array(position)
             } else {
                 smoothed_avatar_position(
@@ -1078,7 +1215,26 @@ fn update_avatars(
                     (time.delta_secs() * 15.0).min(1.0),
                 )
             };
-            if previous.xz().distance_squared(transform.translation.xz()) > 0.000001 {
+            let (ride, local) = if player.id == session.id {
+                (session.ride, session.deck_position)
+            } else {
+                (player.ride, player.deck_position)
+            };
+            let walking = if let Some(ride) = ride {
+                avatars
+                    .player_deck_motion
+                    .entry(player.id)
+                    .or_default()
+                    .walking(
+                        ride,
+                        local.unwrap_or(initial_deck_position(ride.seat)),
+                        time.elapsed_secs_f64(),
+                    )
+            } else {
+                avatars.player_deck_motion.remove(&player.id);
+                previous.xz().distance_squared(transform.translation.xz()) > 0.000001
+            };
+            if walking {
                 moving.push(entity);
             }
             transform.rotation = Quat::from_rotation_y(-yaw);
@@ -1121,8 +1277,11 @@ fn update_avatars(
             true
         }
     });
+    avatars
+        .resident_deck_motion
+        .retain(|id, _| resident_ids.contains(id));
     for (index, resident) in session.residents.iter().enumerate() {
-        let desired = Vec3::from_array(resident.position);
+        let desired = Vec3::from_array(positions[session.players.len() + 1 + index]);
         let entity = *avatars.residents.entry(resident.id).or_insert_with(|| {
             let entity = character_with_role(
                 &mut commands,
@@ -1138,14 +1297,34 @@ fn update_avatars(
         });
         if let Ok(mut transform) = transforms.get_mut(entity) {
             let previous = transform.translation;
-            transform.translation = smoothed_avatar_position(
-                &world.0,
-                previous,
-                &mut positions,
-                session.players.len() + 1 + index,
-                (time.delta_secs() * 12.0).min(1.0),
-            );
-            if previous.xz().distance_squared(transform.translation.xz()) > 0.000001 {
+            transform.translation = if resident.ride.is_some() {
+                desired
+            } else {
+                smoothed_avatar_position(
+                    &world.0,
+                    previous,
+                    &mut positions,
+                    session.players.len() + 1 + index,
+                    (time.delta_secs() * 12.0).min(1.0),
+                )
+            };
+            let walking = if let Some(ride) = resident.ride {
+                avatars
+                    .resident_deck_motion
+                    .entry(resident.id)
+                    .or_default()
+                    .walking(
+                        ride,
+                        resident
+                            .deck_position
+                            .unwrap_or(initial_deck_position(ride.seat)),
+                        time.elapsed_secs_f64(),
+                    )
+            } else {
+                avatars.resident_deck_motion.remove(&resident.id);
+                previous.xz().distance_squared(transform.translation.xz()) > 0.000001
+            };
+            if walking {
                 moving.push(entity);
             }
             if let Some(target) = resident.target {

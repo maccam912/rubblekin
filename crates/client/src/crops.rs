@@ -27,7 +27,7 @@ pub fn update_crops(
             .iter()
             .find(|v| v.id == village.id)
             .map_or(0.0, |v| v.crop_growth);
-        let stage = (growth.clamp(0.0, 1.0) * 5.0) as u8;
+        let stage = growth_stage(growth);
         if let Some(mut field) = fields.iter_mut().find(|f| f.village == village.id) {
             // Terrain edits can remove a plant's soil. Rebuild once per coarse
             // stage; plants are decorative and never obstruct the walk routes.
@@ -61,7 +61,6 @@ pub fn update_crops(
 
 fn crop_geometry(village: &Village, world: &rubblekin_core::world::World, stage: u8) -> Geometry {
     let mut geometry = Geometry::default();
-    let height = 0.12 + f32::from(stage) * 0.14;
     let color = if stage >= 4 {
         [0.78, 0.64, 0.25, 1.0]
     } else {
@@ -76,26 +75,35 @@ fn crop_geometry(village: &Village, world: &rubblekin_core::world::World, stage:
             ) {
                 continue;
             }
-            let p = Vec3::new(
-                (position.x as f32 + 0.5) * CELL_SIZE,
-                (position.y as f32 + 1.0) * CELL_SIZE,
-                (position.z as f32 + 0.5) * CELL_SIZE,
-            );
-            geometry.cuboid(
-                p + Vec3::Y * height * 0.5,
-                Vec3::new(0.10, height, 0.10),
-                color,
-            );
-            if stage >= 3 {
-                geometry.cuboid(
-                    p + Vec3::Y * (height - 0.10),
-                    Vec3::new(0.22, 0.16, 0.16),
-                    color,
-                );
+            for (center, size) in plant_parts(position, stage) {
+                geometry.cuboid(center, size, color);
             }
         }
     }
     geometry
+}
+
+pub(crate) fn growth_stage(growth: f32) -> u8 {
+    (growth.clamp(0.0, 1.0) * 5.0) as u8
+}
+
+/// Rendering and inspection use the same decorative plant shape.
+pub(crate) fn plant_parts(
+    position: rubblekin_core::world::BlockPos,
+    stage: u8,
+) -> impl Iterator<Item = (Vec3, Vec3)> {
+    let height = 0.12 + f32::from(stage) * 0.14;
+    let p = Vec3::new(
+        (position.x as f32 + 0.5) * CELL_SIZE,
+        (position.y as f32 + 1.0) * CELL_SIZE,
+        (position.z as f32 + 0.5) * CELL_SIZE,
+    );
+    [
+        Some((p + Vec3::Y * height * 0.5, Vec3::new(0.10, height, 0.10))),
+        (stage >= 3).then_some((p + Vec3::Y * (height - 0.10), Vec3::new(0.22, 0.16, 0.16))),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 #[cfg(test)]

@@ -1,11 +1,12 @@
 use crate::{
+    airships::AirshipRide,
     physics::{Body, MoveInput},
     settlement::ResourceKind,
     world::{Block, BlockEdit, BlockPos, WorldGeneration},
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -40,6 +41,9 @@ pub enum ClientMessage {
         action: AdminAction,
     },
     Ping,
+    TalkToPilot {
+        ship_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +86,10 @@ pub enum ServerMessage {
         text: String,
     },
     Pong,
+    PilotDialog {
+        ship_id: u64,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +100,11 @@ pub struct PlayerSnapshot {
     pub yaw: f32,
     /// Last movement command actually simulated, or zero before the first input.
     pub last_input_sequence: u64,
+    #[serde(default)]
+    pub ride: Option<AirshipRide>,
+    /// Ship-local [side, height, fore] offset; absent on the ground.
+    #[serde(default)]
+    pub deck_position: Option<[f32; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +172,8 @@ pub enum ResidentAction {
     Planting,
     Tending,
     Harvesting,
+    WaitingForAirship,
+    RidingAirship,
 }
 
 impl ResidentAction {
@@ -176,6 +191,8 @@ impl ResidentAction {
             Self::Planting => "Planting crops",
             Self::Tending => "Tending crops",
             Self::Harvesting => "Harvesting crops",
+            Self::WaitingForAirship => "Waiting for an airship",
+            Self::RidingAirship => "Riding an airship",
         }
     }
 }
@@ -202,6 +219,10 @@ pub struct ResidentSnapshot {
     pub energy: f32,
     #[serde(default = "resident_initial_reason")]
     pub reason: String,
+    #[serde(default)]
+    pub ride: Option<AirshipRide>,
+    #[serde(default)]
+    pub deck_position: Option<[f32; 3]>,
 }
 
 fn resident_initial_hunger() -> f32 {

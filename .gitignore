@@ -34,6 +34,8 @@
 !/artifacts/pause-menu.png
 !/artifacts/pause-menu-touch.png
 !/artifacts/npc-needs-native.png
+!/artifacts/airship-port.png
+!/artifacts/airship-onboard.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

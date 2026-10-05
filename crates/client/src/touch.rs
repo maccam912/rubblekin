@@ -25,6 +25,7 @@ pub struct TouchControls {
     pub(crate) build: bool,
     pub(crate) flight: bool,
     pub(crate) inspect: bool,
+    pub(crate) talk: bool,
     pub(crate) help: bool,
     pub(crate) selected: Option<usize>,
     pub(crate) zoom: f32,
@@ -46,6 +47,7 @@ enum Action {
     Build,
     Flight,
     Inspect,
+    Talk,
     Menu,
     Material(usize),
     ZoomIn,
@@ -75,6 +77,25 @@ struct Layout {
 }
 
 impl Layout {
+    fn for_session(size: Vec2, session: &Session, menu_open: bool) -> Self {
+        let mut layout = Self::new(size, session.observer.is_some(), session.flying, menu_open);
+        if session.ride.is_some() {
+            layout.regions.retain(|region| {
+                matches!(
+                    region.action,
+                    Action::Talk
+                        | Action::Sprint
+                        | Action::Jump
+                        | Action::Menu
+                        | Action::Inspect
+                        | Action::ZoomIn
+                        | Action::ZoomOut
+                )
+            });
+        }
+        layout
+    }
+
     fn new(size: Vec2, observing: bool, flying: bool, menu_open: bool) -> Self {
         let scale = (size.x / 840.0).min(size.y / 400.0).clamp(0.5, 1.0);
         let s = |v: f32| v * scale;
@@ -117,6 +138,14 @@ impl Layout {
             "Inspect".into(),
         );
         if !observing {
+            add(
+                Action::Talk,
+                size.x - s(328.0),
+                s(14.0),
+                72.0,
+                48.0,
+                "Pilot".into(),
+            );
             add(
                 Action::Flight,
                 size.x - s(248.0),
@@ -243,6 +272,7 @@ impl TouchControls {
         self.build = false;
         self.flight = false;
         self.inspect = false;
+        self.talk = false;
         self.help = false;
         self.selected = None;
         self.zoom = 0.0;
@@ -256,6 +286,7 @@ impl TouchControls {
             Action::Dig => self.dig = true,
             Action::Build => self.build = true,
             Action::Flight => self.flight = true,
+            Action::Talk => self.talk = true,
             Action::Inspect => {
                 self.inspect = true;
                 self.menu_open = false;
@@ -341,6 +372,14 @@ impl TouchControls {
             return;
         }
         for contact in self.contacts.values() {
+            if contact.action != Action::Move
+                && !layout
+                    .regions
+                    .iter()
+                    .any(|region| region.action == contact.action)
+            {
+                continue;
+            }
             match contact.action {
                 Action::Move => {
                     let delta =
@@ -387,6 +426,7 @@ pub fn read(
     mut focus: MessageReader<WindowFocused>,
     mut lifecycle: MessageReader<AppLifecycle>,
     pause: Option<Res<crate::pause::PauseMenu>>,
+    conversation: Option<Res<crate::airships::PilotConversation>>,
     mouse: Res<ButtonInput<MouseButton>>,
     window: Single<(Entity, &Window), With<PrimaryWindow>>,
     session: Option<Res<Session>>,
@@ -428,6 +468,11 @@ pub fn read(
         events.clear();
         return;
     }
+    if conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked) {
+        controls.reset();
+        events.clear();
+        return;
+    }
     let session = session.unwrap();
     let size = Vec2::new(window.width(), window.height());
     // Rebuild after each event: a Menu press changes which controls are active
@@ -435,12 +480,7 @@ pub fn read(
     let mut received_touch = false;
     for event in events.read().filter(|event| event.window == window_entity) {
         received_touch = true;
-        let layout = Layout::new(
-            size,
-            session.observer.is_some(),
-            session.flying,
-            controls.menu_open,
-        );
+        let layout = Layout::for_session(size, &session, controls.menu_open);
         if event.phase == TouchPhase::Started
             && !controls.menu_open
             && crate::ui::touch_panel_at(event.position, size, &session)
@@ -472,12 +512,7 @@ pub fn read(
                 None
             };
             if let Some(phase) = phase {
-                let layout = Layout::new(
-                    size,
-                    session.observer.is_some(),
-                    session.flying,
-                    controls.menu_open,
-                );
+                let layout = Layout::for_session(size, &session, controls.menu_open);
                 if phase == TouchPhase::Started
                     && !controls.menu_open
                     && crate::ui::touch_panel_at(position, size, &session)
@@ -506,12 +541,7 @@ pub fn read(
             controls.contacts.remove(&id);
         }
     }
-    let layout = Layout::new(
-        size,
-        session.observer.is_some(),
-        session.flying,
-        controls.menu_open,
-    );
+    let layout = Layout::for_session(size, &session, controls.menu_open);
     controls.held(&layout);
 }
 
@@ -566,6 +596,7 @@ pub fn setup(
         Action::Build,
         Action::Flight,
         Action::Inspect,
+        Action::Talk,
         Action::Menu,
         Action::ZoomIn,
         Action::ZoomOut,
@@ -603,6 +634,7 @@ pub fn refresh(
     window: Single<&Window, With<PrimaryWindow>>,
     controls: Res<TouchControls>,
     session: Res<Session>,
+    conversation: Option<Res<crate::airships::PilotConversation>>,
     mut nodes: Query<
         (
             &mut Node,
@@ -616,15 +648,17 @@ pub fn refresh(
     >,
     mut labels: Query<(&mut Text, &mut TextFont)>,
 ) {
-    let layout = Layout::new(
+    let layout = Layout::for_session(
         Vec2::new(window.width(), window.height()),
-        session.observer.is_some(),
-        session.flying,
+        &session,
         controls.menu_open,
     );
     for (mut node, button, base, knob, children, background) in &mut nodes {
         node.display = Display::None;
-        if !controls.enabled || controls.menu_open {
+        if !controls.enabled
+            || controls.menu_open
+            || conversation.as_ref().is_some_and(|dialog| dialog.open())
+        {
             continue;
         }
         if base.is_some() || knob.is_some() {
@@ -1135,6 +1169,58 @@ mod tests {
         assert!(
             matches!(read_message(&mut peer), ClientMessage::Input { input, .. } if input.direction[1] < -0.95)
         );
+        // Physical boarding is acquired by ordinary movement contact. The
+        // same touch Jump still sends a movement input and lifts the passenger
+        // above the deck instead of selecting an exit action.
+        let world = rubblekin_core::world::World::from_generation_edits(
+            42,
+            rubblekin_core::world::WorldGeneration::GeographyV3,
+            &[],
+        )
+        .unwrap();
+        let network = rubblekin_core::airships::AirshipNetwork::new(&world);
+        let ship = network
+            .ships(0.0)
+            .into_iter()
+            .find(|ship| ship.docked_at.is_some())
+            .unwrap();
+        app.world_mut().insert_resource(crate::VoxelWorld(world));
+        app.world_mut().resource_mut::<TouchControls>().reset();
+        {
+            let mut session = app.world_mut().resource_mut::<Session>();
+            session.body = rubblekin_core::physics::Body::new(
+                rubblekin_core::airships::deck_position(&ship, [0.0, 0.0, 0.0]),
+            );
+            session.airships = network;
+            session.airship_time = 0.0;
+            session.ride = None;
+            session.deck_position = None;
+            session.flying = false;
+        }
+        app.world_mut().run_schedule(Update);
+        assert!(
+            matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
+            if !input.jump && !input.fly)
+        );
+        assert_eq!(
+            app.world().resource::<Session>().ride.unwrap().ship_id,
+            ship.id
+        );
+        let deck_height = app.world().resource::<Session>().body.position[1];
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            app.world_mut().write_message(TouchInput {
+                window,
+                ..event(8, phase, action_position(&layout, Action::Jump))
+            });
+        }
+        app.world_mut().run_schedule(Update);
+        assert!(
+            matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
+            if input.jump && !input.fly)
+        );
+        let aboard = app.world().resource::<Session>();
+        assert!(aboard.ride.is_some());
+        assert!(!aboard.body.on_ground && aboard.body.position[1] > deck_height);
         app.world_mut()
             .resource_mut::<Connection>()
             .fail("test disconnection".into());

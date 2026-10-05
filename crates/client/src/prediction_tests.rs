@@ -9,7 +9,169 @@ fn snapshot(body: Body, last_input_sequence: u64) -> PlayerSnapshot {
         body,
         yaw: 0.0,
         last_input_sequence,
+        ride: None,
+        deck_position: None,
     }
+}
+
+fn airship_fixture() -> (
+    World,
+    AirshipNetwork,
+    rubblekin_core::airships::AirshipSnapshot,
+) {
+    let world =
+        World::from_generation_edits(42, rubblekin_core::world::WorldGeneration::GeographyV3, &[])
+            .unwrap();
+    let network = AirshipNetwork::new(&world);
+    let ship = network
+        .ships(60.0)
+        .into_iter()
+        .find(|ship| ship.docked_at.is_none())
+        .unwrap();
+    (world, network, ship)
+}
+
+#[test]
+fn airship_replay_keeps_local_walk_and_normal_jump_after_delayed_acknowledgments() {
+    use rubblekin_core::airships::deck_position;
+    let (world, network, ship) = airship_fixture();
+    let mut ride = Some(AirshipRide {
+        ship_id: ship.id,
+        seat: u8::MAX,
+    });
+    let mut local = Some([0.0; 3]);
+    let mut body = Body::new(deck_position(&ship, local.unwrap()));
+    body.on_ground = true;
+    let initial = snapshot(body.clone(), 0);
+    let mut prediction = Prediction::default();
+    let direction = [ship.yaw.cos(), -ship.yaw.sin()];
+    let walking = MoveInput {
+        direction,
+        ..Default::default()
+    };
+    prediction
+        .advance_airships(
+            &world,
+            &mut body,
+            walking,
+            0.0,
+            0.1,
+            &[],
+            &network,
+            60.0,
+            &mut ride,
+            &mut local,
+        )
+        .unwrap();
+    let first_local = local.unwrap();
+    let mut acknowledged = snapshot(body.clone(), 1);
+    acknowledged.ride = ride;
+    acknowledged.deck_position = local;
+    let jumping = MoveInput {
+        direction,
+        jump: true,
+        ..Default::default()
+    };
+    let command = prediction
+        .advance_airships(
+            &world,
+            &mut body,
+            jumping,
+            0.0,
+            0.1,
+            &[],
+            &network,
+            60.1,
+            &mut ride,
+            &mut local,
+        )
+        .unwrap();
+    assert!(matches!(
+        command,
+        ClientMessage::Input {
+            sequence: 2,
+            input: MoveInput { jump: true, .. },
+            ..
+        }
+    ));
+    assert!(body.velocity[1] > 0.0 && !body.on_ground);
+    let expected_local = local.unwrap();
+    let later = network.ship(ship.id, 61.0).unwrap();
+    assert_ne!(later.position, ship.position);
+    acknowledged.body.position = deck_position(&later, first_local);
+    prediction
+        .reconcile_airships(
+            &world,
+            &mut body,
+            &acknowledged,
+            &[],
+            &network,
+            61.0,
+            &mut ride,
+            &mut local,
+        )
+        .unwrap();
+    for (actual, expected) in local.unwrap().iter().zip(expected_local) {
+        assert!((actual - expected).abs() < 0.002);
+    }
+    let expected = deck_position(&later, local.unwrap());
+    for (actual, expected) in body.position.iter().zip(expected) {
+        assert!((actual - expected).abs() < 0.002);
+    }
+    assert!(!body.on_ground);
+    assert_eq!(prediction.pending.len(), 1);
+    let mut final_ack = snapshot(body.clone(), 2);
+    final_ack.ride = ride;
+    final_ack.deck_position = local;
+    prediction
+        .reconcile_airships(
+            &world,
+            &mut body,
+            &final_ack,
+            &[],
+            &network,
+            61.0,
+            &mut ride,
+            &mut local,
+        )
+        .unwrap();
+    assert!(prediction.pending.is_empty());
+    assert!(initial.ride.is_none());
+}
+
+#[test]
+fn client_movement_can_walk_off_a_flying_deck_without_an_exit_action() {
+    use rubblekin_core::airships::deck_position;
+    let (world, network, ship) = airship_fixture();
+    let mut ride = Some(AirshipRide {
+        ship_id: ship.id,
+        seat: u8::MAX,
+    });
+    let mut local = Some([3.7, 0.0, 0.0]);
+    let mut body = Body::new(deck_position(&ship, local.unwrap()));
+    body.on_ground = true;
+    let mut prediction = Prediction::default();
+    let input = MoveInput {
+        direction: [ship.yaw.cos(), -ship.yaw.sin()],
+        sprint: true,
+        ..Default::default()
+    };
+    prediction
+        .advance_airships(
+            &world,
+            &mut body,
+            input,
+            0.0,
+            0.25,
+            &[],
+            &network,
+            60.0,
+            &mut ride,
+            &mut local,
+        )
+        .unwrap();
+    assert!(ride.is_none() && local.is_none());
+    assert!(!body.on_ground);
 }
 
 fn execute(world: &World, server: &mut PlayerSnapshot, message: ClientMessage) {

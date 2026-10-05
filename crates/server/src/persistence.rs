@@ -4,7 +4,10 @@ use std::{
     path::Path,
 };
 
-use rubblekin_core::world::{BlockEdit, World, WorldGeneration};
+use rubblekin_core::{
+    airships::AirshipNetwork,
+    world::{BlockEdit, World, WorldGeneration},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{npc::Forager, villages::VillageLife};
@@ -120,6 +123,12 @@ impl Simulation {
         if !villages.validate(&world) {
             return Err(invalid(
                 "Save contains invalid village residents or economy",
+            ));
+        }
+        let airships = AirshipNetwork::try_new(&world).map_err(invalid)?;
+        if !villages.validate_transport(&world, &airships, save.world_time) {
+            return Err(invalid(
+                "Save contains an invalid airship journey; original left untouched",
             ));
         }
         Ok(Self {

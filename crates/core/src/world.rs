@@ -496,6 +496,31 @@ impl World {
         (self.column_top(x, z) + 1) as f32 * CELL_SIZE
     }
 
+    /// Generated terrain, roofs and canopies without saved player edits.
+    /// Additive deterministic transport uses this without changing terrain.
+    pub fn original_surface_height(&self, x: f32, z: f32) -> f32 {
+        if !x.is_finite() || !z.is_finite() {
+            return self.min_y() as f32 * CELL_SIZE;
+        }
+        let x = (x / CELL_SIZE).floor() as i32;
+        let z = (z / CELL_SIZE).floor() as i32;
+        let top = if self.geography.is_some() {
+            self.geographic_column(x, z)
+                .map_or(self.min_y() - 1, GeographicColumn::top)
+        } else {
+            column_index(x, z).map_or(MIN_Y - 1, |index| {
+                self.trees
+                    .keys()
+                    .filter(|p| p.x == x && p.z == z)
+                    .map(|p| p.y)
+                    .max()
+                    .unwrap_or(self.heights[index])
+                    .max(self.heights[index])
+            })
+        };
+        (top + 1) as f32 * CELL_SIZE
+    }
+
     pub fn spawn_position(&self) -> [f32; 3] {
         let anchor = self
             .settlements()

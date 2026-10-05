@@ -914,6 +914,9 @@ pub(crate) fn session_from_welcome(
     let world = GameWorld::from_generation_edits(seed, generation, &edits)?;
     let mut own_players = players.iter().filter(|player| player.id == session_id);
     let own_player = own_players.next();
+    let ride = own_player.and_then(|player| player.ride);
+    let deck_position = own_player.and_then(|player| player.deck_position);
+    let airships = rubblekin_core::airships::AirshipNetwork::new(&world);
     let (body, observer, status) = match mode {
         SessionMode::Player => {
             let player = own_player.ok_or("Server did not provide your player avatar")?;
@@ -952,6 +955,8 @@ pub(crate) fn session_from_welcome(
             captured: false,
             can_admin,
             inspector: true,
+            inspected: None,
+            inspect_requested: true,
             help: true,
             graphics,
             npc,
@@ -959,6 +964,10 @@ pub(crate) fn session_from_welcome(
             villages,
             players,
             world_time,
+            airships,
+            ride,
+            deck_position,
+            airship_time: world_time,
             status: status.into(),
             status_until: now + 12.0,
             target: None,
@@ -1088,6 +1097,8 @@ pub(crate) mod tests {
                     body: Body::new([0.25, 2.52, 0.25]),
                     yaw: 0.0,
                     last_input_sequence: 0,
+                    ride: None,
+                    deck_position: None,
                 }]
             } else {
                 Vec::new()

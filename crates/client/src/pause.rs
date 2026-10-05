@@ -252,6 +252,7 @@ pub fn read(
     mut graphics: ResMut<GraphicsSettings>,
     mut touch: ResMut<TouchControls>,
     session: Option<Res<Session>>,
+    conversation: Option<Res<crate::airships::PilotConversation>>,
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<AccumulatedMouseScroll>,
     mut native: MessageReader<MenuKey>,
@@ -294,7 +295,10 @@ pub fn read(
     if touch.menu_open && !pause.open {
         pause.open = true;
     }
-    let toggle = keys.just_pressed(KeyCode::Escape) || back;
+    let toggle = (keys.just_pressed(KeyCode::Escape) || back)
+        && !conversation
+            .as_ref()
+            .is_some_and(|dialog| dialog.open() || dialog.just_closed);
     if toggle {
         pause.open = !pause.open;
         pause.just_closed = was_open && !pause.open;

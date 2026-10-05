@@ -135,7 +135,7 @@ Existing islands retain GeographyV1 or GeographyV2, including their saved edits 
 cargo run --locked -p rubblekin_client -- --local --observe --save saves/detailed-island.json
 ```
 
-Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Individual edits appear only in the nearby detailed area; very distant terrain still uses a coarse surface, and distant vegetation is represented by map color. Airships, gliders, and an in-game world map remain future work. Villages and trails are now generated in GeographyV3; live physical settlement expansion remains future work. Representative integrated-graphics measurements remain necessary. The [map-textured valley](artifacts/map-lod-valley.png), [closer view](artifacts/map-lod-near.png), [forest/coast](artifacts/map-lod-forest.png), and [exact 2048² atlas](artifacts/distant-map-atlas.png) show the approved medium/far rendering, enabled automatically in all graphics presets. Nearby [voxel gameplay](artifacts/map-lod-ground.png) and [ground shading](artifacts/terrain-readable-ground.png) are retained. Export the exact atlas with `cargo run --locked -p rubblekin_client --example distant_map -- 42 /tmp/distant-map.ppm`.
+Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Individual edits appear only in the nearby detailed area; very distant terrain still uses a coarse surface, and distant vegetation is represented by map color. Village airships are implemented below; gliders and an in-game world map remain future work. Villages and trails are now generated in GeographyV3; live physical settlement expansion remains future work. Representative integrated-graphics measurements remain necessary. The [map-textured valley](artifacts/map-lod-valley.png), [closer view](artifacts/map-lod-near.png), [forest/coast](artifacts/map-lod-forest.png), and [exact 2048² atlas](artifacts/distant-map-atlas.png) show the approved medium/far rendering, enabled automatically in all graphics presets. Nearby [voxel gameplay](artifacts/map-lod-ground.png) and [ground shading](artifacts/terrain-readable-ground.png) are retained. Export the exact atlas with `cargo run --locked -p rubblekin_client --example distant_map -- 42 /tmp/distant-map.ppm`.
 
 ## Villages, resources, and residents
 
@@ -145,7 +145,7 @@ Each village starts with six residents and seeded stores; no chronological found
 
 Players, Moss, and village residents collide with each other using the shared character controller, including during creative flight. Joining players receive nearby unoccupied spawn positions. Resident movement passes around other people where space permits; blocked routes cannot produce goods remotely. The inspector shows hunger, energy, activity, and the reason for it, while farming and meals have visible hand motions. The read-only observer camera has no physical body.
 
-The [village map](artifacts/villages-map.png) plots the actual seed-42 plan and resource scores; the [asset catalog](artifacts/village-assets.svg) shows the generated voxel geometry. The [native village view](artifacts/villages-native.png) shows the running client. The nearby inspector shows the village's scores, water distance, stores, growth, and a resident's current activity. In read-only observer mode, press **V** to visit the next village; **R/Home** returns to spawn.
+The [village map](artifacts/villages-map.png) plots the actual seed-42 plan and resource scores; the [asset catalog](artifacts/village-assets.svg) shows the generated voxel geometry. The [native village view](artifacts/villages-native.png) shows the running client. Opening the inspector selects the character, block, or farm plot under the center dot, within 128 m and behind no nearer terrain. It keeps that target while its details update; close and reopen to select another. Farm plots show crop growth, harvest readiness, dimensions, and intact plant soil sites. Growth is currently one shared village crop cycle. Blocks show material and cell coordinates, with building/village context and village stores at storehouses or markets. In read-only observer mode, press **V** to visit the next village; **R/Home** returns to spawn.
 
 ```sh
 cargo run --locked -p rubblekin_client -- --local --observe --save saves/villages.json
@@ -153,7 +153,7 @@ cargo run --locked -p rubblekin_core --example settlements -- 42 /tmp/villages.j
 cargo run --locked -p rubblekin_core --example village_asset_catalog -- /tmp/village-assets.svg
 ```
 
-Existing saves remain available with `--save saves/geography.json` or `--save saves/valley.json`. Protocol v6 requires rebuilt matching clients and servers. This source update does not itself update the public test server.
+Existing saves remain available with `--save saves/geography.json` or `--save saves/valley.json`. Protocol v8 requires rebuilt matching clients and servers. This source update does not itself update the public test server.
 
 ## Controls
 
@@ -168,7 +168,8 @@ Existing saves remain available with `--save saves/geography.json` or `--save sa
 | Ctrl + hold mouse button | Repeat digging or building. |
 | 1–6 | Grass, earth, stone, wood, brick, glass. |
 | F; Q / E | Toggle creative flight; descend / ascend. |
-| Tab | Show or hide the nearby village/resident inspector, or Moss's inspector elsewhere. |
+| Tab | Close inspection, or open it and select the target under the center dot. |
+| G / N | Optional pilot conversation / next nearby pilot. |
 | F2 | Cycle Low → Balanced → High → Low graphics. |
 | H | Show or hide the controls panel. |
 | F10 | Disconnect and return to the join screen. |
@@ -185,6 +186,20 @@ Developer controls work only for player sessions when the server allows them:
 
 The local auto-host enables these controls for every connected player. They are disabled by default on a dedicated server. On keyboards with media function keys, use the platform's function-key modifier if needed.
 
+## Ride village airships
+
+Every GeographyV3 village has an airship port and low landing berths connected by wooden gangways. Two-way services connect neighboring villages, with connections for farther trips. Each direction departs within three minutes and stops for 30 seconds; these are initial tuning defaults. Rides are currently free.
+
+Walk or jump onto a landed airship to ride. Move, sprint, look around and jump with the ordinary controls while it carries you. Walk or jump off an edge at any time, including during flight; you return to ordinary falling. There are no boarding/exit menus or required conversations. The current prototype has no fall damage; gliders remain future work.
+
+Optional **G / Pilot** asks a nearby pilot where they are going and when they leave. **N / Next pilot** selects another nearby pilot. An empty port displays the wait for its next departure.
+
+NPC traders compare the complete airship trip, including approach and waiting, against walking to their destination. They carry their goods aboard and continue to the original destination before delivering; local jobs continue on foot. Journey state and schedules resume from saved simulation time after restart; server downtime is not replayed.
+
+Ports, gangways and ships are additive entities, so existing GeographyV3 terrain and block edits remain compatible. Worlds without villages have no routes. Rebuild both client and server for protocol v8; this local source change does not update the public server.
+
+Native macOS captures show the [voxel airship at its landing](artifacts/airship-port.png) and the [open deck in flight](artifacts/airship-onboard.png).
+
 ## Observe without a player avatar
 
 Choose **Observe as admin** on the join screen, then **Local world** or **Join server**. Direct startup also works:
@@ -196,11 +211,11 @@ cargo run --locked -p rubblekin_client -- --connect 127.0.0.1:7878 --observe
 
 Observer sessions require an admin-enabled server (`--allow-admin` on dedicated hosting). Local hosting enables this; the public test server has it disabled. The existing admin setting applies to everyone who can connect, so it is not per-user authentication.
 
-The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed; **V** visits the next village in GeographyV3. Tab toggles the nearby village/resident inspector or Moss's inspector elsewhere, F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
+The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed; **V** visits the next village in GeographyV3. Tab closes inspection or opens it on the aimed character, block, or plot. F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
 
 Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. In geographic worlds, nearby detailed terrain follows the camera and distant landforms cover the full 32.768 km region. The old 160 × 160 m valley renderer remains available for legacy saves.
 
-The NPC-needs handshake uses **protocol v7**. Rebuild/restart both client and server together. Save version 3 records the terrain generator and village residents/stores; earlier version-3 residents receive default needs and keep their jobs, goods, and terrain. Original version-1 valleys and version-2 worlds load with their original terrain and upgrade save metadata without changing their generator.
+The airship handshake uses **protocol v8**. Rebuild/restart both client and server together. Save version 3 records the terrain generator and village residents/stores; earlier version-3 residents receive default needs and keep their jobs, goods, and terrain. Original version-1 valleys and version-2 worlds load with their original terrain and upgrade save metadata without changing their generator.
 
 ## Graphics
 
@@ -300,7 +315,7 @@ For a block edit, read these in order:
 
 Transport is newline-delimited JSON over nonblocking TCP. There is no generic message bus or automatic ECS replication. The headless server currently uses a small standard-library loop; Bevy ECS can be introduced when the simulation earns that complexity. This transport and full-world snapshot approach are prototype choices, not a global-scale networking design.
 
-Movement predicts each frame locally and sends the same numbered input and duration to the server. Server snapshots acknowledge completed inputs; [prediction.rs](crates/client/src/prediction.rs) replays newer inputs so delayed snapshots do not pull the player backward on release or step climbing. The server validates movement time, and prediction history is bounded. Protocol v6 requires matching client/server builds: restart both after updating. Existing valley saves remain compatible through the explicit legacy generator.
+Movement predicts each frame locally and sends the same numbered input and duration to the server. Server snapshots acknowledge completed inputs; [prediction.rs](crates/client/src/prediction.rs) replays newer inputs so delayed snapshots do not pull the player backward on release or step climbing. The server validates movement time, and prediction history is bounded. Protocol v8 requires matching client/server builds: restart both after updating. Existing valley saves remain compatible through the explicit legacy generator.
 
 ## Verify changes
 
@@ -326,6 +341,7 @@ cargo run --locked -p rubblekin_client -- --local --screenshot artifacts/geograp
 
 - **World:** new islands span 32.768 km with 50 cm editable cells and bounded local detail. Distant terrain reflects generated geography; remote edits appear only in the nearby voxel region; medium/far heightmaps use the generated map texture, with nearby silhouettes through 128 m. Legacy 160 m valleys keep their original terrain.
 - **Simulation:** Moss retains the original foraging loop. GeographyV3 adds up to 60 village residents with hunger/energy, active crop work, shared crop growth, stores, finite extraction reserves, and physical deliveries/trade. Local farm paths use actual terrain and character physics; player-built obstructions can still block residents. Live settlement expansion, prices/currency, player farming/trade interactions, individual plant lifecycles, and flowing water remain future work.
+- **Airships:** scheduled village shuttles, NPC passengers and pilot destination dialogue are implemented. Board physically, move on deck and walk/jump off anywhere. Routes, waits and passenger comfort need playtesting; gliding remains future work.
 - **Building and ownership:** all players have unlimited materials and cooperative edit access. Claims and configurable offline property protection remain planned; no protection system is implemented. Moss does not destroy player structures.
 - **Networking:** 32 connection cap and 100,000 edited-cell cap are defensive prototype limits. There are no accounts, transport encryption, hostile-client load tests, or public-server readiness claims. Slow or malformed peers are disconnected.
 - **Compatibility and performance:** native macOS playtests exercised building/removal, NPC override/clear, a [second connected client](artifacts/two-client.png), and [restoring the edits after restarting](artifacts/restarted-world.png). The October 4 graphics playtest verified the full live Balanced → High → Low → Balanced cycle, nearby player/tree shadows, and the Low fallback; brief foreground HUD observations reached around 120 fps on an Apple M5 Pro. Focus and capture interruptions make these unsuitable for a frame-time comparison. Earlier October 3 samples at 1440 × 900 showed about 119–125 fps on the old low preset and 93–120 fps on the old high preset, with scene construction around 0.16–0.23 seconds. These are separate observations on a strong machine, not controlled benchmarks or a measured before/after speed comparison. Windows, Linux, the children's computers, representative integrated graphics, and performance during extensive building remain untested.

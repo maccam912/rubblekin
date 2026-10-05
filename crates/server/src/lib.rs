@@ -1,9 +1,15 @@
 //! A direct, authoritative prototype server. Message handling, validation and
 //! simulation are intentionally visible in one place; there is no event bus.
 
+mod airships;
 mod npc;
 mod persistence;
 mod villages;
+
+#[cfg(test)]
+mod airship_tests;
+#[cfg(test)]
+mod deck_tests;
 
 pub use npc::berry_patch_positions;
 
@@ -22,9 +28,10 @@ use std::{
 
 use persistence::{MAX_EDITS, Simulation};
 use rubblekin_core::{
+    airships::{AirshipNetwork, deck_position, initial_deck_position, pilot_position},
     physics::{
         Body, EYE_HEIGHT, MoveInput, PLAYER_HEIGHT, PLAYER_RADIUS, character_position_is_clear,
-        move_character_with_obstacles,
+        move_character_with_airships,
     },
     protocol::*,
     world::{Block, BlockEdit, BlockPos, CELL_SIZE, World, WorldGeneration},
@@ -110,6 +117,11 @@ pub fn spawn(config: ServerConfig) -> io::Result<ServerHandle> {
     let addr = listener.local_addr()?;
     let save_lock = persistence::lock_save(&config.save_path)?;
     let mut simulation = Simulation::load(&config.save_path, config.seed, config.generation)?;
+    let airships = AirshipNetwork::try_new(&simulation.world)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    simulation
+        .villages
+        .sync_airship_riders(&airships, simulation.world_time);
     // Older village saves can contain residents at the same work/home point.
     // Separate them against terrain before saving or welcoming the first client.
     simulation
@@ -142,7 +154,7 @@ pub fn spawn(config: ServerConfig) -> io::Result<ServerHandle> {
         .name("rubblekin-server".into())
         .spawn(move || {
             let _save_lock = save_lock;
-            let result = run(listener, simulation, &config, &loop_stop);
+            let result = run(listener, simulation, airships, &config, &loop_stop);
             if let Err(error) = &result {
                 eprintln!("Authoritative server stopped: {error}");
             }
@@ -289,6 +301,7 @@ impl Connection {
 fn run(
     listener: TcpListener,
     mut sim: Simulation,
+    airships: AirshipNetwork,
     config: &ServerConfig,
     stop: &AtomicBool,
 ) -> io::Result<()> {
@@ -340,30 +353,39 @@ fn run(
                 message,
                 &mut connections,
                 &mut sim,
+                &airships,
                 config,
                 &mut edit_budget,
             )?;
         }
         connections.retain(|_, client| !client.dead);
+        let next_world_time = sim.world_time + DT as f64;
+        sim.villages.sync_airship_riders(&airships, next_world_time);
+        carry_airship_players(&mut connections, &airships, next_world_time);
+        sim.world_time = next_world_time;
         let player_ids: Vec<_> = connections
             .iter()
             .filter(|(_, connection)| connection.player.is_some())
             .map(|(&id, _)| id)
             .collect();
         for id in player_ids {
-            let obstacles = character_obstacles(&connections, &sim, Some(id));
+            let obstacles = character_obstacles(&connections, &sim, Some(id), &airships);
             let connection = connections.get_mut(&id).unwrap();
             if let Some(player) = &mut connection.player
                 && connection.last_input.elapsed() > Duration::from_millis(500)
             {
                 // Never extrapolate walking or a held jump. A stalled client
                 // eventually resumes neutral gravity instead of floating.
-                move_character_with_obstacles(
+                move_character_with_airships(
                     &sim.world,
                     &mut player.body,
                     MoveInput::default(),
                     DT,
                     &obstacles,
+                    &airships,
+                    sim.world_time,
+                    &mut player.ride,
+                    &mut player.deck_position,
                 );
                 // Idle simulation spends time too; retain only the bounded
                 // reserve needed to accept a resumed long client frame.
@@ -385,9 +407,19 @@ fn run(
         sim.npc.tick_with_obstacles(&sim.world, DT, &npc_obstacles);
         let mut resident_obstacles = player_positions;
         resident_obstacles.push(sim.npc.snapshot.position);
-        sim.villages
-            .tick_with_obstacles(&sim.world, DT, &resident_obstacles);
-        sim.world_time += DT as f64;
+        let passenger_seats: Vec<_> = connections
+            .values()
+            .filter_map(|connection| connection.player.as_ref().and_then(|player| player.ride))
+            .collect();
+        sim.villages.tick_with_transport(
+            &sim.world,
+            DT,
+            &resident_obstacles,
+            &airships,
+            next_world_time,
+            &passenger_seats,
+        );
+        sim.world_time = next_world_time;
         let state = ServerMessage::State {
             players: players(&connections),
             npc: sim.npc.snapshot.clone(),
@@ -426,6 +458,7 @@ fn character_obstacles(
     connections: &BTreeMap<u64, Connection>,
     sim: &Simulation,
     exclude_player: Option<u64>,
+    airships: &AirshipNetwork,
 ) -> Vec<[f32; 3]> {
     connections
         .iter()
@@ -433,7 +466,26 @@ fn character_obstacles(
         .filter_map(|(_, connection)| connection.player.as_ref().map(|p| p.body.position))
         .chain(std::iter::once(sim.npc.snapshot.position))
         .chain(sim.villages.positions())
+        .chain(airships.ships(sim.world_time).iter().map(pilot_position))
         .collect()
+}
+
+fn carry_airship_players(
+    connections: &mut BTreeMap<u64, Connection>,
+    network: &AirshipNetwork,
+    time: f64,
+) {
+    for connection in connections.values_mut() {
+        if let Some(player) = &mut connection.player
+            && let Some(ride) = player.ride
+            && let Some(ship) = network.ship(ride.ship_id, time)
+        {
+            let local = *player
+                .deck_position
+                .get_or_insert_with(|| initial_deck_position(ride.seat));
+            player.body.position = deck_position(&ship, local);
+        }
+    }
 }
 
 fn free_player_spawn(world: &World, obstacles: &[[f32; 3]]) -> Option<[f32; 3]> {
@@ -496,6 +548,7 @@ fn handle_message(
     message: ClientMessage,
     connections: &mut BTreeMap<u64, Connection>,
     sim: &mut Simulation,
+    airships: &AirshipNetwork,
     config: &ServerConfig,
     edit_budget: &mut usize,
 ) -> io::Result<()> {
@@ -531,7 +584,7 @@ fn handle_message(
             name
         };
         let spawn = if mode == SessionMode::Player {
-            let obstacles = character_obstacles(connections, sim, Some(id));
+            let obstacles = character_obstacles(connections, sim, Some(id), airships);
             let Some(position) = free_player_spawn(&sim.world, &obstacles) else {
                 connections.get_mut(&id).unwrap().close_with_notice(
                     "There is no free space near spawn. Try again after someone moves.".into(),
@@ -551,6 +604,8 @@ fn handle_message(
                 body: Body::new(spawn.unwrap()),
                 yaw: 0.0,
                 last_input_sequence: 0,
+                ride: None,
+                deck_position: None,
             });
         }
         let welcome = ServerMessage::Welcome {
@@ -585,7 +640,9 @@ fn handle_message(
                 );
                 return Ok(());
             }
-            ClientMessage::Input { .. } | ClientMessage::Admin { .. } => {
+            ClientMessage::Input { .. }
+            | ClientMessage::Admin { .. }
+            | ClientMessage::TalkToPilot { .. } => {
                 connections
                     .get_mut(&id)
                     .unwrap()
@@ -605,7 +662,7 @@ fn handle_message(
             input,
             yaw,
         } => {
-            let obstacles = character_obstacles(connections, sim, Some(id));
+            let obstacles = character_obstacles(connections, sim, Some(id), airships);
             let connection = connections.get_mut(&id).unwrap();
             let player = connection.player.as_mut().unwrap();
             if !yaw.is_finite()
@@ -634,7 +691,17 @@ fn handle_message(
             connection.input_credit = (connection.input_credit - dt as f64).max(0.0);
             // Use exactly the client's command boundaries and shared controller:
             // even a second direction normalization can change collision results.
-            move_character_with_obstacles(&sim.world, &mut player.body, input, dt, &obstacles);
+            move_character_with_airships(
+                &sim.world,
+                &mut player.body,
+                input,
+                dt,
+                &obstacles,
+                airships,
+                sim.world_time,
+                &mut player.ride,
+                &mut player.deck_position,
+            );
             player.last_input_sequence = sequence;
             player.yaw = yaw.rem_euclid(std::f32::consts::TAU);
             connection.last_input = now;
@@ -720,10 +787,57 @@ fn handle_message(
                 .unwrap()
                 .send(&ServerMessage::Notice { text });
         }
+        ClientMessage::TalkToPilot { ship_id } => {
+            let Some(ship) = airships.ship(ship_id, sim.world_time) else {
+                transport_notice(connections, id, "That airship is no longer available");
+                return Ok(());
+            };
+            let player = connections[&id].player.as_ref().unwrap();
+            if !airships::can_reach_pilot(&ship, player.body.position) {
+                transport_notice(connections, id, "Move closer to the airship pilot");
+                return Ok(());
+            }
+            let village_name = |village_id| {
+                sim.world
+                    .settlements()
+                    .and_then(|plan| plan.villages.iter().find(|v| v.id == village_id))
+                    .map_or_else(|| format!("Village {village_id}"), |v| v.name.clone())
+            };
+            let destination = village_name(ship.next_village);
+            let text = if let Some(docked) = ship.docked_at {
+                format!(
+                    "I'm {}, sailing from {} to {}. We leave in {} seconds and reach {} in about {} seconds. You can walk or jump aboard and enjoy the view.",
+                    ship.pilot_name,
+                    village_name(docked),
+                    destination,
+                    ship.departure_in.ceil() as u32,
+                    destination,
+                    ship.arrival_in.ceil() as u32
+                )
+            } else {
+                format!(
+                    "I'm {}, heading to {}. We'll arrive in about {} seconds. Enjoy the view!",
+                    ship.pilot_name,
+                    destination,
+                    ship.arrival_in.ceil() as u32
+                )
+            };
+            connections
+                .get_mut(&id)
+                .unwrap()
+                .send(&ServerMessage::PilotDialog { ship_id, text });
+        }
         ClientMessage::Ping => connections.get_mut(&id).unwrap().send(&ServerMessage::Pong),
         ClientMessage::Hello { .. } => unreachable!(),
     }
     Ok(())
+}
+
+fn transport_notice(connections: &mut BTreeMap<u64, Connection>, id: u64, text: &str) {
+    connections
+        .get_mut(&id)
+        .unwrap()
+        .send(&ServerMessage::Notice { text: text.into() });
 }
 
 fn validate_edit(

@@ -2,6 +2,10 @@
 //! an upright AABB collides against the same edited voxels and other characters
 //! on client and server.
 
+use crate::airships::{
+    AIRSHIP_DECK_HALF_LENGTH, AIRSHIP_DECK_HALF_WIDTH, AirshipNetwork, AirshipRide,
+    AirshipSnapshot, deck_local_position, deck_position,
+};
 use crate::world::{BlockPos, CELL_SIZE, World};
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +67,155 @@ pub fn move_character_with_obstacles(
     input: MoveInput,
     dt: f32,
     obstacles: &[[f32; 3]],
+) {
+    move_character_with_surfaces(world, body, input, dt, obstacles, &[]);
+}
+
+/// The ordinary controller plus actual moving deck and landing-ramp contact.
+/// `time` selects the current ship pose; callers advance the simulation clock.
+#[allow(clippy::too_many_arguments)]
+pub fn move_character_with_airships(
+    world: &World,
+    body: &mut Body,
+    input: MoveInput,
+    dt: f32,
+    obstacles: &[[f32; 3]],
+    network: &AirshipNetwork,
+    time: f64,
+    ride: &mut Option<AirshipRide>,
+    local: &mut Option<[f32; 3]>,
+) {
+    if input.fly {
+        *ride = None;
+        *local = None;
+    }
+    if let (Some(rider), Some(offset)) = (*ride, *local) {
+        if let Some(ship) = network.ship(rider.ship_id, time) {
+            body.position = deck_position(&ship, offset);
+        } else {
+            *ride = None;
+            *local = None;
+        }
+    }
+    let ships = network.ships(time);
+    let mut occupied = obstacles.to_vec();
+    occupied.extend(
+        ships
+            .iter()
+            .map(crate::airships::pilot_position)
+            .filter(|p| {
+                (p[0] - body.position[0]).abs() < 14.0 && (p[2] - body.position[2]).abs() < 14.0
+            }),
+    );
+    let mut surfaces: Vec<_> = ships
+        .iter()
+        .filter(|s| {
+            ride.is_some_and(|r| r.ship_id == s.id)
+                || (s.position[0] - body.position[0]).abs() < 14.0
+                    && (s.position[2] - body.position[2]).abs() < 14.0
+        })
+        .cloned()
+        .map(AirshipSurface::Deck)
+        .collect();
+    surfaces.extend(
+        network
+            .ramps()
+            .iter()
+            .filter(|r| {
+                let margin = r.width * 0.5 + 3.5;
+                body.position[0] >= r.from[0].min(r.to[0]) - margin
+                    && body.position[0] <= r.from[0].max(r.to[0]) + margin
+                    && body.position[2] >= r.from[2].min(r.to[2]) - margin
+                    && body.position[2] <= r.from[2].max(r.to[2]) + margin
+            })
+            .map(|r| AirshipSurface::Ramp {
+                from: r.from,
+                to: r.to,
+                width: r.width,
+            }),
+    );
+    move_character_with_surfaces(world, body, input, dt, &occupied, &surfaces);
+    if let Some(rider) = *ride {
+        if let Some(ship) = ships.iter().find(|s| s.id == rider.ship_id) {
+            let offset = deck_local_position(ship, body.position);
+            if deck_contains(ship, body.position) && offset[1] >= -0.02 {
+                *local = Some(offset);
+                return;
+            }
+        }
+        *ride = None;
+        *local = None;
+    }
+    if body.on_ground
+        && !input.fly
+        && let Some(ship) = ships.iter().find(|s| {
+            deck_contains(s, body.position) && (body.position[1] - s.position[1]).abs() < 0.03
+        })
+    {
+        *ride = Some(AirshipRide {
+            ship_id: ship.id,
+            seat: u8::MAX,
+        });
+        *local = Some(deck_local_position(ship, body.position));
+    }
+}
+
+#[derive(Clone)]
+enum AirshipSurface {
+    Deck(AirshipSnapshot),
+    Ramp {
+        from: [f32; 3],
+        to: [f32; 3],
+        width: f32,
+    },
+}
+
+fn deck_contains(ship: &AirshipSnapshot, position: [f32; 3]) -> bool {
+    let p = deck_local_position(ship, position);
+    p[0].abs() <= AIRSHIP_DECK_HALF_WIDTH && p[2].abs() <= AIRSHIP_DECK_HALF_LENGTH
+}
+
+fn deck_contact_requires_rotation_clearance(ship: &AirshipSnapshot, position: [f32; 3]) -> bool {
+    let p = deck_local_position(ship, position);
+    // Include walking and jumping from the pier, so an entrant cannot acquire
+    // a contact gap that becomes an overlap when the attached deck turns.
+    // The character sweep still excludes vertically separated bodies.
+    p[1] >= -0.03
+        && p[0].abs() <= AIRSHIP_DECK_HALF_WIDTH + 0.8
+        && p[2].abs() <= AIRSHIP_DECK_HALF_LENGTH + 0.8
+}
+
+impl AirshipSurface {
+    fn height(&self, p: [f32; 3]) -> Option<f32> {
+        match self {
+            Self::Deck(ship) => deck_contains(ship, p).then_some(ship.position[1]),
+            Self::Ramp { from, to, width } => {
+                let dx = to[0] - from[0];
+                let dz = to[2] - from[2];
+                let distance = (dx * dx + dz * dz).sqrt();
+                if distance < 0.001 {
+                    return None;
+                }
+                let along = ((p[0] - from[0]) * dx + (p[2] - from[2]) * dz) / (distance * distance);
+                let across = ((p[0] - from[0]) * dz - (p[2] - from[2]) * dx).abs() / distance;
+                ((0.0..=1.0).contains(&along) && across <= *width * 0.5)
+                    .then_some(from[1] + (to[1] - from[1]) * along)
+            }
+        }
+    }
+    fn blocks(&self, p: [f32; 3]) -> bool {
+        self.height(p)
+            .is_some_and(|h| p[1] < h - contact_epsilon(h) && p[1] + PLAYER_HEIGHT > h - 0.35)
+    }
+}
+
+fn move_character_with_surfaces(
+    world: &World,
+    body: &mut Body,
+    input: MoveInput,
+    dt: f32,
+    obstacles: &[[f32; 3]],
+    surfaces: &[AirshipSurface],
 ) {
     if body
         .position
@@ -156,15 +309,29 @@ pub fn move_character_with_obstacles(
                 continue;
             }
             let before = body.position;
-            let (terrain_blocked, character_blocked) =
-                move_axis_with_obstacles(world, &mut body.position, axis, amount, obstacles);
+            let (terrain_blocked, character_blocked) = move_axis_with_surfaces(
+                world,
+                &mut body.position,
+                axis,
+                amount,
+                obstacles,
+                surfaces,
+            );
             if terrain_blocked && !character_blocked && can_step {
                 let mut raised = before;
                 raised[1] += CELL_SIZE + contact_epsilon(before[1] + CELL_SIZE) * 2.0;
                 // Check both upward clearance and the forward destination.
-                if character_position_is_clear(world, raised, obstacles) {
-                    let (terrain_blocked, character_blocked) =
-                        move_axis_with_obstacles(world, &mut raised, axis, amount, obstacles);
+                if character_position_is_clear(world, raised, obstacles)
+                    && !surfaces.iter().any(|s| s.blocks(raised))
+                {
+                    let (terrain_blocked, character_blocked) = move_axis_with_surfaces(
+                        world,
+                        &mut raised,
+                        axis,
+                        amount,
+                        obstacles,
+                        surfaces,
+                    );
                     if !terrain_blocked && !character_blocked {
                         body.position = raised;
                     }
@@ -172,12 +339,33 @@ pub fn move_character_with_obstacles(
             }
         }
         let vertical = body.velocity[1] * step;
+        let previous_y = body.position[1];
         body.on_ground = false;
         let (terrain_blocked, character_blocked) =
             move_axis_with_obstacles(world, &mut body.position, 1, vertical, obstacles);
         if terrain_blocked || character_blocked {
             body.on_ground = vertical < 0.0;
             body.velocity[1] = 0.0;
+        }
+        for surface in surfaces {
+            let Some(height) = surface.height(body.position) else {
+                continue;
+            };
+            if vertical <= 0.0
+                && previous_y >= height - CELL_SIZE - contact_epsilon(height)
+                && body.position[1] <= height
+                && previous_y + PLAYER_HEIGHT > height
+            {
+                body.position[1] = height;
+                body.velocity[1] = 0.0;
+                body.on_ground = true;
+            } else if vertical > 0.0
+                && previous_y + PLAYER_HEIGHT <= height - 0.35
+                && body.position[1] + PLAYER_HEIGHT >= height - 0.35
+            {
+                body.position[1] = height - 0.35 - PLAYER_HEIGHT - contact_epsilon(height);
+                body.velocity[1] = 0.0;
+            }
         }
         constrain_to_world(world, body);
     }
@@ -355,10 +543,119 @@ fn move_axis_with_obstacles(
     amount: f32,
     obstacles: &[[f32; 3]],
 ) -> (bool, bool) {
+    move_axis_with_surfaces(world, position, axis, amount, obstacles, &[])
+}
+
+fn move_axis_with_surfaces(
+    world: &World,
+    position: &mut [f32; 3],
+    axis: usize,
+    amount: f32,
+    obstacles: &[[f32; 3]],
+    surfaces: &[AirshipSurface],
+) -> (bool, bool) {
     let before = *position;
-    let terrain_blocked = move_axis(world, position, axis, amount);
+    let mut terrain_blocked = move_axis(world, position, axis, amount);
+    if axis != 1 {
+        for surface in surfaces {
+            if !surface.blocks(*position) {
+                continue;
+            }
+            // Follow a shallow continuous landing ramp from actual contact.
+            if let (Some(old_height), Some(height)) =
+                (surface.height(before), surface.height(*position))
+                && (before[1] - old_height).abs() < 0.03
+                && height >= old_height
+                && height - before[1] <= CELL_SIZE
+            {
+                let mut raised = *position;
+                raised[1] = height;
+                if character_position_is_clear(world, raised, obstacles)
+                    && !surfaces.iter().any(|s| s.blocks(raised))
+                {
+                    *position = raised;
+                    continue;
+                }
+            }
+            if surface.blocks(before) {
+                continue;
+            }
+            let end = *position;
+            let mut low = 0.0;
+            let mut high = 1.0;
+            for _ in 0..14 {
+                let mid = (low + high) * 0.5;
+                let mut candidate = before;
+                candidate[axis] = before[axis] + (end[axis] - before[axis]) * mid;
+                if surface.blocks(candidate) {
+                    high = mid;
+                } else {
+                    low = mid;
+                }
+            }
+            position[axis] = before[axis] + (end[axis] - before[axis]) * low;
+            terrain_blocked = true;
+        }
+    }
+    let mut character_position = before;
+    let mut allowed = position[axis] - before[axis];
+    if axis != 1
+        && surfaces.iter().any(|s| {
+            matches!(s,AirshipSurface::Deck(ship) if deck_contact_requires_rotation_clearance(ship,before))
+        })
+    {
+        allowed=passenger_motion(before,axis,allowed,obstacles);
+    }
+    let character_blocked =
+        move_axis_against_characters(&mut character_position, axis, allowed, obstacles);
+    position[axis] = character_position[axis];
+    (terrain_blocked, character_blocked)
+}
+
+fn passenger_motion(position: [f32; 3], axis: usize, amount: f32, obstacles: &[[f32; 3]]) -> f32 {
+    let mut allowed = amount;
+    for other in obstacles {
+        if other.iter().any(|v| !v.is_finite())
+            || other[1] + PLAYER_HEIGHT <= position[1] + contact_epsilon(position[1])
+            || position[1] + PLAYER_HEIGHT <= other[1] + contact_epsilon(other[1])
+        {
+            continue;
+        }
+        let perpendicular = if axis == 0 { 2 } else { 0 };
+        let across = position[perpendicular] - other[perpendicular];
+        if across.abs() >= 0.8 {
+            continue;
+        }
+        let reach = (0.8_f32.powi(2) - across * across).sqrt();
+        let boundary = other[axis] - allowed.signum() * reach;
+        let skin = contact_epsilon(boundary);
+        if allowed > 0.0
+            && position[axis] <= boundary + skin
+            && position[axis] + allowed >= boundary
+        {
+            allowed = (boundary - position[axis] - skin).max(0.0);
+        } else if allowed < 0.0
+            && position[axis] >= boundary - skin
+            && position[axis] + allowed <= boundary
+        {
+            allowed = (boundary - position[axis] + skin).min(0.0);
+        }
+    }
+    allowed
+}
+
+/// Swept character contact without terrain or gravity. Moving decks use this
+/// same world-axis body shape as ordinary walking and prediction/replay.
+pub fn move_axis_against_characters(
+    position: &mut [f32; 3],
+    axis: usize,
+    amount: f32,
+    obstacles: &[[f32; 3]],
+) -> bool {
+    let before = *position;
+    position[axis] += amount;
     if amount == 0.0 {
-        return (terrain_blocked, false);
+        return false;
     }
     let extent = if axis == 1 {
         PLAYER_HEIGHT
@@ -392,7 +689,7 @@ fn move_axis_with_obstacles(
             }
         }
     }
-    (terrain_blocked, character_blocked)
+    character_blocked
 }
 
 fn move_axis(world: &World, position: &mut [f32; 3], axis: usize, amount: f32) -> bool {
@@ -431,6 +728,295 @@ fn move_axis(world: &World, position: &mut [f32; 3], axis: usize, amount: f32) -
 mod tests {
     use super::*;
     use crate::world::Block;
+
+    fn village_airships() -> &'static (World, AirshipNetwork) {
+        static WORLD: std::sync::OnceLock<(World, AirshipNetwork)> = std::sync::OnceLock::new();
+        WORLD.get_or_init(|| {
+            let world = World::generate(42, crate::world::WorldGeneration::GeographyV3);
+            let network = AirshipNetwork::new(&world);
+            (world, network)
+        })
+    }
+
+    #[test]
+    fn walking_up_the_real_landing_ramp_boards_without_messages_or_teleporting() {
+        let (world, network) = village_airships();
+        let ship = network
+            .ships(15.0)
+            .into_iter()
+            .find(|s| s.route_id == 0 && s.docked_at == Some(0))
+            .unwrap();
+        let path = network.landing_path(ship.id, 0).unwrap();
+        let mut body = Body::new(path[0]);
+        let mut ride = None;
+        let mut local = None;
+        let mut waypoint = 1;
+        for _ in 0..10_000 {
+            let target = path[waypoint];
+            let dx = target[0] - body.position[0];
+            let dz = target[2] - body.position[2];
+            let distance = (dx * dx + dz * dz).sqrt();
+            if distance < 0.10 {
+                if waypoint == path.len() - 1 {
+                    break;
+                }
+                waypoint += 1;
+                continue;
+            }
+            let before = body.position;
+            move_character_with_airships(
+                world,
+                &mut body,
+                MoveInput {
+                    direction: [dx / distance, dz / distance],
+                    ..Default::default()
+                },
+                0.05,
+                &[],
+                network,
+                15.0,
+                &mut ride,
+                &mut local,
+            );
+            let travelled = ((body.position[0] - before[0]).powi(2)
+                + (body.position[2] - before[2]).powi(2))
+            .sqrt();
+            assert!(
+                travelled <= 3.8 * 0.05 + 0.03,
+                "boarding teleported by {travelled}"
+            );
+        }
+        assert_eq!(
+            waypoint,
+            path.len() - 1,
+            "walker did not reach the actual deck: {:?} target={:?}",
+            body.position,
+            path[waypoint]
+        );
+        assert!(body.on_ground);
+        assert_eq!(ride.unwrap().ship_id, ship.id);
+        assert_eq!(ride.unwrap().seat, u8::MAX);
+        assert!(local.unwrap()[1].abs() < 0.03);
+        assert!((body.position[1] - ship.position[1]).abs() < 0.03);
+    }
+
+    #[test]
+    fn moving_deck_carries_normal_jumps_and_walking_or_jumping_off_releases_the_body() {
+        let (world, network) = village_airships();
+        let ship = network
+            .ships(80.0)
+            .into_iter()
+            .find(|s| s.route_id == 0)
+            .unwrap();
+        let mut local = Some([0.0, 0.0, 0.0]);
+        let mut ride = Some(AirshipRide {
+            ship_id: ship.id,
+            seat: u8::MAX,
+        });
+        let mut body = Body::new(deck_position(&ship, local.unwrap()));
+        body.on_ground = true;
+        move_character_with_airships(
+            world,
+            &mut body,
+            MoveInput {
+                jump: true,
+                ..Default::default()
+            },
+            0.05,
+            &[],
+            network,
+            80.0,
+            &mut ride,
+            &mut local,
+        );
+        assert!(!body.on_ground && body.velocity[1] > 0.0 && local.unwrap()[1] > 0.0);
+        for step in 1..20 {
+            move_character_with_airships(
+                world,
+                &mut body,
+                MoveInput::default(),
+                0.05,
+                &[],
+                network,
+                80.0 + step as f64 * 0.05,
+                &mut ride,
+                &mut local,
+            );
+        }
+        assert!(body.on_ground && ride.is_some() && local.unwrap()[1].abs() < 0.03);
+        let end_ship = network.ship(ship.id, 81.0).unwrap();
+        assert!((body.position[1] - end_ship.position[1]).abs() < 0.7);
+        for tick in 0..60 {
+            let current = network.ship(ship.id, 81.0 + tick as f64 * 0.05).unwrap();
+            let (sin, cos) = current.yaw.sin_cos();
+            move_character_with_airships(
+                world,
+                &mut body,
+                MoveInput {
+                    direction: [cos, -sin],
+                    ..Default::default()
+                },
+                0.05,
+                &[],
+                network,
+                81.0 + tick as f64 * 0.05,
+                &mut ride,
+                &mut local,
+            );
+            if ride.is_none() {
+                break;
+            }
+        }
+        assert!(
+            ride.is_none() && local.is_none(),
+            "walking over an open edge must detach"
+        );
+        for tick in 0..20 {
+            move_character_with_airships(
+                world,
+                &mut body,
+                MoveInput::default(),
+                0.05,
+                &[],
+                network,
+                84.0 + tick as f64 * 0.05,
+                &mut ride,
+                &mut local,
+            );
+        }
+        assert!(!body.on_ground && body.velocity[1] < 0.0);
+
+        let current = network.ship(ship.id, 90.0).unwrap();
+        local = Some([AIRSHIP_DECK_HALF_WIDTH - 0.01, 0.0, 0.0]);
+        ride = Some(AirshipRide {
+            ship_id: ship.id,
+            seat: u8::MAX,
+        });
+        body = Body::new(deck_position(&current, local.unwrap()));
+        body.on_ground = true;
+        let (sin, cos) = current.yaw.sin_cos();
+        move_character_with_airships(
+            world,
+            &mut body,
+            MoveInput {
+                direction: [cos, -sin],
+                jump: true,
+                ..Default::default()
+            },
+            0.25,
+            &[],
+            network,
+            90.0,
+            &mut ride,
+            &mut local,
+        );
+        assert!(ride.is_none() && !body.on_ground && body.velocity[1] > 0.0);
+        assert!(body.position[1] > current.position[1]);
+    }
+
+    #[test]
+    fn deck_contacts_keep_passengers_separate_when_the_ship_turns() {
+        let (world, network) = village_airships();
+        let mut ship = network
+            .ships(15.0)
+            .into_iter()
+            .find(|s| s.route_id == 0 && s.docked_at == Some(0))
+            .unwrap();
+        let npc_local = [1.0, 0.0, 0.0];
+        let mut body = Body::new(deck_position(&ship, [-1.0, 0.0, 0.0]));
+        body.on_ground = true;
+        let (sin, cos) = ship.yaw.sin_cos();
+        let surfaces = [AirshipSurface::Deck(ship.clone())];
+        for _ in 0..20 {
+            let npc = deck_position(&ship, npc_local);
+            move_character_with_surfaces(
+                world,
+                &mut body,
+                MoveInput {
+                    direction: [cos, -sin],
+                    sprint: true,
+                    ..Default::default()
+                },
+                0.05,
+                &[npc],
+                &surfaces,
+            );
+            assert!(!characters_overlap(body.position, npc));
+        }
+        let local = deck_local_position(&ship, body.position);
+        for step in 0..72 {
+            ship.yaw = step as f32 * std::f32::consts::TAU / 72.0;
+            body.position = deck_position(&ship, local);
+            let npc = deck_position(&ship, npc_local);
+            assert!(
+                !characters_overlap(body.position, npc),
+                "rotation overlapped passengers at yaw={}",
+                ship.yaw
+            );
+        }
+    }
+
+    #[test]
+    fn entering_from_the_pier_preserves_clearance_before_the_ship_turns() {
+        let (world, network) = village_airships();
+        let id = 4_294_967_297;
+        let base = network.ship(id, 0.0).unwrap();
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let orthogonal = (base.yaw / quarter).ceil() * quarter;
+        let time = ((orthogonal - base.yaw) / std::f32::consts::PI
+            * crate::airships::AIRSHIP_TURN_SECONDS as f32) as f64;
+        let ship = network.ship(id, time).unwrap();
+        let (sin, cos) = ship.yaw.sin_cos();
+        let input = MoveInput {
+            direction: [cos, -sin],
+            sprint: true,
+            ..Default::default()
+        };
+        for jumping in [false, true] {
+            let mut body = Body::new(deck_position(&ship, [-5.0, 0.0, 0.0]));
+            body.on_ground = true;
+            let mut ride = None;
+            let mut local = None;
+            let mut maximum_jump = 0.0_f32;
+            for npc_local in [[-3.4, 0.0, 0.0], [-2.8, 0.0, 0.0]] {
+                let npc = deck_position(&ship, npc_local);
+                for step in 0..8 {
+                    move_character_with_airships(
+                        world,
+                        &mut body,
+                        MoveInput {
+                            jump: jumping && npc_local[0] == -3.4 && step == 0,
+                            ..input
+                        },
+                        0.1,
+                        &[npc],
+                        network,
+                        time,
+                        &mut ride,
+                        &mut local,
+                    );
+                    maximum_jump = maximum_jump.max(body.position[1] - ship.position[1]);
+                    let separation = ((body.position[0] - npc[0]).powi(2)
+                        + (body.position[2] - npc[2]).powi(2))
+                    .sqrt();
+                    assert!(separation >= 0.8, "unsafe entering gap={separation}");
+                    assert!(!characters_overlap(body.position, npc));
+                }
+                if npc_local[0] == -3.4 {
+                    assert!(ride.is_none(), "the occupied entry must remain a queue");
+                }
+            }
+            if jumping {
+                assert!(maximum_jump > 0.5, "the entrant must make a real jump");
+            }
+            assert_eq!(ride.unwrap().ship_id, id);
+            let turned = network.ship(id, time + 2.5).unwrap();
+            assert!(!characters_overlap(
+                deck_position(&turned, local.unwrap()),
+                deck_position(&turned, [-2.8, 0.0, 0.0])
+            ));
+        }
+    }
 
     fn tick(world: &World, body: &mut Body, input: MoveInput, count: usize) {
         for _ in 0..count {

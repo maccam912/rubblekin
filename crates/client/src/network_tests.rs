@@ -57,6 +57,8 @@ fn preserves_delta_for_mode(mode: SessionMode) {
                     body: Body::new([0.25, 2.52, 0.25]),
                     yaw: 0.0,
                     last_input_sequence: 0,
+                    ride: None,
+                    deck_position: None,
                 }]
             } else {
                 Vec::new()

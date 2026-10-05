@@ -103,18 +103,18 @@ pub fn setup_ui(
         NpcPanel,
         children![
             (
-                Text::new("A LIFE OF THEIR OWN"),
+                Text::new("INSPECTOR"),
                 TextFont::from_font_size(14.0).with_font(font.clone()),
                 TextColor(Color::srgb(0.90, 0.73, 0.42))
             ),
             (
-                Text::new("Meeting the forager…"),
+                Text::new("Aim at a character, block, or farm plot…"),
                 TextFont::from_font_size(18.0).with_font(font.clone()),
                 TextColor(ink()),
                 NpcText
             ),
             (
-                Text::new("Tab  hide inspector"),
+                Text::new("Tab  close · reopen to inspect aim"),
                 TextFont::from_font_size(14.0).with_font(font.clone()),
                 TextColor(Color::srgb(0.57, 0.69, 0.65))
             ),
@@ -127,9 +127,9 @@ pub fn setup_ui(
         children![
             (Text::new(if observing { "OBSERVE THE WORLD" } else { "MAKE YOURSELF AT HOME" }), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.90, 0.73, 0.42))),
             (Text::new(if observing {
-                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect village / forager     •     F2   graphics\nV   visit next village\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
+                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect aimed target     •     F2   graphics\nV   visit next village\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
-                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
+                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
             }), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
         ],
     ));
@@ -311,15 +311,15 @@ fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) 
             if help {
                 panel.spawn((
                     Text::new(if observing {
-                        "Left stick: fly · swipe the world: look\nRise / Fall: vertical flight · Sprint: boost\n+ / −: camera speed\nMenu: graphics, return to spawn, next village, servers\nInspect: village and resident details · swipe panel to scroll\nRead-only observer: no avatar or editing"
+                        "Left stick: fly · swipe the world: look\nRise / Fall: vertical flight · Sprint: boost\n+ / −: camera speed\nMenu: graphics, return to spawn, next village, servers\nInspect: aimed character, block, or plot · swipe panel to scroll\nRead-only observer: no avatar or editing"
                     } else {
-                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose a building block\nInspect: village and resident details · swipe panel to scroll\nMenu: graphics, controls, and leave world"
+                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose a building block\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nMenu: graphics, controls, and leave world"
                     }),
                     TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink()),
                     Node { flex_shrink: 0., ..default() },
                 ));
             } else {
-                panel.spawn((Text::new("Meeting the residents…"), TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink()), NpcText, Node { flex_shrink: 0., ..default() }));
+                panel.spawn((Text::new("Aim at a character, block, or farm plot…"), TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink()), NpcText, Node { flex_shrink: 0., ..default() }));
             }
         }).id();
         if help {
@@ -460,79 +460,7 @@ pub fn update_ui(
         );
     }
     for mut text in &mut texts.p1() {
-        let position = session
-            .observer
-            .as_ref()
-            .map_or(session.body.position, |camera| camera.position.to_array());
-        let village = world.0.settlements().and_then(|plan| {
-            plan.villages.iter().min_by(|a, b| {
-                let distance =
-                    |p: [f32; 3]| (p[0] - position[0]).powi(2) + (p[2] - position[2]).powi(2);
-                distance(a.center).total_cmp(&distance(b.center))
-            })
-        });
-        let value = if let Some(village) =
-            village.filter(|v| (v.center[0] - position[0]).hypot(v.center[2] - position[2]) < 300.0)
-        {
-            let stores = session.villages.iter().find(|v| v.id == village.id);
-            let resident = session
-                .residents
-                .iter()
-                .filter(|r| r.village_id == village.id)
-                .min_by(|a, b| {
-                    let d = |r: &rubblekin_core::protocol::ResidentSnapshot| {
-                        (r.position[0] - position[0]).powi(2)
-                            + (r.position[2] - position[2]).powi(2)
-                    };
-                    d(a).total_cmp(&d(b))
-                });
-            let mut value = format!(
-                "{}  ·  {:?}\n\nFreshwater  {:.0} m away\nLand  {:.0}% · Timber  {:.0}%\nStone {:.0}% · Clay {:.0}% · Iron {:.0}%",
-                village.name,
-                village.kind,
-                village.freshwater_distance,
-                village.resources.farming * 100.0,
-                village.resources.timber * 100.0,
-                village.resources.stone * 100.0,
-                village.resources.clay * 100.0,
-                village.resources.iron * 100.0
-            );
-            if let Some(s) = stores {
-                value.push_str(&format!("\n\n{} residents · housing for {}\nFood {:.0} · Timber {:.0}\nStone {:.0} · Clay {:.0} · Iron {:.0}\nCrop growth {:.0}%", s.population, s.housing_capacity, s.food, s.timber, s.stone, s.clay, s.iron, s.crop_growth * 100.0));
-            }
-            if let Some(r) = resident {
-                value.push_str(&format!(
-                    "\n\n{} · {}\n{}\nHunger   {:3.0} / 100\nEnergy    {:3.0} / 100\n\n{}",
-                    r.name,
-                    r.role.label(),
-                    r.action.label(),
-                    r.hunger,
-                    r.energy,
-                    r.reason
-                ));
-            }
-            value
-        } else {
-            format!(
-                "{}  ·  {}{}\n\nHunger   {:3.0} / 100\nEnergy    {:3.0} / 100\nBerries gathered   {}\n\n{}{}",
-                session.npc.name,
-                session.npc.action.label(),
-                if session.npc.forced {
-                    " [override]"
-                } else {
-                    ""
-                },
-                session.npc.hunger,
-                session.npc.energy,
-                session.npc.berries,
-                session.npc.reason,
-                if session.can_admin {
-                    "\n\nF6 forage · F7 rest · F8 autonomous\nF9 set needs · [ favor rest · ] reset weights"
-                } else {
-                    ""
-                }
-            )
-        };
+        let value = crate::inspection_details::text(&world.0, &session);
         set_text(&mut text, value);
     }
     for mut text in &mut texts.p2() {
