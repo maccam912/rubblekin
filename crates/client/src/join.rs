@@ -4,11 +4,14 @@ use crate::{
     observer::ObserverCamera, prediction::Prediction, terrain::TerrainScene,
 };
 use bevy::{
-    input::keyboard::{Key, KeyboardInput},
+    input::{
+        keyboard::{Key, KeyboardInput},
+        touch::{TouchInput, TouchPhase},
+    },
     input_focus::{FocusCause, InputFocus},
     prelude::*,
     text::{EditableText, EditableTextFilter, TextCursorStyle, TextEdit},
-    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
+    window::{CursorGrabMode, CursorOptions, Ime, PrimaryWindow},
     winit::{RawWinitWindowEvent, converters::convert_keyboard_input},
 };
 use rubblekin_core::{
@@ -168,6 +171,7 @@ pub(super) enum Action {
     Join,
     Local,
     Mode(SessionMode),
+    DismissKeyboard,
 }
 
 fn ink() -> Color {
@@ -177,7 +181,22 @@ fn accent() -> Color {
     Color::srgb(0.90, 0.73, 0.42)
 }
 
-pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, menu: Res<JoinScreen>) {
+#[derive(Component)]
+pub(super) struct MenuPanel;
+#[derive(Component)]
+pub(super) struct MenuContent;
+#[derive(Component)]
+pub(super) struct MenuColumn;
+#[derive(Component)]
+pub(super) struct KeyboardDone;
+
+pub fn setup(
+    mut commands: Commands,
+    mut fonts: ResMut<Assets<Font>>,
+    menu: Res<JoinScreen>,
+    touch: Option<Res<crate::touch::TouchControls>>,
+) {
+    let touch = touch.is_some_and(|touch| touch.enabled);
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
@@ -185,45 +204,67 @@ pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>, menu: Res<
     commands.spawn((
         MenuRoot,
         UiTargetCamera(camera),
-        Node { width: percent(100), height: percent(100), align_items: AlignItems::Center, justify_content: JustifyContent::Center, padding: UiRect::all(px(24)), ..default() },
+        Node {
+            width: percent(100), height: percent(100),
+            align_items: AlignItems::Center, justify_content: JustifyContent::Center,
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(if touch { 16 } else { 24 })),
+            overflow: Overflow::scroll_y(), ..default()
+        },
+        ScrollPosition::default(),
         BackgroundColor(Color::srgb(0.055, 0.10, 0.10)),
     )).with_children(|root| {
         root.spawn((
-            Node { width: px(560), max_width: percent(100), padding: UiRect::all(px(32)), flex_direction: FlexDirection::Column, row_gap: px(16), border_radius: BorderRadius::all(px(12)), ..default() },
+            MenuPanel,
+            Node {
+                width: px(560), max_width: percent(100), flex_shrink: 0.,
+                padding: UiRect::all(px(if touch { 16 } else { 32 })),
+                flex_direction: FlexDirection::Column, row_gap: px(if touch { 10 } else { 16 }),
+                border_radius: BorderRadius::all(px(12)), ..default()
+            },
             BackgroundColor(Color::srgb(0.08, 0.15, 0.15)),
         )).with_children(|panel| {
-            panel.spawn((Text::new("R U B B L E K I N"), TextFont::from_font_size(32.0).with_font(font.clone()), TextColor(ink())));
-            panel.spawn((Text::new("A LIVING WORLD  /  EARLY PROTOTYPE"), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(accent())));
-            panel.spawn((Text::new("Choose your server"), TextFont::from_font_size(24.0).with_font(font.clone()), TextColor(ink()), Node { margin: UiRect::top(px(12)), ..default() }));
-            for (field, label, value, max) in [(Field::Address, "SERVER ADDRESS", menu.address.as_str(), 260), (Field::Name, "DISPLAY NAME", menu.name.as_str(), 24)] {
-                panel.spawn((Text::new(label), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(accent())));
-                panel.spawn((
-                    field,
-                    Interaction::default(),
-                    Node { width: percent(100), padding: UiRect::all(px(12)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(5)), overflow: Overflow::clip_x(), ..default() },
-                    EditableText { max_characters: Some(max), ..EditableText::new(value) },
-                    EditableTextFilter::new(|ch| !ch.is_control()),
-                    TextLayout::no_wrap(),
-                    TextCursorStyle { color: ink(), selection_color: Color::srgb(0.23, 0.43, 0.42), unfocused_selection_color: Color::NONE, ..default() },
-                    TextFont::from_font_size(21.0).with_font(font.clone()), TextColor(ink()),
-                    BackgroundColor(Color::srgb(0.04, 0.08, 0.08)), BorderColor::all(Color::srgb(0.20, 0.32, 0.30)),
-                ));
-            }
-            panel.spawn((Node { column_gap: px(12), ..default() },)).with_children(|row| {
-                for (mode, label) in [(SessionMode::Player, "Play as explorer"), (SessionMode::Observer, "Observe as admin")] {
-                    row.spawn((Button, Action::Mode(mode), Node { padding: UiRect::axes(px(15), px(11)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
-                        .with_child((Text::new(label), TextFont::from_font_size(18.0).with_font(font.clone()), TextColor(ink())));
-                }
+            panel.spawn((Node { align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, column_gap: px(8), ..default() },)).with_children(|header| {
+                header.spawn((Text::new("R U B B L E K I N"), TextFont::from_font_size(if touch { 24. } else { 32. }).with_font(font.clone()), TextColor(ink())));
+                header.spawn((Button, Action::DismissKeyboard, KeyboardDone, Node { display: Display::None, min_height: px(44), padding: UiRect::axes(px(14), px(8)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                    .with_child((Text::new("Done typing"), TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink())));
             });
-            panel.spawn((Text::new("Observer camera is read-only; server admin controls must be enabled."), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
-            panel.spawn((Node { column_gap: px(12), margin: UiRect::top(px(4)), ..default() },)).with_children(|row| {
-                for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world")] {
-                    row.spawn((Button, action, Node { padding: UiRect::axes(px(22), px(13)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
-                        .with_child((Text::new(label), TextFont::from_font_size(19.0).with_font(font.clone()), TextColor(ink())));
-                }
+            panel.spawn((Text::new("A LIVING WORLD  /  EARLY PROTOTYPE"), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
+            panel.spawn((MenuContent, Node { flex_direction: FlexDirection::Column, row_gap: px(16), column_gap: px(24), ..default() },)).with_children(|content| {
+                content.spawn((MenuColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(if touch { 8 } else { 12 }), min_width: px(0), ..default() },)).with_children(|fields| {
+                    fields.spawn((Text::new("Choose your server"), TextFont::from_font_size(if touch { 20. } else { 24. }).with_font(font.clone()), TextColor(ink())));
+                    for (field, label, value, max) in [(Field::Address, "SERVER ADDRESS", menu.address.as_str(), 260), (Field::Name, "DISPLAY NAME", menu.name.as_str(), 24)] {
+                        fields.spawn((Text::new(label), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
+                        fields.spawn((
+                            field, Interaction::default(),
+                            Node { width: percent(100), min_height: px(48), padding: UiRect::all(px(10)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(5)), overflow: Overflow::clip_x(), ..default() },
+                            EditableText { max_characters: Some(max), ..EditableText::new(value) },
+                            EditableTextFilter::new(|ch| !ch.is_control()), TextLayout::no_wrap(),
+                            TextCursorStyle { color: ink(), selection_color: Color::srgb(0.23, 0.43, 0.42), unfocused_selection_color: Color::NONE, ..default() },
+                            TextFont::from_font_size(21.).with_font(font.clone()), TextColor(ink()),
+                            BackgroundColor(Color::srgb(0.04, 0.08, 0.08)), BorderColor::all(Color::srgb(0.20, 0.32, 0.30)),
+                        ));
+                    }
+                });
+                content.spawn((MenuColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(if touch { 8 } else { 12 }), min_width: px(0), ..default() },)).with_children(|actions| {
+                    actions.spawn((Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() },)).with_children(|row| {
+                        for (mode, label) in [(SessionMode::Player, "Play as explorer"), (SessionMode::Observer, "Observe as admin")] {
+                            row.spawn((Button, Action::Mode(mode), Node { min_height: px(48), padding: UiRect::axes(px(12), px(10)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                                .with_child((Text::new(label), TextFont::from_font_size(if touch { 16. } else { 18. }).with_font(font.clone()), TextColor(ink())));
+                        }
+                    });
+                    actions.spawn((Text::new("Observer camera is read-only; the server must allow observers."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+                    actions.spawn((Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() },)).with_children(|row| {
+                        for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world")] {
+                            row.spawn((Button, action, Node { min_height: px(48), padding: UiRect::axes(px(20), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                                .with_child((Text::new(label), TextFont::from_font_size(19.).with_font(font.clone()), TextColor(ink())));
+                        }
+                    });
+                    actions.spawn((Text::new(menu.status.clone()), TextFont::from_font_size(17.).with_font(font.clone()), TextColor(ink()), MenuStatus, Node { min_height: px(42), ..default() }));
+                    actions.spawn((Text::new(if touch { "Tap a field to type · swipe to scroll
+Guest access · no account or password" } else { "Guest access · no account or password\nTab switches fields · Enter joins · F10 leaves a world" }), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+                });
             });
-            panel.spawn((Text::new(menu.status.clone()), TextFont::from_font_size(17.0).with_font(font.clone()), TextColor(ink()), MenuStatus, Node { min_height: px(46), ..default() }));
-            panel.spawn((Text::new("Guest access · no account or password\nTab switches fields · Enter joins · F10 leaves a world"), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
         });
     });
 }
@@ -269,23 +310,79 @@ pub fn interact(
     session: Option<Res<Session>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut keyboard: MessageReader<MenuKey>,
+    mut ime: MessageReader<Ime>,
+    mut composing: Local<bool>,
+    touch: Option<Res<crate::touch::TouchControls>>,
     mut focus: ResMut<InputFocus>,
     mut fields: Query<(Entity, &Field, &Interaction, &mut EditableText)>,
     actions: Query<(&Action, &Interaction), Changed<Interaction>>,
+    mut fingers: MessageReader<TouchInput>,
+    targets: Query<(
+        Entity,
+        &ComputedNode,
+        &UiGlobalTransform,
+        &Node,
+        Option<&InheritedVisibility>,
+        Option<&Field>,
+        Option<&Action>,
+    )>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
+    parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
 ) {
     if session.is_some() || menu.pending.is_some() {
         keyboard.clear();
+        ime.clear();
+        fingers.clear();
         return;
     }
     // Text edits commit in PostUpdate. Submit the previous frame's action only
     // after reading those committed values (including paste followed by Enter).
     let requested = menu.next_action.take();
+    let mut touched_action = None;
+    // Resolve original Started events directly: brief Android taps must work
+    // independently of the UI cursor/Interaction timing at low frame rates.
+    // Rendered node geometry and inherited clipping remain the hit boundaries.
+    for finger in fingers
+        .read()
+        .filter(|event| event.phase == TouchPhase::Started)
+    {
+        let Ok(window) = windows.get(finger.window) else {
+            continue;
+        };
+        if finger.position.y < 0. || finger.position.y > visible_height(window) {
+            continue;
+        }
+        let point = finger.position * window.scale_factor();
+        for (entity, computed, transform, node, visibility, field, action) in &targets {
+            if node.display == Display::None
+                || visibility.is_some_and(|visible| !visible.get())
+                || !computed.contains_point(*transform, point)
+                || !bevy::ui::clip_check_recursive(point, entity, &clipping, &parents)
+            {
+                continue;
+            }
+            if field.is_some() {
+                focus.set(entity, FocusCause::Navigated);
+                #[cfg(target_os = "android")]
+                if let Some(app) = bevy::android::ANDROID_APP.get() {
+                    app.show_soft_input(false);
+                }
+                break;
+            }
+            if let Some(action) = action {
+                touched_action = Some(*action);
+                break;
+            }
+        }
+    }
     for (entity, _, interaction, _) in &fields {
-        if *interaction == Interaction::Pressed {
+        if !cfg!(target_os = "android") && *interaction == Interaction::Pressed {
             focus.set(entity, FocusCause::Navigated);
         }
     }
-    if focus.get().is_none() || keys.just_pressed(KeyCode::Tab) {
+    let touch = touch.is_some_and(|touch| touch.enabled);
+    if (!touch && focus.get().is_none()) || keys.just_pressed(KeyCode::Tab) {
         let old = focus.get();
         if let Some((entity, _, _, _)) =
             fields.iter().find(|(entity, _, _, _)| Some(*entity) != old)
@@ -293,6 +390,39 @@ pub fn interact(
             focus.set(entity, FocusCause::Navigated);
         }
     }
+    let mut ime_handled_text = *composing;
+    for event in ime.read() {
+        let edit = match event {
+            Ime::Preedit { value, cursor, .. } => {
+                *composing = !value.is_empty();
+                ime_handled_text |= *composing;
+                Some(TextEdit::ImeSetCompose {
+                    value: value.as_str().into(),
+                    cursor: cursor
+                        .map(|(anchor, focus)| bevy::text::PreeditCursor { anchor, focus }),
+                })
+            }
+            Ime::Commit { value, .. } => {
+                *composing = false;
+                ime_handled_text = true;
+                Some(TextEdit::ImeCommit {
+                    value: value.as_str().into(),
+                })
+            }
+            Ime::Disabled { .. } => {
+                *composing = false;
+                Some(TextEdit::clear_ime_compose())
+            }
+            Ime::Enabled { .. } => None,
+        };
+        if let Some(edit) = edit
+            && let Some(entity) = focus.get()
+            && let Ok((_, _, _, mut input)) = fields.get_mut(entity)
+        {
+            input.queue_edit(edit);
+        }
+    }
+    let mut dismiss_keyboard = false;
     // Each event retains the modifier flags it had when Winit received it,
     // including complete press/release chords arriving in a single frame.
     for key in keyboard.read() {
@@ -300,11 +430,26 @@ pub fn interact(
         if !event.state.is_pressed() {
             continue;
         }
+        if event.logical_key == Key::BrowserBack && touch {
+            dismiss_keyboard = true;
+            continue;
+        }
+        // Android GameTextInput owns the complete soft-keyboard buffer. Applying
+        // its accompanying key events here would insert/delete text twice.
+        if cfg!(target_os = "android") {
+            if event.logical_key == Key::Enter {
+                dismiss_keyboard = true;
+            }
+            continue;
+        }
         let shortcut = key.modifiers.control_key() || key.modifiers.super_key();
         let shift = key.modifiers.shift_key();
         let Some(edit) = text_edit(event, shortcut, shift) else {
             continue;
         };
+        if ime_handled_text && matches!(edit, TextEdit::Insert(_)) && !shortcut {
+            continue;
+        }
         if let Some(entity) = focus.get()
             && let Ok((_, _, _, mut input)) = fields.get_mut(entity)
         {
@@ -317,11 +462,24 @@ pub fn interact(
             Field::Name => menu.name = input.value().to_string(),
         }
     }
-    let action = actions
-        .iter()
-        .find(|(_, interaction)| **interaction == Interaction::Pressed)
-        .map(|(action, _)| *action)
-        .or_else(|| keys.just_pressed(KeyCode::Enter).then_some(Action::Join));
+    let action = touched_action
+        .or_else(|| {
+            // Android menus use the event path exclusively, so a synthesized mouse
+            // Interaction cannot toggle a mode or submit the form a second time.
+            (!cfg!(target_os = "android"))
+                .then(|| {
+                    actions
+                        .iter()
+                        .find(|(_, interaction)| **interaction == Interaction::Pressed)
+                        .map(|(action, _)| *action)
+                })
+                .flatten()
+        })
+        .or_else(|| {
+            (!cfg!(target_os = "android") && !*composing && keys.just_pressed(KeyCode::Enter))
+                .then_some(Action::Join)
+        })
+        .or_else(|| dismiss_keyboard.then_some(Action::DismissKeyboard));
     if let Some(Action::Mode(mode)) = action {
         menu.mode = mode;
     } else {
@@ -329,9 +487,330 @@ pub fn interact(
     }
     if let Some(action) = requested {
         menu.next_action = None;
-        menu.start(matches!(action, Action::Local));
+        focus.clear();
+        if !matches!(action, Action::DismissKeyboard) {
+            menu.start(matches!(action, Action::Local));
+        }
     }
 }
+
+#[derive(Default)]
+pub(super) struct MenuScroll {
+    finger: Option<(u64, f32, f32)>,
+    focused: Option<Entity>,
+    height: f32,
+    settle: u8,
+}
+
+// Winit does not forward Android content-rect/keyboard insets, so query the
+// activity's visible rectangle as well as the current window dimensions.
+fn visible_height(window: &Window) -> f32 {
+    #[cfg(target_os = "android")]
+    if let Some(app) = bevy::android::ANDROID_APP.get() {
+        let rect = app.content_rect();
+        if rect.bottom > rect.top {
+            return window
+                .height()
+                .min(rect.bottom as f32 / window.scale_factor());
+        }
+    }
+    window.height()
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn layout(
+    menu: Res<JoinScreen>,
+    session: Option<Res<Session>>,
+    touch: Option<Res<crate::touch::TouchControls>>,
+    touches: Option<Res<Touches>>,
+    wheel: Option<Res<bevy::input::mouse::AccumulatedMouseScroll>>,
+    focus: Res<InputFocus>,
+    mut window: Single<&mut Window, With<PrimaryWindow>>,
+    mut scroll_state: Local<MenuScroll>,
+    fields: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<Field>>,
+    mut nodes: ParamSet<(
+        Query<(&mut Node, &mut ScrollPosition, &ComputedNode), With<MenuRoot>>,
+        Query<&mut Node, With<MenuPanel>>,
+        Query<&mut Node, With<MenuContent>>,
+        Query<&mut Node, With<MenuColumn>>,
+        Query<&mut Node, With<KeyboardDone>>,
+    )>,
+) {
+    let touch = touch.is_some_and(|touch| touch.enabled);
+    let editing = session.is_none()
+        && menu.pending.is_none()
+        && focus.get().is_some_and(|entity| fields.contains(entity));
+    window.ime_enabled = editing;
+    if session.is_some() {
+        return;
+    }
+    let height = visible_height(&window);
+    let wide = touch && window.width() >= 650.;
+    for mut panel in &mut nodes.p1() {
+        panel.width = px(if wide {
+            (window.width() - 32.).min(900.)
+        } else {
+            560.
+        });
+    }
+    for mut content in &mut nodes.p2() {
+        content.flex_direction = if wide {
+            FlexDirection::Row
+        } else {
+            FlexDirection::Column
+        };
+    }
+    for mut column in &mut nodes.p3() {
+        column.flex_grow = if wide { 1. } else { 0. };
+        column.flex_basis = if wide { percent(50) } else { Val::Auto };
+    }
+    for mut done in &mut nodes.p4() {
+        done.display = if touch && editing {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    if scroll_state.focused != focus.get() || (scroll_state.height - height).abs() > 1. {
+        scroll_state.focused = focus.get();
+        scroll_state.height = height;
+        scroll_state.settle = 2;
+    }
+    for (mut root, mut scroll, computed) in &mut nodes.p0() {
+        root.height = px(height);
+        root.justify_content = if height < 500. || touch {
+            JustifyContent::FlexStart
+        } else {
+            JustifyContent::Center
+        };
+        let max_scroll =
+            (computed.content_size.y - computed.size.y) * computed.inverse_scale_factor;
+        if let Some(wheel) = &wheel {
+            scroll.0.y -= wheel.delta.y * 28.;
+        }
+        if let Some(touches) = &touches {
+            if scroll_state.finger.is_none()
+                && let Some(finger) = touches.iter_just_pressed().next()
+            {
+                scroll_state.finger = Some((finger.id(), finger.position().y, finger.position().y));
+            }
+            if let Some((id, start, previous)) = scroll_state.finger {
+                if let Some(finger) = touches.get_pressed(id) {
+                    let y = finger.position().y;
+                    if (y - start).abs() > 12. {
+                        scroll.0.y += previous - y;
+                    }
+                    scroll_state.finger = Some((id, start, y));
+                } else {
+                    scroll_state.finger = None;
+                }
+            }
+        }
+        // Re-layout twice before bringing a focused field above the keyboard.
+        if scroll_state.settle > 0 {
+            scroll_state.settle -= 1;
+            if scroll_state.settle == 0
+                && editing
+                && let Some(entity) = focus.get()
+                && let Ok((_, field, transform)) = fields.get(entity)
+            {
+                let center = transform.translation.y * field.inverse_scale_factor;
+                let half = field.size.y * field.inverse_scale_factor * 0.5;
+                if center - half < 12. {
+                    scroll.0.y += center - half - 12.;
+                }
+                if center + half > height - 12. {
+                    scroll.0.y += center + half - height + 12.;
+                }
+            }
+        }
+        scroll.0.y = scroll.0.y.clamp(0., max_scroll.max(0.));
+    }
+}
+
+#[cfg(target_os = "android")]
+#[derive(Default)]
+pub(super) struct AndroidEditor {
+    focused: Option<Entity>,
+    text: String,
+    selection: (usize, usize),
+    pending: Option<PendingNativeEdit>,
+}
+
+#[cfg(any(test, target_os = "android"))]
+struct PendingNativeEdit {
+    previous_text: String,
+    previous_selection: (usize, usize),
+    sent: std::time::Instant,
+}
+
+#[cfg(any(test, target_os = "android"))]
+impl PendingNativeEdit {
+    fn is_stale(
+        &self,
+        incoming: &str,
+        selection: (usize, usize),
+        expected: &str,
+        expected_selection: (usize, usize),
+        now: std::time::Instant,
+    ) -> bool {
+        now.saturating_duration_since(self.sent) < std::time::Duration::from_millis(250)
+            && incoming == self.previous_text
+            && selection == self.previous_selection
+            && (incoming != expected || selection != expected_selection)
+    }
+}
+
+#[cfg(target_os = "android")]
+fn push_android_text(
+    app: &winit::platform::android::activity::AndroidApp,
+    state: &mut AndroidEditor,
+    text: String,
+    start: usize,
+    end: usize,
+) {
+    use winit::platform::android::activity::input::{TextInputState, TextSpan};
+    let previous = app.text_input_state();
+    state.pending = Some(PendingNativeEdit {
+        previous_text: previous.text,
+        previous_selection: (previous.selection.start, previous.selection.end),
+        sent: std::time::Instant::now(),
+    });
+    state.text.clone_from(&text);
+    state.selection = (start, end);
+    app.set_text_input_state(TextInputState {
+        text,
+        selection: TextSpan { start, end },
+        compose_region: None,
+    });
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn utf16_to_byte(text: &str, offset: usize) -> usize {
+    let mut units = 0;
+    for (byte, ch) in text.char_indices() {
+        if units >= offset {
+            return byte;
+        }
+        units += ch.len_utf16();
+    }
+    text.len()
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn clean_android_text(text: &str, limit: usize) -> String {
+    text.chars()
+        .filter(|ch| !ch.is_control())
+        .take(limit)
+        .collect()
+}
+
+// Winit 0.30's Android backend discards GameActivity TextEvent, including
+// composition and deletion. Read the retained GameTextInput buffer directly.
+// It contains the entire field; treating it as an insertion duplicates text.
+#[cfg(target_os = "android")]
+pub fn android_text_input(
+    menu: Res<JoinScreen>,
+    session: Option<Res<Session>>,
+    focus: Res<InputFocus>,
+    mut fields: Query<(&Interaction, &mut EditableText), With<Field>>,
+    mut state: Local<AndroidEditor>,
+    mut font: ResMut<bevy::text::FontCx>,
+    mut layout: ResMut<bevy::text::LayoutCx>,
+) {
+    use winit::platform::android::activity::input::{ImeOptions, InputType, TextInputAction};
+    let Some(app) = bevy::android::ANDROID_APP.get() else {
+        return;
+    };
+    let focused = focus
+        .get()
+        .filter(|entity| session.is_none() && menu.pending.is_none() && fields.contains(*entity));
+    if focused.is_none() {
+        if state.focused.take().is_some() {
+            app.hide_soft_input(false);
+        }
+        return;
+    }
+    let entity = focused.unwrap();
+    let Ok((interaction, mut input)) = fields.get_mut(entity) else {
+        return;
+    };
+    let value = input.value().to_string();
+    if state.focused != Some(entity) {
+        state.focused = Some(entity);
+        input.pending_edits.clear();
+        input
+            .editor_mut()
+            .driver(&mut font, &mut layout)
+            .select_byte_range(0, value.len());
+        state.text.clone_from(&value);
+        let end = value.encode_utf16().count();
+        state.selection = (0, end);
+        app.set_ime_editor_info(
+            InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+            TextInputAction::Done,
+            ImeOptions::IME_FLAG_NO_FULLSCREEN | ImeOptions::IMG_FLAG_NO_EXTRACT_UI,
+        );
+        // Selecting the existing value makes replacement possible with only
+        // the soft keyboard; there is no native visible EditText context menu.
+        push_android_text(app, &mut state, value, 0, end);
+        app.show_soft_input(false);
+        return;
+    }
+    if *interaction == Interaction::Pressed {
+        app.show_soft_input(false);
+    }
+    let incoming = app.text_input_state();
+    let selection = (incoming.selection.start, incoming.selection.end);
+    // Sending a new field/selection crosses the Java event queue. Until its
+    // echo arrives, the retained native buffer can still describe the old field.
+    if state.pending.as_ref().is_some_and(|pending| {
+        pending.is_stale(
+            &incoming.text,
+            selection,
+            &state.text,
+            state.selection,
+            std::time::Instant::now(),
+        )
+    }) {
+        return;
+    }
+    state.pending = None;
+    if incoming.text != state.text || selection != state.selection {
+        let text = clean_android_text(&incoming.text, input.max_characters.unwrap_or(260));
+        let start = utf16_to_byte(&text, selection.0);
+        let end = utf16_to_byte(&text, selection.1);
+        input.pending_edits.clear();
+        input.editor_mut().set_text(&text);
+        input
+            .editor_mut()
+            .driver(&mut font, &mut layout)
+            .select_byte_range(start, end);
+        if text != incoming.text {
+            let start = text[..start].encode_utf16().count();
+            let end = text[..end].encode_utf16().count();
+            push_android_text(app, &mut state, text.clone(), start, end);
+        } else {
+            state.selection = selection;
+        }
+        state.text = text;
+    } else {
+        // Forward selection changes made by tapping the Bevy text field.
+        let selection = input.editor().raw_selection();
+        let start = value[..selection.anchor().index().min(value.len())]
+            .encode_utf16()
+            .count();
+        let end = value[..selection.focus().index().min(value.len())]
+            .encode_utf16()
+            .count();
+        if value != state.text || (start, end) != state.selection {
+            push_android_text(app, &mut state, value, start, end);
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn android_text_input() {}
 
 fn text_edit(event: &KeyboardInput, shortcut: bool, shift: bool) -> Option<TextEdit> {
     if shortcut {
@@ -367,6 +846,7 @@ pub fn poll_connection(
     mut menu: ResMut<JoinScreen>,
     mut focus: ResMut<InputFocus>,
     time: Res<Time>,
+    touch: Option<Res<crate::touch::TouchControls>>,
 ) {
     if !menu.pending.as_ref().is_some_and(JoinHandle::is_finished) {
         return;
@@ -380,6 +860,15 @@ pub fn poll_connection(
     match result {
         Ok(mut joined) => {
             joined.session.status_until = time.elapsed_secs_f64() + 12.0;
+            if touch.is_some_and(|touch| touch.enabled) {
+                joined.session.help = false;
+                joined.session.inspector = false;
+                joined.session.status = if joined.session.observer.is_some() {
+                    "Swipe to look · use the stick to fly · Menu returns to servers".into()
+                } else {
+                    "Swipe to look · use the stick to explore · changes save automatically".into()
+                };
+            }
             menu.local_server = joined.server;
             commands.insert_resource(joined.connection);
             commands.insert_resource(VoxelWorld(joined.world));
@@ -392,7 +881,7 @@ pub fn poll_connection(
     }
 }
 
-fn session_from_welcome(
+pub(crate) fn session_from_welcome(
     welcome: ServerMessage,
     address: String,
     graphics: GraphicsQuality,
@@ -492,8 +981,21 @@ pub fn leave_world(
     entities: Query<Entity, With<GameEntity>>,
     mut menu: ResMut<JoinScreen>,
     mut cursor: Single<&mut CursorOptions>,
+    mut touch: Option<ResMut<crate::touch::TouchControls>>,
+    mut native: MessageReader<MenuKey>,
 ) {
-    if !keys.just_pressed(KeyCode::F10) && connection.error.is_none() {
+    let back = native
+        .read()
+        .any(|key| key.input.state.is_pressed() && key.input.logical_key == Key::BrowserBack);
+    let leave = touch.as_mut().is_some_and(|touch| {
+        let leave = touch.leave || (touch.enabled && back);
+        touch.leave = false;
+        if leave {
+            touch.menu_open = false;
+        }
+        leave
+    });
+    if !keys.just_pressed(KeyCode::F10) && !leave && connection.error.is_none() {
         return;
     }
     menu.status = connection.error.as_ref().map_or_else(
@@ -516,8 +1018,10 @@ pub fn leave_world(
     commands.remove_resource::<TerrainScene>();
     commands.insert_resource(Avatars::default());
     menu.local_server.take();
-    cursor.grab_mode = CursorGrabMode::None;
-    cursor.visible = true;
+    if !cfg!(target_os = "android") {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    }
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -561,11 +1065,11 @@ pub fn refresh(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use rubblekin_core::protocol::{NpcAction, NpcSnapshot, PlayerSnapshot};
 
-    pub(super) fn welcome(mode: SessionMode) -> ServerMessage {
+    pub(crate) fn welcome(mode: SessionMode) -> ServerMessage {
         ServerMessage::Welcome {
             version: PROTOCOL_VERSION,
             session_id: 17,
@@ -765,6 +1269,245 @@ mod tests {
     }
 
     #[test]
+    fn short_touch_taps_survive_down_and_up_in_the_same_input_frame() {
+        let mut controls = crate::touch::TouchControls::default();
+        controls.enabled = true;
+        let mut app = App::new();
+        app.add_plugins(bevy::input::InputPlugin)
+            .insert_resource(controls)
+            .insert_resource(JoinScreen::new(
+                "127.0.0.1:7878".into(),
+                "Tester".into(),
+                ServerConfig::default(),
+                GraphicsQuality::default(),
+                SessionMode::Player,
+            ))
+            .init_resource::<InputFocus>()
+            .add_message::<MenuKey>()
+            .add_message::<Ime>()
+            .add_systems(Update, interact);
+        let window = app
+            .world_mut()
+            .spawn((
+                PrimaryWindow,
+                Window {
+                    resolution: bevy::window::WindowResolution::new(800, 480)
+                        .with_scale_factor_override(2.),
+                    ..default()
+                },
+            ))
+            .id();
+        // Computed UI coordinates are physical pixels, touch events logical.
+        let field = app
+            .world_mut()
+            .spawn((
+                Field::Address,
+                Interaction::None,
+                EditableText::new("127.0.0.1:7878"),
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(260., 96.),
+                    inverse_scale_factor: 0.5,
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(200., 100.),
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        app.world_mut().spawn((
+            Action::Mode(SessionMode::Observer),
+            Interaction::None,
+            Node::default(),
+            ComputedNode {
+                size: Vec2::new(160., 96.),
+                inverse_scale_factor: 0.5,
+                ..default()
+            },
+            UiGlobalTransform::from_xy(500., 100.),
+            InheritedVisibility::VISIBLE,
+        ));
+        app.update();
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            app.world_mut().write_message(TouchInput {
+                phase,
+                position: Vec2::new(100., 50.),
+                window,
+                force: None,
+                id: 1,
+            });
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<Touches>().iter().count(),
+            0,
+            "both phases reached InputPlugin in the same frame"
+        );
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(field));
+        // The same raw event route covers mode and other menu buttons.
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            app.world_mut().write_message(TouchInput {
+                phase,
+                position: Vec2::new(250., 50.),
+                window,
+                force: None,
+                id: 2,
+            });
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<JoinScreen>().mode,
+            SessionMode::Observer
+        );
+        // A tap outside the visible window does not reach scrolled/offscreen UI.
+        app.world_mut().resource_mut::<InputFocus>().clear();
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            app.world_mut().write_message(TouchInput {
+                phase,
+                position: Vec2::new(100., 350.),
+                window,
+                force: None,
+                id: 3,
+            });
+        }
+        app.update();
+        assert!(app.world().resource::<InputFocus>().get().is_none());
+    }
+
+    #[test]
+    fn android_field_switch_waits_for_the_new_native_buffer_echo() {
+        let now = std::time::Instant::now();
+        let pending = PendingNativeEdit {
+            previous_text: "old field".into(),
+            previous_selection: (9, 9),
+            sent: now,
+        };
+        assert!(pending.is_stale("old field", (9, 9), "Violet", (6, 6), now));
+        assert!(!pending.is_stale("Violet", (6, 6), "Violet", (6, 6), now));
+        // A new user edit is accepted even before the exact echo is observed.
+        assert!(!pending.is_stale("Violet雪", (7, 7), "Violet", (6, 6), now));
+        // The guard is bounded: deleting back to the previous text cannot stall.
+        assert!(!pending.is_stale(
+            "old field",
+            (9, 9),
+            "Violet",
+            (6, 6),
+            now + std::time::Duration::from_millis(251)
+        ));
+    }
+
+    #[test]
+    fn android_whole_field_text_respects_limits_and_utf16_cursor_boundaries() {
+        let text = "A😀雪";
+        assert_eq!(utf16_to_byte(text, 0), 0);
+        assert_eq!(utf16_to_byte(text, 1), 1);
+        assert_eq!(utf16_to_byte(text, 3), 5);
+        assert_eq!(utf16_to_byte(text, 4), text.len());
+        assert_eq!(utf16_to_byte(text, 999), text.len());
+        assert_eq!(clean_android_text("Violet\n雪\t😀", 8), "Violet雪😀");
+        assert_eq!(
+            clean_android_text("雪".repeat(25).as_str(), 24),
+            "雪".repeat(24)
+        );
+        assert_eq!(clean_android_text("", 24), "");
+    }
+
+    #[test]
+    fn ime_composition_commits_unicode_once_and_touch_fields_wait_for_a_tap() {
+        let mut touch = crate::touch::TouchControls::default();
+        touch.enabled = true;
+        let mut app = App::new();
+        app.insert_resource(JoinScreen::new(
+            "127.0.0.1:7878".into(),
+            "Tester".into(),
+            ServerConfig::default(),
+            GraphicsQuality::default(),
+            SessionMode::Player,
+        ))
+        .insert_resource(touch)
+        .init_resource::<InputFocus>()
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<bevy::text::FontCx>()
+        .init_resource::<bevy::text::LayoutCx>()
+        .init_resource::<bevy::clipboard::Clipboard>()
+        .add_message::<MenuKey>()
+        .add_message::<Ime>()
+        .add_message::<TouchInput>()
+        .add_systems(Update, interact)
+        .add_systems(PostUpdate, bevy::text::apply_text_edits);
+        let font = Font::from_bytes(
+            include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
+        );
+        let mut fonts = app.world_mut().resource_mut::<bevy::text::FontCx>();
+        let family = fonts.collection.register_fonts(font.data, None)[0].0;
+        let family_name = fonts.collection.family_name(family).unwrap().to_owned();
+        fonts.set_sans_serif_family(&family_name).unwrap();
+        let field = app
+            .world_mut()
+            .spawn((Field::Name, Interaction::None, EditableText::new("")))
+            .id();
+        app.update();
+        assert!(
+            app.world().resource::<InputFocus>().get().is_none(),
+            "touch join must not raise the keyboard before a tap"
+        );
+        *app.world_mut().get_mut::<Interaction>(field).unwrap() = Interaction::Pressed;
+        app.update();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(field));
+        *app.world_mut().get_mut::<Interaction>(field).unwrap() = Interaction::None;
+        app.world_mut().write_message(Ime::Preedit {
+            window: Entity::PLACEHOLDER,
+            value: "雪".into(),
+            cursor: Some((3, 3)),
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<EditableText>(field)
+                .unwrap()
+                .value()
+                .to_string(),
+            ""
+        );
+        assert!(
+            app.world()
+                .get::<EditableText>(field)
+                .unwrap()
+                .is_composing()
+        );
+        app.world_mut().write_message(Ime::Commit {
+            window: Entity::PLACEHOLDER,
+            value: "雪".into(),
+        });
+        // Some backends also attach text to a key event in the commit frame.
+        app.world_mut().write_message(MenuKey {
+            input: KeyboardInput {
+                key_code: KeyCode::KeyA,
+                logical_key: Key::Character("雪".into()),
+                state: bevy::input::ButtonState::Pressed,
+                text: Some("雪".into()),
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            },
+            modifiers: ModifiersState::empty(),
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<EditableText>(field)
+                .unwrap()
+                .value()
+                .to_string(),
+            "雪"
+        );
+        assert!(
+            !app.world()
+                .get::<EditableText>(field)
+                .unwrap()
+                .is_composing()
+        );
+    }
+
+    #[test]
     fn modifier_flags_typing_and_enter_in_one_frame_submit_committed_text() {
         let mut app = App::new();
         app.insert_resource(JoinScreen::new(
@@ -780,6 +1523,8 @@ mod tests {
         .init_resource::<bevy::text::LayoutCx>()
         .init_resource::<bevy::clipboard::Clipboard>()
         .add_message::<MenuKey>()
+        .add_message::<Ime>()
+        .add_message::<TouchInput>()
         .add_systems(Update, interact)
         .add_systems(PostUpdate, bevy::text::apply_text_edits);
         // Parley selection uses shaped layout, so the headless test needs the
@@ -871,6 +1616,8 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Visits>()
             .add_message::<MenuKey>()
+            .add_message::<Ime>()
+            .add_message::<TouchInput>()
             .add_systems(Startup, setup)
             .add_systems(
                 Update,

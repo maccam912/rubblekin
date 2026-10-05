@@ -21,6 +21,8 @@ TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
 )
+ANDROID_TARGET = "aarch64-linux-android"
+ANDROID_ASSET = f"rubblekin-client-{ANDROID_TARGET}.apk"
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -128,7 +130,37 @@ def package(binary_dir, output_dir, target, commit, sign=True):
     return metadata
 
 
-def assemble_manifest(directory, commit):
+def package_android(apk, output_dir, commit):
+    """Record an installable prototype APK separately from desktop updates."""
+    validate_commit(commit)
+    if not apk.is_file() or apk.is_symlink():
+        raise ValueError(f"missing regular APK: {apk}")
+    with zipfile.ZipFile(apk) as archive:
+        required = {"AndroidManifest.xml", "classes.dex", "lib/arm64-v8a/librubblekin_client.so", "assets/OFL.txt"}
+        if not required.issubset(archive.namelist()) or archive.testzip() is not None:
+            raise ValueError("APK is missing its manifest, Java activity, ARM64 library, or font license")
+        with archive.open("lib/arm64-v8a/librubblekin_client.so") as library:
+            if library.read(4) != b"\x7fELF":
+                raise ValueError("APK native library is not an ELF binary")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    destination = output_dir / ANDROID_ASSET
+    if apk.resolve() != destination.resolve():
+        shutil.copyfile(apk, destination)
+    metadata = {
+        "commit": commit,
+        "target": ANDROID_TARGET,
+        "client": {
+            "asset": ANDROID_ASSET,
+            "sha256": digest(destination),
+            "package_id": "net.rubblekin.client",
+            "signing": "public-development-key",
+        },
+    }
+    (output_dir / f"{ANDROID_TARGET}.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    return metadata
+
+
+def assemble_manifest(directory, commit, require_android=False):
     """Fail closed if any platform is missing, mixed, or changed in transit."""
     validate_commit(commit)
     platforms = {}
@@ -154,6 +186,21 @@ def assemble_manifest(directory, commit):
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     assets = [manifest_path]
     assets += [directory / archive_name(target, launcher) for target in TARGETS for launcher in (False, True)]
+    if require_android:
+        metadata = json.loads((directory / f"{ANDROID_TARGET}.json").read_text())
+        expected = {
+            "commit": commit,
+            "target": ANDROID_TARGET,
+            "client": {
+                "asset": ANDROID_ASSET,
+                "sha256": digest(directory / ANDROID_ASSET),
+                "package_id": "net.rubblekin.client",
+                "signing": "public-development-key",
+            },
+        }
+        if metadata != expected:
+            raise ValueError("package metadata mismatch for Android")
+        assets.append(directory / ANDROID_ASSET)
     checksums = "".join(f"{digest(path)}  {path.name}\n" for path in sorted(assets))
     (directory / "SHA256SUMS").write_text(checksums)
     return manifest
@@ -167,14 +214,21 @@ def main():
     build.add_argument("--binary-dir", type=Path, required=True)
     build.add_argument("--output-dir", type=Path, required=True)
     build.add_argument("--commit", required=True)
+    android = subcommands.add_parser("android")
+    android.add_argument("--apk", type=Path, required=True)
+    android.add_argument("--output-dir", type=Path, required=True)
+    android.add_argument("--commit", required=True)
     manifest = subcommands.add_parser("manifest")
     manifest.add_argument("--directory", type=Path, required=True)
     manifest.add_argument("--commit", required=True)
+    manifest.add_argument("--android", action="store_true")
     arguments = parser.parse_args()
     if arguments.command == "package":
         package(arguments.binary_dir, arguments.output_dir, arguments.target, arguments.commit)
+    elif arguments.command == "android":
+        package_android(arguments.apk, arguments.output_dir, arguments.commit)
     else:
-        assemble_manifest(arguments.directory, arguments.commit)
+        assemble_manifest(arguments.directory, arguments.commit, arguments.android)
 
 
 if __name__ == "__main__":

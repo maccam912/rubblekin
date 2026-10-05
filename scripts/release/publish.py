@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from package import TARGETS, archive_name, assemble_manifest, validate_commit
+from package import ANDROID_ASSET, TARGETS, archive_name, assemble_manifest, validate_commit
 
 
 def command(arguments, **kwargs):
@@ -86,14 +86,16 @@ def reserve_tag(repository, commit):
         ) from error
 
 
-def publish(directory, commit, repository):
+def publish(directory, commit, repository, android=False):
     validate_commit(commit)
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("invalid GitHub repository")
-    manifest = assemble_manifest(directory, commit)
+    manifest = assemble_manifest(directory, commit, require_android=android)
     tag = manifest["tag"]
     assets = [directory / "client-manifest.json", directory / "SHA256SUMS"]
     assets += [directory / archive_name(target, launcher) for target in TARGETS for launcher in (False, True)]
+    if android:
+        assets.append(directory / ANDROID_ASSET)
     release = find_release(repository, tag)
     if release is None:
         notes = (
@@ -107,6 +109,12 @@ def publish(directory, commit, repository):
             f"[Usage and current limits](https://github.com/{repository}/blob/{commit}/README.md). "
             "`SHA256SUMS` covers the archives and update manifest.\n"
         )
+        if android:
+            notes += (
+                "\nAndroid: sideload the ARM64 APK on Android 8 or newer with Vulkan support. "
+                "This prototype uses a public development signing key and is debuggable; it is not a store release. "
+                "Successive builds retain the same signing identity so updates preserve local worlds.\n"
+            )
         release = api(repository, "releases", "POST", {
             "tag_name": tag,
             "target_commitish": commit,
@@ -144,9 +152,10 @@ def main():
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--android", action="store_true", help="Require and publish the Android APK alongside desktop packages")
     arguments = parser.parse_args()
     try:
-        publish(arguments.directory, arguments.commit, arguments.repository)
+        publish(arguments.directory, arguments.commit, arguments.repository, arguments.android)
     except RuntimeError as error:
         if any(status in str(error) for status in ("HTTP 403", "HTTP 404")):
             raise RuntimeError(

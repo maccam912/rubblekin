@@ -36,6 +36,26 @@ cargo run --locked -p rubblekin_launcher
 
 Client arguments go after `--`; relative client paths resolve inside `game`. Headless mode fails visibly when an update cannot complete; `--offline` explicitly chooses the installed client. The launcher updates the client, not itself; manifest format 1 must remain compatible with previously downloaded launchers. Client ZIPs are also available for direct use without automatic updates.
 
+## Android client
+
+Android builds produce `rubblekin-client-aarch64-linux-android.apk` for ARM64 devices. The package declares Android 8.0+ and Vulkan 1.0 as requirements; these are build requirements, not a guarantee of performance on every device. Install the APK from an Android-capable client release, allowing installation from your download app when Android requests it. Android uses the APK directly rather than the desktop launcher.
+
+Play in landscape: use the left thumbstick to move and swipe the world on the right to look. On-screen buttons provide jump, sprint, creative flight and vertical movement, digging/building, materials, and a menu with inspection, camera/graphics controls, and leaving the world. Movement and looking support separate fingers. The join screen opens Android's keyboard for server address and display name. Android starts on Low graphics; other presets remain optional. Android's Back button leaves a world; while typing, it dismisses the keyboard first.
+
+Local worlds use app-private storage, separate from installed binaries. Updating an APK with the same application ID and signing key preserves saves; uninstalling the app removes its local data. The prototype APK uses a shared development signing key so local and CI builds can update each other. Production/store signing is not configured.
+
+To build from source, install Java 21 and the Android SDK with platform 36, build-tools 36.0.0, and NDK 28.2.13676358. Set `ANDROID_HOME` to the SDK directory; macOS defaults to `~/Library/Android/sdk`. Then:
+
+```sh
+rustup target add aarch64-linux-android
+cargo install cargo-ndk --version 4.1.2 --locked
+python3 scripts/build_android.py
+```
+
+The script builds optimized Rust, packages the GameActivity application with the pinned Gradle wrapper, and writes `target/android/rubblekin-client-aarch64-linux-android.apk`. Add `--install --device SERIAL` to update a connected device with `adb`; omit `--device` when only one device is connected. The ARM64 Android 15 emulator has verified keyboard entry, gameplay rendering, server-authoritative movement/look, digging/building, flight, menus, and local village-world saves. See [Android gameplay](artifacts/android-local.png) and [keyboard layout](artifacts/android-keyboard.png). Physical-device frame rate, memory use, thermals, and touch comfort still need testing.
+
+Preview the touch interface on desktop with `cargo run --locked -p rubblekin_client -- --touch`. This helps inspect layout and single-pointer interaction; it does not replace Android or multitouch testing.
+
 ## Automatic client releases
 
 [Checks and builds](.github/workflows/ci.yml) is the single entry point for branch pushes, pull requests, and manual runs. It selects the exact commits, then runs formatting, Python tooling tests, and release-profile Rust tests/Clippy on Linux x64, Windows x64, and both Mac architectures. All ten check jobs per commit run in parallel, subject to runner availability. Both the commit matrix and its check matrix use [GitHub's fail-fast cancellation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstrategyfail-fast): one failed check cancels the remaining checks and blocks all builds in that run. Superseded branch/PR runs are cancelled; main pushes are retained for per-commit releases.
@@ -261,14 +281,14 @@ Install Git LFS before cloning, or run `git lfs install` followed by `git lfs pu
 | --- | --- |
 | [core](crates/core/src/lib.rs) | Seeded terrain, edited cells, shared character physics, and explicit wire types. |
 | [server](crates/server/src/lib.rs) | Authoritative 20 Hz loop, validation, connections, NPC decisions, and saves. |
-| [client](crates/client/src/main.rs) | Bevy 0.19.1 rendering, input, prediction, camera, and inspection UI. |
+| [client](crates/client/src/lib.rs) | Bevy 0.19.1 rendering, input, prediction, camera, and inspection UI. |
 
 For a block edit, read these in order:
 
-1. [`edit_blocks`](crates/client/src/main.rs) sends `ClientMessage::Edit` using the types in [protocol.rs](crates/core/src/protocol.rs).
+1. [`edit_blocks`](crates/client/src/lib.rs) sends `ClientMessage::Edit` using the types in [protocol.rs](crates/core/src/protocol.rs).
 2. [`handle_message` and `validate_edit`](crates/server/src/lib.rs) check rate, reach, line of sight, world bounds, and character occupancy.
 3. The server updates [`World`](crates/core/src/world.rs), writes the [save](crates/server/src/persistence.rs), and broadcasts `ServerMessage::BlockChanged`, or replies with `Rejected`.
-4. [`receive_network`](crates/client/src/main.rs) applies the accepted edit; [`rebuild_chunks`](crates/client/src/terrain.rs) updates the affected meshes.
+4. [`receive_network`](crates/client/src/lib.rs) applies the accepted edit; [`rebuild_chunks`](crates/client/src/terrain.rs) updates the affected meshes.
 
 Transport is newline-delimited JSON over nonblocking TCP. There is no generic message bus or automatic ECS replication. The headless server currently uses a small standard-library loop; Bevy ECS can be introduced when the simulation earns that complexity. This transport and full-world snapshot approach are prototype choices, not a global-scale networking design.
 

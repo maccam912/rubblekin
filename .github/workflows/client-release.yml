@@ -91,9 +91,90 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  android:
+    name: Android ARM64 at ${{ matrix.commit }}
+    strategy:
+      fail-fast: false
+      matrix:
+        commit: ${{ fromJSON(inputs.commits) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      COMMIT: ${{ matrix.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.commit }}
+          # The APK version code is this commit's full first-parent count.
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: false
+      # Historical commits predate Android. Their original desktop releases
+      # remain buildable, while Android-capable commits require the APK.
+      - name: Detect Android support at this exact commit
+        id: android
+        shell: bash
+        run: |
+          if test -f scripts/build_android.py; then
+            echo 'supported=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'supported=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.android.outputs.supported == 'true'
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v5
+        if: steps.android.outputs.supported == 'true'
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v7
+        if: steps.android.outputs.supported == 'true'
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v6
+        if: steps.android.outputs.supported == 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            target
+          key: android-v1-1.98.1-ndk28-${{ hashFiles('Cargo.lock', 'android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}-${{ matrix.commit }}
+          restore-keys: |
+            android-v1-1.98.1-ndk28-${{ hashFiles('Cargo.lock', 'android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}-
+            android-v1-1.98.1-ndk28-
+      - name: Install pinned Android build tools
+        if: steps.android.outputs.supported == 'true'
+        shell: bash
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Build and verify development APK
+        if: steps.android.outputs.supported == 'true'
+        shell: bash
+        run: |
+          python scripts/build_android.py --output-dir dist
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose dist/rubblekin-client-aarch64-linux-android.apk
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 dist/rubblekin-client-aarch64-linux-android.apk
+          python scripts/release/package.py android --apk dist/rubblekin-client-aarch64-linux-android.apk --output-dir dist --commit "$COMMIT"
+      - uses: actions/upload-artifact@v7
+        if: steps.android.outputs.supported == 'true'
+        with:
+          name: client-${{ matrix.commit }}-aarch64-linux-android
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   publish:
     name: Release ${{ matrix.commit }}
-    needs: build
+    needs: [build, android]
     # A failed build for one commit must not discard other complete commits.
     # A missing platform fails manifest assembly for that commit only.
     if: always() && !cancelled()
@@ -129,4 +210,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           COMMIT: ${{ matrix.commit }}
-        run: python scripts/release/publish.py --directory dist --commit "$COMMIT" --repository "$GITHUB_REPOSITORY"
+        run: |
+          android_args=()
+          if git cat-file -e "$COMMIT:scripts/build_android.py" 2>/dev/null; then
+            android_args=(--android)
+          fi
+          python scripts/release/publish.py --directory dist --commit "$COMMIT" --repository "$GITHUB_REPOSITORY" "${android_args[@]}"

@@ -72,6 +72,7 @@ fn observer_controls_move_only_the_camera_and_never_send_gameplay_messages() {
         .init_resource::<DirectionalLightShadowMap>()
         .init_resource::<DiagnosticsStore>()
         .init_resource::<Avatars>()
+        .init_resource::<crate::touch::TouchControls>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>()
         .init_gizmo_group::<DefaultGizmoConfigGroup>()

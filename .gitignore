@@ -22,6 +22,8 @@
 !/artifacts/villages-map.png
 !/artifacts/villages-native.png
 !/artifacts/villages-overview.png
+!/artifacts/android-local.png
+!/artifacts/android-keyboard.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

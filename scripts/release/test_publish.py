@@ -89,6 +89,17 @@ class PromotionTests(unittest.TestCase):
             publish.publish(Path("dist"), NEW, "owner/repository")
         command.assert_not_called()
 
+    @patch("publish.assemble_manifest", return_value={"tag": f"client-{NEW}"})
+    @patch("publish.command")
+    @patch("publish.api")
+    def test_android_release_requires_and_uploads_apk(self, api, command, manifest):
+        api.side_effect = [None, [], {"id": 7, "draft": True}, {"id": 7, "draft": False}, {"tag_name": f"client-{NEW}"}]
+        command.side_effect = ["", "", "\n".join(HISTORY)]
+        publish.publish(Path("dist"), NEW, "owner/repository", android=True)
+        manifest.assert_called_once_with(Path("dist"), NEW, require_android=True)
+        self.assertIn("dist/" + publish.ANDROID_ASSET, command.call_args_list[0].args[0])
+        self.assertIn("public development signing key", api.call_args_list[2].args[3]["body"])
+
 
 class TagAndPermissionTests(unittest.TestCase):
     @patch("publish.api")
