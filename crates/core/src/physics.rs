@@ -410,6 +410,30 @@ pub fn character_position_is_clear(
             .any(|other| characters_overlap(position, *other))
 }
 
+/// Checks the same terrain/body bounds plus the deck and ramp slabs used by
+/// ordinary movement. Ship envelopes are decorative and have no body collision.
+pub fn character_position_is_clear_with_airships(
+    world: &World,
+    position: [f32; 3],
+    obstacles: &[[f32; 3]],
+    network: &AirshipNetwork,
+    time: f64,
+) -> bool {
+    character_position_is_clear(world, position, obstacles)
+        && !network
+            .ships(time)
+            .into_iter()
+            .any(|ship| AirshipSurface::Deck(ship).blocks(position))
+        && !network.ramps().iter().any(|ramp| {
+            AirshipSurface::Ramp {
+                from: ramp.from,
+                to: ramp.to,
+                width: ramp.width,
+            }
+            .blocks(position)
+        })
+}
+
 /// Recovers older saves and coincident starts by moving the supplied body to
 /// the nearest clear horizontal space within eight meters. Recovery never
 /// crosses solid terrain or changes another body. A packed or enclosed space

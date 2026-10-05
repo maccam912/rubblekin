@@ -274,7 +274,7 @@ Guest access · no account or password" } else { "Guest access · no account or 
 #[derive(Message)]
 pub(super) struct MenuKey {
     pub(super) input: KeyboardInput,
-    modifiers: ModifiersState,
+    pub(super) modifiers: ModifiersState,
 }
 
 pub fn native_input(
@@ -860,6 +860,10 @@ pub fn poll_connection(
     match result {
         Ok(mut joined) => {
             joined.session.status_until = time.elapsed_secs_f64() + 12.0;
+            joined.session.airship_clock = crate::airships::AirshipClock::new(
+                joined.session.world_time,
+                time.elapsed_secs_f64(),
+            );
             if touch.is_some_and(|touch| touch.enabled) {
                 joined.session.help = false;
                 joined.session.inspector = false;
@@ -914,6 +918,7 @@ pub(crate) fn session_from_welcome(
     let world = GameWorld::from_generation_edits(seed, generation, &edits)?;
     let mut own_players = players.iter().filter(|player| player.id == session_id);
     let own_player = own_players.next();
+    let prediction = own_player.map_or_else(Prediction::default, Prediction::from_snapshot);
     let ride = own_player.and_then(|player| player.ride);
     let deck_position = own_player.and_then(|player| player.deck_position);
     let airships = rubblekin_core::airships::AirshipNetwork::new(&world);
@@ -967,14 +972,14 @@ pub(crate) fn session_from_welcome(
             airships,
             ride,
             deck_position,
-            airship_time: world_time,
+            airship_clock: crate::airships::AirshipClock::new(world_time, now),
             status: status.into(),
             status_until: now + 12.0,
             target: None,
             fps: 0.0,
             edits: edits.len(),
             connected_to: address,
-            prediction: Prediction::default(),
+            prediction,
             edit_clock: 0.0,
             next_request: 1,
         },
@@ -992,6 +997,7 @@ pub fn leave_world(
     mut cursor: Single<&mut CursorOptions>,
     mut touch: Option<ResMut<crate::touch::TouchControls>>,
     mut pause: Option<ResMut<crate::pause::PauseMenu>>,
+    mut console: Option<ResMut<crate::admin_console::AdminConsole>>,
 ) {
     let menu_leave = pause.as_ref().is_some_and(|pause| pause.leave);
     let leave = touch.as_mut().is_some_and(|touch| {
@@ -1002,7 +1008,11 @@ pub fn leave_world(
         }
         leave
     });
-    if !keys.just_pressed(KeyCode::F10) && !leave && !menu_leave && connection.error.is_none() {
+    let keyboard_leave = keys.just_pressed(KeyCode::F10)
+        && !console
+            .as_ref()
+            .is_some_and(|console| console.input_blocked);
+    if !keyboard_leave && !leave && !menu_leave && connection.error.is_none() {
         return;
     }
     menu.status = connection.error.as_ref().map_or_else(
@@ -1018,6 +1028,9 @@ pub fn leave_world(
     menu.graphics = session.graphics;
     if let Some(pause) = pause.as_mut() {
         **pause = crate::pause::PauseMenu::default();
+    }
+    if let Some(console) = console.as_mut() {
+        **console = crate::admin_console::AdminConsole::default();
     }
     if let Some(touch) = touch.as_mut() {
         touch.reset();
@@ -1097,6 +1110,7 @@ pub(crate) mod tests {
                     body: Body::new([0.25, 2.52, 0.25]),
                     yaw: 0.0,
                     last_input_sequence: 0,
+                    movement_epoch: 0,
                     ride: None,
                     deck_position: None,
                 }]

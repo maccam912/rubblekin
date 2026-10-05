@@ -9,6 +9,7 @@ fn snapshot(body: Body, last_input_sequence: u64) -> PlayerSnapshot {
         body,
         yaw: 0.0,
         last_input_sequence,
+        movement_epoch: 0,
         ride: None,
         deck_position: None,
     }
@@ -104,7 +105,7 @@ fn airship_replay_keeps_local_walk_and_normal_jump_after_delayed_acknowledgments
             &world,
             &mut body,
             &acknowledged,
-            &[],
+            |_| vec![],
             &network,
             61.0,
             &mut ride,
@@ -128,7 +129,7 @@ fn airship_replay_keeps_local_walk_and_normal_jump_after_delayed_acknowledgments
             &world,
             &mut body,
             &final_ack,
-            &[],
+            |_| vec![],
             &network,
             61.0,
             &mut ride,
@@ -137,6 +138,134 @@ fn airship_replay_keeps_local_walk_and_normal_jump_after_delayed_acknowledgments
         .unwrap();
     assert!(prediction.pending.is_empty());
     assert!(initial.ride.is_none());
+}
+
+#[test]
+fn delayed_airship_replay_projects_nearby_passengers_at_each_pending_ship_pose() {
+    use rubblekin_core::airships::{deck_local_position, deck_position};
+    use std::cell::RefCell;
+
+    let (world, network, _) = airship_fixture();
+    for turning in [false, true] {
+        let delay = if turning { 1.0 } else { 0.025 };
+        let (world_time, ship) = (0..2_000)
+            .find_map(|second| {
+                let time = second as f64;
+                network.ships(time).into_iter().find_map(|ship| {
+                    let next = network.ship(ship.id, time + delay).unwrap();
+                    let horizontal = ((next.position[0] - ship.position[0]).powi(2)
+                        + (next.position[2] - ship.position[2]).powi(2))
+                    .sqrt();
+                    let suitable = if turning {
+                        ship.docked_at.is_some()
+                            && ship.docked_at == next.docked_at
+                            && (ship.yaw - next.yaw).abs() > 0.25
+                    } else {
+                        ship.docked_at.is_none()
+                            && next.docked_at.is_none()
+                            && (ship.position[1] - next.position[1]).abs() < 0.001
+                            && horizontal > 1.0
+                    };
+                    suitable.then_some((time, ship))
+                })
+            })
+            .expect("fixture needs a cruising ship and a turning berth");
+        let pending_times = [world_time + delay, world_time + delay + 1.0 / 60.0];
+        let first_pending_ship = network.ship(ship.id, pending_times[0]).unwrap();
+        let initial_local = if turning { [2.0, 0.0, 4.0] } else { [0.0; 3] };
+        // This companion is clear at every shared deck pose, but its old
+        // world-space position coincides with our later carried position.
+        let companion_local =
+            deck_local_position(&ship, deck_position(&first_pending_ship, initial_local));
+        let stale_companion = deck_position(&ship, companion_local);
+        assert!(!characters_overlap(
+            deck_position(&ship, initial_local),
+            stale_companion
+        ));
+        assert!(characters_overlap(
+            deck_position(&first_pending_ship, initial_local),
+            stale_companion
+        ));
+
+        let mut ride = Some(AirshipRide {
+            ship_id: ship.id,
+            seat: u8::MAX,
+        });
+        let mut local = Some(initial_local);
+        let mut body = Body::new(deck_position(&ship, initial_local));
+        body.on_ground = true;
+        let mut authoritative = snapshot(body.clone(), 0);
+        authoritative.ride = ride;
+        authoritative.deck_position = local;
+        let mut prediction = Prediction::default();
+        for time in pending_times {
+            let pose = network.ship(ship.id, time).unwrap();
+            let companion = deck_position(&pose, companion_local);
+            prediction
+                .advance_airships(
+                    &world,
+                    &mut body,
+                    MoveInput::default(),
+                    0.0,
+                    1.0 / 60.0,
+                    &[companion],
+                    &network,
+                    time,
+                    &mut ride,
+                    &mut local,
+                )
+                .unwrap();
+            assert!(!characters_overlap(body.position, companion));
+        }
+        let expected_body = body.clone();
+        let expected_local = local.unwrap();
+
+        // Verify this fixture actually reproduces the old collision error.
+        prediction
+            .reconcile_airships(
+                &world,
+                &mut body,
+                &authoritative,
+                |_| vec![stale_companion],
+                &network,
+                world_time,
+                &mut ride,
+                &mut local,
+            )
+            .unwrap();
+        assert!(
+            local
+                .unwrap()
+                .iter()
+                .zip(expected_local)
+                .any(|(actual, expected)| (actual - expected).abs() > 0.05),
+            "stale passenger pose did not reproduce the correction jump"
+        );
+
+        let projected_times = RefCell::new(Vec::new());
+        prediction
+            .reconcile_airships(
+                &world,
+                &mut body,
+                &authoritative,
+                |time| {
+                    projected_times.borrow_mut().push(time);
+                    vec![deck_position(
+                        &network.ship(ship.id, time).unwrap(),
+                        companion_local,
+                    )]
+                },
+                &network,
+                world_time,
+                &mut ride,
+                &mut local,
+            )
+            .unwrap();
+        assert_eq!(*projected_times.borrow(), pending_times);
+        assert_same_body(&body, &expected_body);
+        assert_eq!(local, Some(expected_local));
+        assert_eq!(ride, authoritative.ride);
+    }
 }
 
 #[test]
@@ -177,6 +306,7 @@ fn client_movement_can_walk_off_a_flying_deck_without_an_exit_action() {
 fn execute(world: &World, server: &mut PlayerSnapshot, message: ClientMessage) {
     let ClientMessage::Input {
         sequence,
+        movement_epoch,
         input,
         yaw,
         dt,
@@ -184,6 +314,7 @@ fn execute(world: &World, server: &mut PlayerSnapshot, message: ClientMessage) {
     else {
         panic!("expected movement")
     };
+    assert_eq!(movement_epoch, server.movement_epoch);
     move_character(world, &mut server.body, input, dt);
     server.last_input_sequence = sequence;
     server.yaw = yaw;
@@ -400,6 +531,246 @@ fn predicted_movement_and_acknowledgment_replay_stop_at_other_characters() {
         assert!(!characters_overlap(body.position, obstacles[0]));
     }
     assert!(body.position[0] < obstacles[0][0] - rubblekin_core::physics::PLAYER_RADIUS);
+}
+
+#[test]
+fn teleport_discards_pending_ground_walk_and_jump_and_restarts_the_input_sequence() {
+    let world = World::new(1);
+    let mut body = Body::new(world.spawn_position());
+    body.on_ground = true;
+    let mut authoritative = snapshot(body.clone(), 0);
+    let mut prediction = Prediction::default();
+    let walking = MoveInput {
+        direction: [1.0, 0.0],
+        ..Default::default()
+    };
+    let first = prediction
+        .advance(&world, &mut body, walking, 0.0, 0.05, &[])
+        .unwrap();
+    execute(&world, &mut authoritative, first);
+    prediction
+        .reconcile(&world, &mut body, &authoritative, &[])
+        .unwrap();
+    assert_eq!(prediction.acknowledged, 1);
+    prediction
+        .advance(&world, &mut body, walking, 0.0, 0.05, &[])
+        .unwrap();
+    prediction
+        .advance(
+            &world,
+            &mut body,
+            MoveInput {
+                jump: true,
+                ..walking
+            },
+            0.0,
+            0.05,
+            &[],
+        )
+        .unwrap();
+    assert!(body.velocity[1] > 0.0 && !body.on_ground);
+    assert_eq!(prediction.pending.len(), 2);
+
+    authoritative.body = Body::new([12.25, 20.0, 12.25]);
+    authoritative.movement_epoch = 1;
+    authoritative.last_input_sequence = 0;
+    prediction
+        .reconcile(&world, &mut body, &authoritative, &[])
+        .unwrap();
+    assert_same_body(&body, &authoritative.body);
+    assert!(prediction.pending.is_empty());
+    assert_eq!(prediction.pending_seconds, 0.0);
+    assert_eq!(prediction.movement_epoch(), 1);
+    assert_eq!(prediction.acknowledged, 0);
+
+    let next = prediction
+        .advance(&world, &mut body, walking, 0.0, 0.05, &[])
+        .unwrap();
+    assert!(matches!(
+        next,
+        ClientMessage::Input {
+            movement_epoch: 1,
+            sequence: 1,
+            ..
+        }
+    ));
+    execute(&world, &mut authoritative, next);
+    assert_same_body(&body, &authoritative.body);
+    prediction
+        .reconcile(&world, &mut body, &authoritative, &[])
+        .unwrap();
+    assert_same_body(&body, &authoritative.body);
+    assert!(prediction.pending.is_empty());
+}
+
+#[test]
+fn teleport_discards_pending_deck_motion_and_adopts_authoritative_platform_state() {
+    use rubblekin_core::airships::deck_position;
+
+    let (world, network, ship) = airship_fixture();
+    let initial_ride = AirshipRide {
+        ship_id: ship.id,
+        seat: u8::MAX,
+    };
+    for destination_local in [None, Some([-2.0, 0.0, -2.0])] {
+        let mut ride = Some(initial_ride);
+        let mut local = Some([0.0; 3]);
+        let mut body = Body::new(deck_position(&ship, local.unwrap()));
+        body.on_ground = true;
+        let mut prediction = Prediction::default();
+        let walking = MoveInput {
+            direction: [ship.yaw.cos(), -ship.yaw.sin()],
+            ..Default::default()
+        };
+        for (time, jump) in [(60.0, false), (60.1, true)] {
+            prediction
+                .advance_airships(
+                    &world,
+                    &mut body,
+                    MoveInput { jump, ..walking },
+                    0.0,
+                    0.1,
+                    &[],
+                    &network,
+                    time,
+                    &mut ride,
+                    &mut local,
+                )
+                .unwrap();
+        }
+        assert!(body.velocity[1] > 0.0 && !body.on_ground);
+        assert_eq!(prediction.pending.len(), 2);
+
+        let destination_ship = network.ship(ship.id, 61.0).unwrap();
+        let destination = destination_local.map_or_else(
+            || world.spawn_position(),
+            |offset| deck_position(&destination_ship, offset),
+        );
+        let mut authoritative = snapshot(Body::new(destination), 0);
+        authoritative.body.on_ground = true;
+        authoritative.movement_epoch = 1;
+        authoritative.ride = destination_local.map(|_| initial_ride);
+        authoritative.deck_position = destination_local;
+        prediction
+            .reconcile_airships(
+                &world,
+                &mut body,
+                &authoritative,
+                |_| panic!("teleport replayed an old command"),
+                &network,
+                61.0,
+                &mut ride,
+                &mut local,
+            )
+            .unwrap();
+        assert_same_body(&body, &authoritative.body);
+        assert_eq!(ride, authoritative.ride);
+        assert_eq!(local, authoritative.deck_position);
+        assert!(prediction.pending.is_empty());
+        assert_eq!(prediction.pending_seconds, 0.0);
+
+        let mut expected_body = authoritative.body.clone();
+        let mut expected_ride = authoritative.ride;
+        let mut expected_local = authoritative.deck_position;
+        move_character_with_airships(
+            &world,
+            &mut expected_body,
+            walking,
+            0.05,
+            &[],
+            &network,
+            61.05,
+            &mut expected_ride,
+            &mut expected_local,
+        );
+        let next = prediction
+            .advance_airships(
+                &world,
+                &mut body,
+                walking,
+                0.0,
+                0.05,
+                &[],
+                &network,
+                61.05,
+                &mut ride,
+                &mut local,
+            )
+            .unwrap();
+        assert!(matches!(
+            next,
+            ClientMessage::Input {
+                movement_epoch: 1,
+                sequence: 1,
+                ..
+            }
+        ));
+        assert_same_body(&body, &expected_body);
+        assert_eq!(ride, expected_ride);
+        assert_eq!(local, expected_local);
+    }
+}
+
+#[test]
+fn older_teleport_epochs_are_rejected_without_changing_prediction_or_body() {
+    let world = World::new(1);
+    let mut current = snapshot(Body::new([0.25, 20.0, 0.25]), 3);
+    current.movement_epoch = 4;
+    let mut prediction = Prediction::from_snapshot(&current);
+    let mut body = current.body.clone();
+    let next = prediction
+        .advance(
+            &world,
+            &mut body,
+            MoveInput {
+                direction: [1.0, 0.0],
+                fly: true,
+                ..Default::default()
+            },
+            0.0,
+            0.05,
+            &[],
+        )
+        .unwrap();
+    assert!(matches!(
+        next,
+        ClientMessage::Input {
+            movement_epoch: 4,
+            sequence: 4,
+            ..
+        }
+    ));
+    let before = body.clone();
+    let mut stale = current.clone();
+    stale.movement_epoch = 3;
+    stale.body = Body::new([12.25, 20.0, 12.25]);
+    assert!(
+        prediction
+            .reconcile(&world, &mut body, &stale, &[])
+            .is_err()
+    );
+    assert_same_body(&body, &before);
+    assert_eq!(prediction.movement_epoch(), 4);
+    assert_eq!(prediction.pending.len(), 1);
+    assert_eq!(prediction.pending_seconds, 0.05);
+    assert_eq!(prediction.sequence, 4);
+    assert_eq!(prediction.acknowledged, 3);
+
+    // Same-epoch acknowledgments retain the original forward/backward bounds.
+    current.last_input_sequence = 5;
+    assert!(
+        prediction
+            .reconcile(&world, &mut body, &current, &[])
+            .is_err()
+    );
+    current.last_input_sequence = 2;
+    assert!(
+        prediction
+            .reconcile(&world, &mut body, &current, &[])
+            .is_err()
+    );
+    assert_same_body(&body, &before);
+    assert_eq!(prediction.pending.len(), 1);
 }
 
 #[test]

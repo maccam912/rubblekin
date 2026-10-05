@@ -28,9 +28,23 @@ pub struct Prediction {
     pending_seconds: f32,
     sequence: u64,
     acknowledged: u64,
+    movement_epoch: u64,
 }
 
 impl Prediction {
+    pub fn from_snapshot(authoritative: &PlayerSnapshot) -> Self {
+        Self {
+            sequence: authoritative.last_input_sequence,
+            acknowledged: authoritative.last_input_sequence,
+            movement_epoch: authoritative.movement_epoch,
+            ..Default::default()
+        }
+    }
+
+    pub fn movement_epoch(&self) -> u64 {
+        self.movement_epoch
+    }
+
     #[cfg(test)]
     pub fn advance(
         &mut self,
@@ -97,6 +111,7 @@ impl Prediction {
         self.pending_seconds += dt;
         Ok(ClientMessage::Input {
             sequence: self.sequence,
+            movement_epoch: self.movement_epoch,
             input,
             yaw,
             dt,
@@ -111,7 +126,7 @@ impl Prediction {
         authoritative: &PlayerSnapshot,
         obstacles: &[[f32; 3]],
     ) -> Result<(), &'static str> {
-        self.acknowledge(authoritative.last_input_sequence)?;
+        self.acknowledge(authoritative)?;
         *body = authoritative.body.clone();
         if authoritative.ride.is_none() {
             for input in &self.pending {
@@ -126,25 +141,29 @@ impl Prediction {
         world: &World,
         body: &mut Body,
         authoritative: &PlayerSnapshot,
-        obstacles: &[[f32; 3]],
+        obstacles_at: impl Fn(f64) -> Vec<[f32; 3]>,
         network: &AirshipNetwork,
         world_time: f64,
         ride: &mut Option<AirshipRide>,
         local: &mut Option<[f32; 3]>,
     ) -> Result<(), &'static str> {
-        self.acknowledge(authoritative.last_input_sequence)?;
+        self.acknowledge(authoritative)?;
         *body = authoritative.body.clone();
         *ride = authoritative.ride;
         *local = authoritative.deck_position;
         for pending in &self.pending {
+            let time = pending.time.unwrap_or(world_time).max(world_time);
+            // Sample fellow passengers in the same moving frame as this
+            // command. Old world-space positions can create false contacts.
+            let obstacles = obstacles_at(time);
             move_character_with_airships(
                 world,
                 body,
                 pending.input,
                 pending.dt,
-                obstacles,
+                &obstacles,
                 network,
-                pending.time.unwrap_or(world_time).max(world_time),
+                time,
                 ride,
                 local,
             );
@@ -152,7 +171,21 @@ impl Prediction {
         Ok(())
     }
 
-    fn acknowledge(&mut self, acknowledged: u64) -> Result<(), &'static str> {
+    fn acknowledge(&mut self, authoritative: &PlayerSnapshot) -> Result<(), &'static str> {
+        if authoritative.movement_epoch < self.movement_epoch {
+            return Err("Server sent an invalid movement epoch");
+        }
+        let acknowledged = authoritative.last_input_sequence;
+        if authoritative.movement_epoch > self.movement_epoch {
+            // Teleportation starts a new input sequence on the server. Discard
+            // commands predicted at the old location, including platform times.
+            self.pending.clear();
+            self.pending_seconds = 0.0;
+            self.sequence = acknowledged;
+            self.acknowledged = acknowledged;
+            self.movement_epoch = authoritative.movement_epoch;
+            return Ok(());
+        }
         if acknowledged < self.acknowledged || acknowledged > self.sequence {
             return Err("Server sent an invalid movement acknowledgment");
         }

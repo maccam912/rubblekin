@@ -126,11 +126,11 @@ pub fn setup_ui(
         BackgroundColor(panel()), HelpPanel,
         children![
             (Text::new(if observing { "OBSERVE THE WORLD" } else { "MAKE YOURSELF AT HOME" }), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.90, 0.73, 0.42))),
-            (Text::new(if observing {
+            (Text::new(format!("{}{}", if observing {
                 "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect aimed target     •     F2   graphics\nV   visit next village\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
                 "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
-            }), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
+            }, if session.can_admin { "\n` / ~   admin commands (help lists commands)" } else { "" })), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
         ],
     ));
     let palette_font = font.clone();
@@ -414,6 +414,7 @@ pub fn update_ui(
     time: Res<Time>,
     touch: Option<Res<crate::touch::TouchControls>>,
     pause: Option<Res<crate::pause::PauseMenu>>,
+    console: Option<Res<crate::admin_console::AdminConsole>>,
     mut refresh: Local<f32>,
     mut texts: ParamSet<(
         Query<&mut Text, With<StatusText>>,
@@ -430,7 +431,8 @@ pub fn update_ui(
     }
     *refresh = 0.0;
     let touch_enabled = touch.as_ref().is_some_and(|touch| touch.enabled);
-    let menu_open = pause.as_ref().is_some_and(|pause| pause.open);
+    let menu_open = pause.as_ref().is_some_and(|pause| pause.open)
+        || console.as_ref().is_some_and(|console| console.open);
     let minutes = (session.world_time / 60.0) as u64;
     for mut text in &mut texts.p0() {
         set_text(

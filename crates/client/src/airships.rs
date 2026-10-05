@@ -23,6 +23,51 @@ use crate::{
 
 pub(crate) const TALK_REACH: f32 = 14.0;
 
+/// A continuous shared pose clock for ships, deck contact and passengers.
+/// Packet arrival updates the target, never the current pose during normal play.
+pub(crate) struct AirshipClock {
+    pub time: f64,
+    sample_time: f64,
+    sample_elapsed: f64,
+    advanced_elapsed: f64,
+}
+
+impl AirshipClock {
+    pub fn new(world_time: f64, elapsed: f64) -> Self {
+        Self {
+            time: world_time,
+            sample_time: world_time,
+            sample_elapsed: elapsed,
+            advanced_elapsed: elapsed,
+        }
+    }
+
+    pub fn observe(&mut self, world_time: f64, elapsed: f64) {
+        if world_time < self.sample_time {
+            return;
+        }
+        // Recover after a long suspension/server stall rather than spend a
+        // whole flight correcting seconds of drift. Ordinary ticks never snap.
+        if (world_time - self.time).abs() > 2.0 {
+            self.time = world_time;
+            self.advanced_elapsed = elapsed;
+        }
+        self.sample_time = world_time;
+        self.sample_elapsed = elapsed;
+    }
+
+    pub fn advance(&mut self, elapsed: f64) {
+        let dt = (elapsed - self.advanced_elapsed).max(0.0);
+        self.advanced_elapsed = elapsed;
+        let target = self.sample_time + (elapsed - self.sample_elapsed).max(0.0);
+        let nominal = self.time + dt;
+        // Settle phase error gradually. Cap catch-up at 10% extra speed and
+        // retain forward motion even when a loaded server is running slower.
+        let correction = (target - nominal) * (1.0 - (-2.0 * dt).exp());
+        self.time = nominal + correction.clamp(-0.9 * dt, 0.1 * dt);
+    }
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct PilotConversation {
     pub ship_id: Option<u64>,
@@ -340,7 +385,7 @@ fn talk_candidates(session: &Session) -> Vec<u64> {
     let position = Vec3::from_array(session.body.position);
     let mut ships: Vec<_> = session
         .airships
-        .ships(session.airship_time)
+        .ships(session.airship_clock.time)
         .into_iter()
         .filter_map(|ship| {
             let distance = position.distance_squared(Vec3::from_array(pilot_position(&ship)));
@@ -371,7 +416,10 @@ pub(super) fn read(
     mut session: ResMut<Session>,
     mut connection: ResMut<Connection>,
     mut touch: ResMut<TouchControls>,
-    pause: Option<Res<PauseMenu>>,
+    modals: (
+        Option<Res<PauseMenu>>,
+        Option<Res<crate::admin_console::AdminConsole>>,
+    ),
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     wheel: Res<AccumulatedMouseScroll>,
@@ -391,6 +439,7 @@ pub(super) fn read(
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<DialogRoot>>,
 ) {
+    let (pause, console) = modals;
     let was_open = conversation.open();
     conversation.just_closed = false;
     conversation.input_blocked = was_open;
@@ -398,6 +447,7 @@ pub(super) fn read(
         .read()
         .any(|key| key.input.state.is_pressed() && key.input.logical_key == Key::BrowserBack);
     if pause.is_some_and(|menu| menu.open || menu.input_blocked)
+        || console.is_some_and(|console| console.input_blocked)
         || !windows.iter().any(|window| window.focused)
     {
         fingers.clear();
@@ -507,9 +557,11 @@ pub(super) fn read(
 }
 
 pub(super) fn advance_clock(mut session: ResMut<Session>, time: Res<Time>) {
-    session.airship_time += time.delta_secs_f64();
+    session.airship_clock.advance(time.elapsed_secs_f64());
     if let Some(ride) = session.ride
-        && let Some(ship) = session.airships.ship(ride.ship_id, session.airship_time)
+        && let Some(ship) = session
+            .airships
+            .ship(ride.ship_id, session.airship_clock.time)
     {
         let local = session
             .deck_position
@@ -554,7 +606,7 @@ pub(super) fn refresh(
     }
     let ship = conversation
         .ship_id
-        .and_then(|id| session.airships.ship(id, session.airship_time));
+        .and_then(|id| session.airships.ship(id, session.airship_clock.time));
     for (action, mut node) in &mut buttons {
         let show = match action {
             Action::NextPilot => talk_candidates(&session).len() > 1,
@@ -624,7 +676,7 @@ fn travel_hint(session: &Session, world: &VoxelWorld, touch: bool) -> Option<Str
     if let Some(ride) = session.ride {
         return session
             .airships
-            .ship(ride.ship_id, session.airship_time)
+            .ship(ride.ship_id, session.airship_clock.time)
             .map(|ship| {
                 let action = if touch {
                     "Move · Jump · Pilot to talk"
@@ -669,7 +721,7 @@ fn travel_hint(session: &Session, world: &VoxelWorld, touch: bool) -> Option<Str
             };
             session
                 .airships
-                .next_leg(port, destination, session.airship_time)
+                .next_leg(port, destination, session.airship_clock.time)
         })
         .min_by(|a, b| a.departure_in.total_cmp(&b.departure_in));
     Some(wait.map_or_else(
@@ -677,7 +729,7 @@ fn travel_hint(session: &Session, world: &VoxelWorld, touch: bool) -> Option<Str
         |leg| {
             let landed = session
                 .airships
-                .ship(leg.ship_id, session.airship_time)
+                .ship(leg.ship_id, session.airship_clock.time)
                 .is_some_and(|ship| ship.docked_at == Some(port));
             let landing = session
                 .airships
@@ -756,7 +808,7 @@ pub(super) fn update_scene(
     mut scene: ResMut<Scene>,
     mut transforms: Query<&mut Transform, With<Ship>>,
 ) {
-    let ships = session.airships.ships(session.airship_time);
+    let ships = session.airships.ships(session.airship_clock.time);
     let live: Vec<_> = ships.iter().map(|ship| ship.id).collect();
     scene.ships.retain(|id, entity| {
         if live.contains(id) {
@@ -880,6 +932,70 @@ mod tests {
     }
 
     #[test]
+    fn irregular_snapshots_and_frames_keep_the_ship_clock_moving_smoothly() {
+        let mut clock = AirshipClock::new(100.0, 0.0);
+        let mut arrivals = Vec::new();
+        let mut previous_arrival = 0.0_f64;
+        for tick in 1..=200 {
+            let world_time = tick as f64 * 0.05;
+            let delay = [0.006, 0.025, 0.012, 0.033, 0.008][tick % 5];
+            // A TCP backlog occasionally delivers multiple ticks together.
+            let delay = if tick % 23 == 0 { 0.18 } else { delay };
+            let arrival = (world_time + delay).max(previous_arrival);
+            arrivals.push((arrival, 100.0 + world_time));
+            previous_arrival = arrival;
+        }
+        let frames = [1.0 / 144.0, 1.0 / 60.0, 1.0 / 30.0, 0.010, 0.022];
+        let mut elapsed = 0.0;
+        let mut next = 0;
+        for frame in 0..600 {
+            let dt = frames[frame % frames.len()];
+            elapsed += dt;
+            let before = clock.time;
+            while let Some(&(arrival, world_time)) = arrivals.get(next) {
+                if arrival > elapsed {
+                    break;
+                }
+                clock.observe(world_time, elapsed);
+                assert_eq!(clock.time, before, "a packet changed the visible pose");
+                next += 1;
+            }
+            clock.advance(elapsed);
+            let movement = clock.time - before;
+            assert!(movement > 0.8 * dt && movement <= 1.1 * dt + 1e-12);
+            assert!((clock.time - (100.0 + elapsed)).abs() < 0.12);
+        }
+        assert_eq!(next, arrivals.len());
+    }
+
+    #[test]
+    fn clock_tracks_a_slow_server_and_recovers_after_a_long_stall() {
+        let mut clock = AirshipClock::new(100.0, 0.0);
+        for frame in 1..=1800 {
+            let elapsed = frame as f64 / 60.0;
+            let before = clock.time;
+            if frame % 3 == 0 {
+                // Tick work/oversleep reduces the server's real-time pace.
+                clock.observe(100.0 + elapsed * 0.8, elapsed);
+                assert_eq!(clock.time, before);
+            }
+            clock.advance(elapsed);
+            assert!(clock.time > before);
+        }
+        assert!((clock.time - 124.0).abs() < 0.15);
+        clock.observe(130.0, 40.0);
+        assert_eq!(clock.time, 130.0);
+        clock.advance(40.0);
+        assert_eq!(clock.time, 130.0);
+        clock.advance(40.0 + 1.0 / 60.0);
+        assert!((clock.time - (130.0 + 1.0 / 60.0)).abs() < 1e-10);
+        // A new session starts at its own clock, even late in application time.
+        let mut rejoined = AirshipClock::new(500.0, 90.0);
+        rejoined.advance(90.0);
+        assert_eq!(rejoined.time, 500.0);
+    }
+
+    #[test]
     fn pilot_replies_cannot_replace_a_newer_conversation() {
         let mut conversation = PilotConversation {
             ship_id: Some(2),
@@ -943,7 +1059,7 @@ mod tests {
         let mut found_wait = false;
         let mut found_landed = false;
         for second in 0..600 {
-            session.airship_time = second as f64;
+            session.airship_clock.time = second as f64;
             for port in &ports {
                 session.body.position = port.position;
                 let candidates = talk_candidates(&session);
@@ -984,7 +1100,7 @@ mod tests {
     fn pilot_selection_uses_actual_pilot_distance_on_landed_and_flying_ships() {
         let (_, mut session) = fixture();
         for second in [0.0, 60.0] {
-            session.airship_time = second;
+            session.airship_clock.time = second;
             for ship in session.airships.ships(second) {
                 session.body.position = pilot_position(&ship);
                 assert_eq!(talk_target(&session), Some(ship.id));
@@ -1034,7 +1150,7 @@ mod tests {
         let current = app.world().resource::<Session>();
         let pose = current
             .airships
-            .ship(ship.id, current.airship_time)
+            .ship(ship.id, current.airship_clock.time)
             .unwrap();
         assert_eq!(
             current.body.position,
@@ -1043,7 +1159,7 @@ mod tests {
         assert!(current.body.on_ground);
         assert_eq!(
             app.world().resource::<Scene>().ships.len(),
-            current.airships.ships(current.airship_time).len()
+            current.airships.ships(current.airship_clock.time).len()
         );
         {
             let mut conversation = app.world_mut().resource_mut::<PilotConversation>();

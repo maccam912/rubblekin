@@ -151,6 +151,72 @@ fn assert_distinct_bodies(positions: impl IntoIterator<Item = [f32; 3]>) {
 }
 
 #[test]
+fn console_permission_results_reach_players_and_read_only_observers_over_tcp() {
+    let save = TestSave::new();
+    let server = spawn(save.config(false)).unwrap();
+    let (mut player, welcome) = Client::connect(server.addr, "Ian");
+    let initial = match welcome {
+        ServerMessage::Welcome {
+            players, can_admin, ..
+        } => {
+            assert!(!can_admin);
+            players[0].clone()
+        }
+        _ => unreachable!(),
+    };
+    player.send(ClientMessage::AdminCommand {
+        command: "teleport 20 50 20".into(),
+    });
+    assert!(matches!(
+        player.until(|message| matches!(message, ServerMessage::AdminCommandResult { .. })),
+        ServerMessage::AdminCommandResult { text } if text.contains("disabled")
+    ));
+    match player.until(|message| matches!(message, ServerMessage::State { .. })) {
+        ServerMessage::State { players, .. } => {
+            assert_eq!(players[0].body.position[0], initial.body.position[0]);
+            assert_eq!(players[0].body.position[2], initial.body.position[2]);
+            assert_eq!(players[0].movement_epoch, 0);
+        }
+        _ => unreachable!(),
+    }
+    drop(player);
+    server.stop().unwrap();
+
+    let server = spawn(save.config(true)).unwrap();
+    let (mut player, _) = Client::connect(server.addr, "Violet");
+    let (mut observer, welcome) =
+        Client::connect_mode(server.addr, "Camera", SessionMode::Observer);
+    assert!(matches!(
+        welcome,
+        ServerMessage::Welcome {
+            can_admin: false,
+            ..
+        }
+    ));
+    observer.send(ClientMessage::AdminCommand {
+        command: "teleport Violet 20 50 20".into(),
+    });
+    assert!(matches!(
+        observer.until(|message| matches!(message, ServerMessage::AdminCommandResult { .. })),
+        ServerMessage::AdminCommandResult { text } if text.contains("read-only")
+    ));
+    player.send(ClientMessage::AdminCommand {
+        command: "tp 20 50 20".into(),
+    });
+    assert!(matches!(
+        player.until(|message| matches!(message, ServerMessage::AdminCommandResult { .. })),
+        ServerMessage::AdminCommandResult { text } if text.starts_with("Teleported Violet")
+    ));
+    assert!(matches!(
+        observer.until(|message| matches!(message, ServerMessage::State { players, .. } if players.iter().any(|p| p.movement_epoch == 1))),
+        ServerMessage::State { players, .. } if players.len() == 1 && players[0].body.position[0] == 20.0 && players[0].body.position[2] == 20.0
+    ));
+    drop(player);
+    drop(observer);
+    server.stop().unwrap();
+}
+
+#[test]
 fn joining_players_get_free_space_and_server_movement_stops_at_other_players() {
     let save = TestSave::new();
     let server = spawn(save.config(false)).unwrap();
@@ -196,6 +262,7 @@ fn joining_players_get_free_space_and_server_movement_stops_at_other_players() {
     // movement remains outside the first body's horizontal extent.
     let z_distance = first_position[2] - second_position[2];
     second.send(ClientMessage::Input {
+        movement_epoch: 0,
         sequence: 1,
         dt: z_distance.abs() / 7.0,
         input: MoveInput {
@@ -220,6 +287,7 @@ fn joining_players_get_free_space_and_server_movement_stops_at_other_players() {
     assert!((blocker[2] - first_position[2]).abs() < 0.001);
     for sequence in 1..=2 {
         first.send(ClientMessage::Input {
+            movement_epoch: 0,
             sequence,
             dt: MAX_INPUT_DT,
             input: MoveInput {
@@ -274,6 +342,7 @@ fn server_movement_cannot_pass_through_a_resting_npc() {
     });
     for sequence in 1..=2 {
         client.send(ClientMessage::Input {
+            movement_epoch: 0,
             sequence,
             dt: MAX_INPUT_DT,
             input: MoveInput {
@@ -385,6 +454,7 @@ fn idle_gravity_lands_on_another_player_without_merging_bodies() {
         _ => unreachable!(),
     };
     first.send(ClientMessage::Input {
+        movement_epoch: 0,
         sequence: 1,
         dt: MAX_INPUT_DT,
         input: MoveInput {
@@ -397,6 +467,7 @@ fn idle_gravity_lands_on_another_player_without_merging_bodies() {
     let direction = [target[0] - start[0], target[2] - start[2]];
     let distance = direction[0].hypot(direction[1]);
     first.send(ClientMessage::Input {
+        movement_epoch: 0,
         sequence: 2,
         dt: distance / 7.0,
         input: MoveInput {
@@ -752,6 +823,7 @@ fn observers_receive_the_live_world_without_an_avatar_and_cannot_mutate_it() {
         matches!(rejection, ServerMessage::Rejected { reason, .. } if reason.contains("read-only"))
     );
     observer.send(ClientMessage::Input {
+        movement_epoch: 0,
         sequence: 1,
         dt: 0.05,
         input: MoveInput {
@@ -1090,6 +1162,7 @@ fn movement_input_expires_and_logout_removes_the_avatar() {
     };
     let (mut observer, _) = Client::connect(server.addr, "Observer");
     moving.send(ClientMessage::Input {
+        movement_epoch: 0,
         sequence: 1,
         dt: 0.05,
         input: MoveInput {
@@ -1154,6 +1227,7 @@ fn movement_commands_execute_exactly_once_with_their_original_durations() {
     for (index, (input, dt)) in commands.into_iter().enumerate() {
         move_character(&world, &mut expected, input, dt);
         client.send(ClientMessage::Input {
+            movement_epoch: 0,
             sequence: index as u64 + 1,
             dt,
             input,
@@ -1209,6 +1283,7 @@ fn movement_cannot_spend_more_than_the_servers_real_time_budget() {
         serde_json::to_writer(
             &mut batch,
             &ClientMessage::Input {
+                movement_epoch: 0,
                 sequence,
                 dt: MAX_INPUT_DT,
                 input: MoveInput {
@@ -1262,6 +1337,7 @@ fn a_long_frame_after_a_short_frame_fits_the_bounded_network_burst_allowance() {
         serde_json::to_writer(
             &mut batch,
             &ClientMessage::Input {
+                movement_epoch: 0,
                 sequence: index as u64 + 1,
                 dt,
                 input,
@@ -1300,6 +1376,7 @@ fn invalid_movement_duration_and_sequence_are_never_acknowledged() {
     ] {
         let (mut client, _) = Client::connect(server.addr, "Invalid command");
         client.send(ClientMessage::Input {
+            movement_epoch: 0,
             sequence,
             dt,
             input: MoveInput {
@@ -1316,6 +1393,7 @@ fn invalid_movement_duration_and_sequence_are_never_acknowledged() {
         _ => unreachable!(),
     };
     let command = ClientMessage::Input {
+        movement_epoch: 0,
         sequence: 1,
         dt: 0.01,
         input: MoveInput::default(),

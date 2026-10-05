@@ -1,4 +1,5 @@
 //! Shared world rules and explicit wire messages. No renderer or network runtime.
+pub mod admin_commands;
 mod airship_landings;
 pub mod airships;
 pub mod geography;

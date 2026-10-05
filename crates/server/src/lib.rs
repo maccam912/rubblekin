@@ -1,11 +1,14 @@
 //! A direct, authoritative prototype server. Message handling, validation and
 //! simulation are intentionally visible in one place; there is no event bus.
 
+mod admin_commands;
 mod airships;
 mod npc;
 mod persistence;
 mod villages;
 
+#[cfg(test)]
+mod admin_command_tests;
 #[cfg(test)]
 mod airship_tests;
 #[cfg(test)]
@@ -181,6 +184,7 @@ struct Connection {
     input_credit: f64,
     credit_updated: Instant,
     last_edit: Option<Instant>,
+    last_admin_command: Option<Instant>,
     dead: bool,
 }
 
@@ -203,6 +207,7 @@ impl Connection {
             input_credit: MAX_INPUT_CREDIT,
             credit_updated: now,
             last_edit: None,
+            last_admin_command: None,
             dead: false,
         })
     }
@@ -604,6 +609,7 @@ fn handle_message(
                 body: Body::new(spawn.unwrap()),
                 yaw: 0.0,
                 last_input_sequence: 0,
+                movement_epoch: 0,
                 ride: None,
                 deck_position: None,
             });
@@ -651,6 +657,15 @@ fn handle_message(
                     });
                 return Ok(());
             }
+            ClientMessage::AdminCommand { .. } => {
+                connections
+                    .get_mut(&id)
+                    .unwrap()
+                    .send(&ServerMessage::AdminCommandResult {
+                        text: "Observer sessions are read-only".into(),
+                    });
+                return Ok(());
+            }
             ClientMessage::Ping => {}
             ClientMessage::Hello { .. } => unreachable!(),
         }
@@ -658,10 +673,21 @@ fn handle_message(
     match message {
         ClientMessage::Input {
             sequence,
+            movement_epoch,
             dt,
             input,
             yaw,
         } => {
+            let current_epoch = connections[&id].player.as_ref().unwrap().movement_epoch;
+            if movement_epoch < current_epoch {
+                // A teleport invalidates every command predicted at the old
+                // origin. Do not spend its time budget or acknowledge it.
+                return Ok(());
+            }
+            if movement_epoch != current_epoch {
+                connections.get_mut(&id).unwrap().dead = true;
+                return Ok(());
+            }
             let obstacles = character_obstacles(connections, sim, Some(id), airships);
             let connection = connections.get_mut(&id).unwrap();
             let player = connection.player.as_mut().unwrap();
@@ -786,6 +812,9 @@ fn handle_message(
                 .get_mut(&id)
                 .unwrap()
                 .send(&ServerMessage::Notice { text });
+        }
+        ClientMessage::AdminCommand { command } => {
+            admin_commands::handle(id, &command, connections, sim, airships, config);
         }
         ClientMessage::TalkToPilot { ship_id } => {
             let Some(ship) = airships.ship(ship_id, sim.world_time) else {

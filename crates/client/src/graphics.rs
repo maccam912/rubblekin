@@ -8,11 +8,15 @@ use bevy::{
 };
 
 pub const MIN_NEAR_DISTANCE: f32 = 24.0;
-pub const MAX_NEAR_DISTANCE: f32 = 96.0;
+pub const MAX_NEAR_DISTANCE: f32 = 1000.0;
 pub const MIN_SHADOW_DISTANCE: f32 = 8.0;
 pub const MAX_SHADOW_DISTANCE: f32 = 192.0;
 pub const DISTANCE_STEP: f32 = 8.0;
+pub const MIN_TREE_DISTANCE: f32 = 128.0;
+pub const MAX_TREE_DISTANCE: f32 = 2500.0;
+pub const TREE_DISTANCE_STEP: f32 = 128.0;
 const DEFAULT_NEAR_DISTANCE: f32 = 48.0;
+const DEFAULT_TREE_DISTANCE: f32 = MIN_TREE_DISTANCE;
 const SETTINGS_FILE: &str = "graphics.json";
 
 /// Client preferences stay independent of the session and authoritative world.
@@ -21,8 +25,9 @@ pub struct GraphicsSettings {
     pub quality: GraphicsQuality,
     pub near_distance: f32,
     pub shadow_distance: f32,
-    last_saved: (GraphicsQuality, f32, f32),
-    last_attempt: (GraphicsQuality, f32, f32),
+    pub tree_distance: f32,
+    last_saved: (GraphicsQuality, f32, f32, f32),
+    last_attempt: (GraphicsQuality, f32, f32, f32),
 }
 
 impl GraphicsSettings {
@@ -32,8 +37,19 @@ impl GraphicsSettings {
             quality,
             near_distance: DEFAULT_NEAR_DISTANCE,
             shadow_distance,
-            last_saved: (quality, DEFAULT_NEAR_DISTANCE, shadow_distance),
-            last_attempt: (quality, DEFAULT_NEAR_DISTANCE, shadow_distance),
+            tree_distance: DEFAULT_TREE_DISTANCE,
+            last_saved: (
+                quality,
+                DEFAULT_NEAR_DISTANCE,
+                shadow_distance,
+                DEFAULT_TREE_DISTANCE,
+            ),
+            last_attempt: (
+                quality,
+                DEFAULT_NEAR_DISTANCE,
+                shadow_distance,
+                DEFAULT_TREE_DISTANCE,
+            ),
         }
     }
 
@@ -75,6 +91,13 @@ impl GraphicsSettings {
         }
     }
 
+    pub fn adjust_tree_distance(&mut self, delta: f32) {
+        if delta.is_finite() {
+            self.tree_distance =
+                (self.tree_distance + delta).clamp(MIN_TREE_DISTANCE, MAX_TREE_DISTANCE);
+        }
+    }
+
     pub fn near_radius_chunks(&self) -> i32 {
         (self
             .near_distance
@@ -87,8 +110,13 @@ impl GraphicsSettings {
         self.quality.cascades_at(self.shadow_distance)
     }
 
-    fn values(&self) -> (GraphicsQuality, f32, f32) {
-        (self.quality, self.near_distance, self.shadow_distance)
+    fn values(&self) -> (GraphicsQuality, f32, f32, f32) {
+        (
+            self.quality,
+            self.near_distance,
+            self.shadow_distance,
+            self.tree_distance,
+        )
     }
 
     fn load_from(path: &std::path::Path) -> std::io::Result<Self> {
@@ -112,6 +140,18 @@ impl GraphicsSettings {
         };
         let near_distance = value["near_distance_m"].as_f64().ok_or_else(invalid)? as f32;
         let shadow_distance = value["shadow_distance_m"].as_f64().ok_or_else(invalid)? as f32;
+        let tree_distance = match value.get("tree_distance_m") {
+            None => DEFAULT_TREE_DISTANCE,
+            Some(value) => {
+                let distance = value.as_f64().ok_or_else(invalid)?;
+                if !(f64::from(MIN_TREE_DISTANCE)..=f64::from(MAX_TREE_DISTANCE))
+                    .contains(&distance)
+                {
+                    return Err(invalid());
+                }
+                distance as f32
+            }
+        };
         if !(MIN_NEAR_DISTANCE..=MAX_NEAR_DISTANCE).contains(&near_distance)
             || near_distance % DISTANCE_STEP != 0.0
             || !(MIN_SHADOW_DISTANCE..=MAX_SHADOW_DISTANCE).contains(&shadow_distance)
@@ -121,6 +161,7 @@ impl GraphicsSettings {
         let mut settings = Self::new(quality);
         settings.near_distance = near_distance;
         settings.shadow_distance = shadow_distance;
+        settings.tree_distance = tree_distance;
         settings.last_saved = settings.values();
         settings.last_attempt = settings.values();
         Ok(settings)
@@ -138,6 +179,7 @@ impl GraphicsSettings {
             "quality": quality,
             "near_distance_m": self.near_distance,
             "shadow_distance_m": self.shadow_distance,
+            "tree_distance_m": self.tree_distance,
         }))?;
         let temporary = path.with_extension("json.tmp");
         let mut file = std::fs::File::create(&temporary)?;
@@ -201,13 +243,37 @@ mod tests {
     fn preferences_roundtrip_preserves_custom_distances_and_quality() {
         let path = preference_path();
         let mut settings = GraphicsSettings::new(GraphicsQuality::High);
-        settings.adjust_near_distance(16.0);
         settings.adjust_shadow_distance(8.0);
-        settings.save_to(&path).unwrap();
+        for (distance, tree_distance) in [(64.0, 256.0), (1000.0, MAX_TREE_DISTANCE)] {
+            settings.adjust_near_distance(distance - settings.near_distance);
+            settings.adjust_tree_distance(tree_distance - settings.tree_distance);
+            settings.save_to(&path).unwrap();
+            let restored = GraphicsSettings::load_from(&path).unwrap();
+            assert_eq!(
+                restored.values(),
+                (GraphicsQuality::High, distance, 98.0, tree_distance)
+            );
+            assert_eq!(restored.last_saved, restored.values());
+            assert!(!path.with_extension("json.tmp").exists());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn existing_preferences_default_tree_distance_without_resetting_other_values() {
+        let path = preference_path();
+        std::fs::write(
+            &path,
+            r#"{"version":1,"quality":"high","near_distance_m":1000,"shadow_distance_m":98}"#,
+        )
+        .unwrap();
         let restored = GraphicsSettings::load_from(&path).unwrap();
-        assert_eq!(restored.values(), (GraphicsQuality::High, 64.0, 98.0));
+        assert_eq!(
+            restored.values(),
+            (GraphicsQuality::High, 1000.0, 98.0, DEFAULT_TREE_DISTANCE)
+        );
         assert_eq!(restored.last_saved, restored.values());
-        assert!(!path.with_extension("json.tmp").exists());
+        assert_eq!(restored.last_attempt, restored.values());
         std::fs::remove_file(path).unwrap();
     }
 
@@ -220,7 +286,14 @@ mod tests {
             r#"{"version":1,"quality":"ultra","near_distance_m":48,"shadow_distance_m":32}"#,
             r#"{"version":1,"quality":"low","near_distance_m":23,"shadow_distance_m":32}"#,
             r#"{"version":1,"quality":"low","near_distance_m":49,"shadow_distance_m":32}"#,
+            r#"{"version":1,"quality":"low","near_distance_m":1008,"shadow_distance_m":32}"#,
             r#"{"version":1,"quality":"low","near_distance_m":48,"shadow_distance_m":193}"#,
+            r#"{"version":1,"quality":"low","near_distance_m":48,"shadow_distance_m":32,"tree_distance_m":127}"#,
+            r#"{"version":1,"quality":"low","near_distance_m":48,"shadow_distance_m":32,"tree_distance_m":2501}"#,
+            r#"{"version":1,"quality":"low","near_distance_m":48,"shadow_distance_m":32,"tree_distance_m":2500.00001}"#,
+            r#"{"version":1,"quality":"low","near_distance_m":48,"shadow_distance_m":32,"tree_distance_m":1e50}"#,
+            r#"{"version":1,"quality":"low","near_distance_m":48,"shadow_distance_m":32,"tree_distance_m":null}"#,
+            r#"{"version":1,"quality":"low","near_distance_m":48,"shadow_distance_m":32,"tree_distance_m":"far"}"#,
         ] {
             std::fs::write(&path, bytes).unwrap();
             assert_eq!(
@@ -232,12 +305,43 @@ mod tests {
     }
 
     #[test]
+    fn tree_distance_reaches_exact_cap_and_is_retained_across_presets() {
+        let mut settings = GraphicsSettings::new(GraphicsQuality::Balanced);
+        assert_eq!(settings.tree_distance, DEFAULT_TREE_DISTANCE);
+        for _ in 0..19 {
+            settings.adjust_tree_distance(TREE_DISTANCE_STEP);
+        }
+        assert_eq!(settings.tree_distance, MAX_TREE_DISTANCE);
+        settings.adjust_tree_distance(TREE_DISTANCE_STEP);
+        assert_eq!(settings.tree_distance, MAX_TREE_DISTANCE);
+        for quality in [
+            GraphicsQuality::Low,
+            GraphicsQuality::High,
+            GraphicsQuality::Balanced,
+        ] {
+            settings.set_quality(quality);
+            assert_eq!(settings.tree_distance, MAX_TREE_DISTANCE);
+        }
+        for delta in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            settings.adjust_tree_distance(delta);
+            assert_eq!(settings.tree_distance, MAX_TREE_DISTANCE);
+        }
+        settings.adjust_tree_distance(-TREE_DISTANCE_STEP);
+        assert_eq!(
+            settings.tree_distance,
+            MAX_TREE_DISTANCE - TREE_DISTANCE_STEP
+        );
+        settings.adjust_tree_distance(-10000.0);
+        assert_eq!(settings.tree_distance, MIN_TREE_DISTANCE);
+    }
+
+    #[test]
     fn distance_limits_and_presets_keep_short_high_cascades_valid() {
         let mut settings = GraphicsSettings::new(GraphicsQuality::Balanced);
         settings.adjust_near_distance(-1000.0);
         assert_eq!(settings.near_radius_chunks(), 3);
         settings.adjust_near_distance(1000.0);
-        assert_eq!(settings.near_radius_chunks(), 12);
+        assert_eq!(settings.near_radius_chunks(), 125);
         settings.adjust_shadow_distance(1000.0);
         assert_eq!(settings.shadow_distance, MAX_SHADOW_DISTANCE);
         settings.set_quality(GraphicsQuality::Low);
@@ -254,7 +358,15 @@ mod tests {
         assert_eq!(settings.shadow_distance, 32.0);
         settings.adjust_near_distance(f32::NAN);
         settings.adjust_shadow_distance(f32::INFINITY);
-        assert_eq!(settings.values(), (GraphicsQuality::Balanced, 96.0, 32.0));
+        assert_eq!(
+            settings.values(),
+            (
+                GraphicsQuality::Balanced,
+                1000.0,
+                32.0,
+                DEFAULT_TREE_DISTANCE
+            )
+        );
     }
 }
 

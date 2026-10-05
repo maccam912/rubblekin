@@ -931,7 +931,7 @@ mod tests {
             assert!(horizontal_distance(p, pilot_position(&ship)) > PLAYER_RADIUS * 2.0);
         }
         let snapshot: crate::protocol::PlayerSnapshot = serde_json::from_value(serde_json::json!({
-            "id":1,"name":"Player","body":{"position":[0,0,0],"velocity":[0,0,0],"on_ground":false},"yaw":0,"last_input_sequence":0
+            "id":1,"name":"Player","body":{"position":[0,0,0],"velocity":[0,0,0],"on_ground":false},"yaw":0,"last_input_sequence":0,"movement_epoch":0
         })).unwrap();
         assert!(snapshot.ride.is_none());
         assert!(snapshot.deck_position.is_none());

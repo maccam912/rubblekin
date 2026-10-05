@@ -427,6 +427,7 @@ pub fn read(
     mut lifecycle: MessageReader<AppLifecycle>,
     pause: Option<Res<crate::pause::PauseMenu>>,
     conversation: Option<Res<crate::airships::PilotConversation>>,
+    console: Option<Res<crate::admin_console::AdminConsole>>,
     mouse: Res<ButtonInput<MouseButton>>,
     window: Single<(Entity, &Window), With<PrimaryWindow>>,
     session: Option<Res<Session>>,
@@ -468,7 +469,9 @@ pub fn read(
         events.clear();
         return;
     }
-    if conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked) {
+    if conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
+        || console.is_some_and(|console| console.input_blocked)
+    {
         controls.reset();
         events.clear();
         return;
@@ -1192,7 +1195,7 @@ mod tests {
                 rubblekin_core::airships::deck_position(&ship, [0.0, 0.0, 0.0]),
             );
             session.airships = network;
-            session.airship_time = 0.0;
+            session.airship_clock.time = 0.0;
             session.ride = None;
             session.deck_position = None;
             session.flying = false;

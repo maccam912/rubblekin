@@ -9,6 +9,7 @@ fn input(f: &mut Fixture, id: u64, input: MoveInput) {
     f.send(
         id,
         ClientMessage::Input {
+            movement_epoch: 0,
             sequence,
             dt: 0.05,
             input,

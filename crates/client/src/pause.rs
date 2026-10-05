@@ -8,12 +8,14 @@ use bevy::{
     prelude::*,
     window::{PrimaryWindow, WindowFocused},
 };
+use rubblekin_core::world::CELL_SIZE;
 
 use crate::{
     GameEntity, Session,
     graphics::{
         DISTANCE_STEP, GraphicsQuality, GraphicsSettings, MAX_NEAR_DISTANCE, MAX_SHADOW_DISTANCE,
-        MIN_NEAR_DISTANCE, MIN_SHADOW_DISTANCE,
+        MAX_TREE_DISTANCE, MIN_NEAR_DISTANCE, MIN_SHADOW_DISTANCE, MIN_TREE_DISTANCE,
+        TREE_DISTANCE_STEP,
     },
     join::MenuKey,
     touch::TouchControls,
@@ -37,9 +39,15 @@ pub(super) struct PauseContent;
 #[derive(Component)]
 pub(super) struct PauseActions;
 #[derive(Component)]
+pub(super) struct PausePanel;
+#[derive(Component)]
+pub(super) struct CompactNote;
+#[derive(Component)]
 pub(super) struct NearText;
 #[derive(Component)]
 pub(super) struct ShadowText;
+#[derive(Component)]
+pub(super) struct TreeText;
 #[derive(Component)]
 pub(super) struct QualityNote;
 
@@ -49,6 +57,8 @@ pub(super) enum Action {
     Quality(GraphicsQuality),
     NearLess,
     NearMore,
+    TreeLess,
+    TreeMore,
     ShadowLess,
     ShadowMore,
     Inspect,
@@ -125,6 +135,7 @@ pub fn setup(
         ))
         .with_children(|root| {
             root.spawn((
+                PausePanel,
                 Node {
                     width: px(800),
                     max_width: percent(100),
@@ -165,23 +176,27 @@ pub fn setup(
                                 row.spawn(button(Action::Quality(quality), percent(33.33))).with_child(label(name, &font, 16.));
                             }
                         });
-                        graphics.spawn((QualityNote, label("", &font, 14.)));
-                        for (near, title, less, more) in [
-                            (true, "NEAR DETAIL DISTANCE", Action::NearLess, Action::NearMore),
-                            (false, "SHADOW DISTANCE", Action::ShadowLess, Action::ShadowMore),
+                        graphics.spawn((QualityNote, CompactNote, label("", &font, 14.)));
+                        for (title, less, more) in [
+                            ("NEAR DETAIL DISTANCE", Action::NearLess, Action::NearMore),
+                            ("MEDIUM TREE DISTANCE", Action::TreeLess, Action::TreeMore),
+                            ("SHADOW DISTANCE", Action::ShadowLess, Action::ShadowMore),
                         ] {
                             graphics.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() },)).with_children(|setting| {
                                 setting.spawn((Text::new(title), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
                                 setting.spawn((Node { align_items: AlignItems::Center, column_gap: px(8), ..default() },)).with_children(|row| {
                                     row.spawn(button(less, px(48))).with_child(label("−", &font, 23.));
-                                    let value = row.spawn((label("", &font, 20.), Node { flex_grow: 1., ..default() })).id();
-                                    if near { row.commands().entity(value).insert(NearText); }
-                                    else { row.commands().entity(value).insert(ShadowText); }
+                                    let value = row.spawn((label("", &font, if less == Action::TreeLess { 18. } else { 20. }), Node { flex_grow: 1., ..default() })).id();
+                                    match less {
+                                        Action::NearLess => { row.commands().entity(value).insert(NearText); }
+                                        Action::TreeLess => { row.commands().entity(value).insert(TreeText); }
+                                        _ => { row.commands().entity(value).insert(ShadowText); }
+                                    }
                                     row.spawn(button(more, px(48))).with_child(label("+", &font, 23.));
                                 });
                             });
                         }
-                        graphics.spawn((Text::new("Longer distances cost more memory and drawing work.\nPresets reset shadows; distant land stays visible."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+                        graphics.spawn((CompactNote, Text::new("Longer distances cost more memory and drawing work.\nPresets reset shadows; distant land stays visible."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
                     });
                     content.spawn((PauseActions, Node { width: px(220), flex_shrink: 0., flex_direction: FlexDirection::Column, row_gap: px(8), ..default() },)).with_children(|actions| {
                         actions.spawn(button(Action::Resume, percent(100))).with_child(label("Resume", &font, 18.));
@@ -205,6 +220,8 @@ fn enabled(action: Action, graphics: &GraphicsSettings) -> bool {
     match action {
         Action::NearLess => graphics.near_distance > MIN_NEAR_DISTANCE,
         Action::NearMore => graphics.near_distance < MAX_NEAR_DISTANCE,
+        Action::TreeLess => graphics.tree_distance > MIN_TREE_DISTANCE,
+        Action::TreeMore => graphics.tree_distance < MAX_TREE_DISTANCE,
         Action::ShadowLess => {
             graphics.quality.shadows() && graphics.shadow_distance > MIN_SHADOW_DISTANCE
         }
@@ -228,6 +245,8 @@ fn activate(
         Action::Quality(quality) => graphics.set_quality(quality),
         Action::NearLess => graphics.adjust_near_distance(-DISTANCE_STEP),
         Action::NearMore => graphics.adjust_near_distance(DISTANCE_STEP),
+        Action::TreeLess => graphics.adjust_tree_distance(-TREE_DISTANCE_STEP),
+        Action::TreeMore => graphics.adjust_tree_distance(TREE_DISTANCE_STEP),
         Action::ShadowLess => graphics.adjust_shadow_distance(-DISTANCE_STEP),
         Action::ShadowMore => graphics.adjust_shadow_distance(DISTANCE_STEP),
         _ => {
@@ -252,7 +271,10 @@ pub fn read(
     mut graphics: ResMut<GraphicsSettings>,
     mut touch: ResMut<TouchControls>,
     session: Option<Res<Session>>,
-    conversation: Option<Res<crate::airships::PilotConversation>>,
+    modals: (
+        Option<Res<crate::airships::PilotConversation>>,
+        Option<Res<crate::admin_console::AdminConsole>>,
+    ),
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<AccumulatedMouseScroll>,
     mut native: MessageReader<MenuKey>,
@@ -272,6 +294,7 @@ pub fn read(
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
 ) {
+    let (conversation, console) = modals;
     pause.just_closed = false;
     let back = native
         .read()
@@ -285,6 +308,13 @@ pub fn read(
         return;
     }
     let was_open = pause.open;
+    if console.is_some_and(|console| console.input_blocked) {
+        pause.input_blocked = false;
+        pause.scroll_finger = None;
+        touch.reset();
+        fingers.clear();
+        return;
+    }
     if lost_focus || touch.suspended || !windows.iter().any(|window| window.focused) {
         pause.input_blocked = true;
         pause.scroll_finger = None;
@@ -373,6 +403,8 @@ pub fn read(
             Action::Quality(GraphicsQuality::High),
             Action::NearLess,
             Action::NearMore,
+            Action::TreeLess,
+            Action::TreeMore,
             Action::ShadowLess,
             Action::ShadowMore,
             Action::Inspect,
@@ -425,13 +457,20 @@ pub fn refresh(
     window: Single<&Window, With<PrimaryWindow>>,
     mut roots: Query<(&mut Node, &ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
     mut layout: Query<
-        (&mut Node, Option<&PauseContent>, Option<&PauseActions>),
+        (
+            &mut Node,
+            Option<&PauseContent>,
+            Option<&PauseActions>,
+            Option<&PausePanel>,
+            Option<&CompactNote>,
+        ),
         Without<PauseRoot>,
     >,
     mut texts: Query<(
         &mut Text,
         Option<&NearText>,
         Option<&ShadowText>,
+        Option<&TreeText>,
         Option<&QualityNote>,
     )>,
     mut buttons: Query<(
@@ -442,6 +481,7 @@ pub fn refresh(
     )>,
 ) {
     let wide = window.width() >= 620.;
+    let compact = window.height() < 500.;
     for (mut root, computed, mut scroll) in &mut roots {
         root.padding = UiRect::all(px(if window.height() < 500. { 8. } else { 16. }));
         root.display = if pause.open {
@@ -457,7 +497,17 @@ pub fn refresh(
         let max = (computed.content_size.y - computed.size.y) * computed.inverse_scale_factor;
         scroll.0.y = scroll.0.y.clamp(0., max.max(0.));
     }
-    for (mut node, content, actions) in &mut layout {
+    for (mut node, content, actions, panel, note) in &mut layout {
+        if panel.is_some() {
+            node.padding = UiRect::all(px(if compact { 8. } else { 16. }));
+        }
+        if note.is_some() {
+            node.display = if compact {
+                Display::None
+            } else {
+                Display::Flex
+            };
+        }
         if content.is_some() {
             node.flex_direction = if wide {
                 FlexDirection::Row
@@ -469,7 +519,7 @@ pub fn refresh(
             node.width = if wide { px(220) } else { percent(100) };
         }
     }
-    for (mut text, near, shadow, note) in &mut texts {
+    for (mut text, near, shadow, tree, note) in &mut texts {
         if near.is_some() {
             text.0 = format!("{:.0} m", graphics.near_distance);
         }
@@ -479,6 +529,13 @@ pub fn refresh(
             } else {
                 "Off in Low".into()
             };
+        }
+        if tree.is_some() {
+            text.0 = format!(
+                "{:.0} blocks ({:.0} m)",
+                graphics.tree_distance / CELL_SIZE,
+                graphics.tree_distance
+            );
         }
         if note.is_some() {
             text.0 = match graphics.quality {
@@ -545,18 +602,20 @@ mod tests {
         (app, window)
     }
 
-    fn target(app: &mut App, action: Action) {
-        app.world_mut().spawn((
-            action,
-            Interaction::None,
-            Node::default(),
-            InheritedVisibility::VISIBLE,
-            ComputedNode {
-                size: Vec2::splat(64.),
-                ..default()
-            },
-            UiGlobalTransform::from_xy(100., 100.),
-        ));
+    fn target(app: &mut App, action: Action) -> Entity {
+        app.world_mut()
+            .spawn((
+                action,
+                Interaction::None,
+                Node::default(),
+                InheritedVisibility::VISIBLE,
+                ComputedNode {
+                    size: Vec2::splat(64.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(100., 100.),
+            ))
+            .id()
     }
 
     fn tap(app: &mut App, window: Entity) {
@@ -576,13 +635,123 @@ mod tests {
     fn a_short_touch_changes_distance_once_without_a_mouse_press() {
         let (mut app, window) = menu_app();
         target(&mut app, Action::NearMore);
-        tap(&mut app, window);
-        assert_eq!(
-            app.world().resource::<GraphicsSettings>().near_distance,
-            56.
-        );
+        for (before, after) in [(48., 56.), (96., 104.), (992., 1000.), (1000., 1000.)] {
+            app.world_mut()
+                .resource_mut::<GraphicsSettings>()
+                .near_distance = before;
+            tap(&mut app, window);
+            assert_eq!(
+                app.world().resource::<GraphicsSettings>().near_distance,
+                after
+            );
+        }
         let pause = app.world().resource::<PauseMenu>();
         assert!(pause.open && pause.input_blocked);
+    }
+
+    #[test]
+    fn tree_touch_control_reaches_5000_blocks_and_presets_retain_distance() {
+        let (mut app, window) = menu_app();
+        app.world_mut()
+            .resource_mut::<GraphicsSettings>()
+            .set_quality(GraphicsQuality::Low);
+        let more = target(&mut app, Action::TreeMore);
+        assert!(!enabled(
+            Action::TreeLess,
+            app.world().resource::<GraphicsSettings>()
+        ));
+        for _ in 0..19 {
+            tap(&mut app, window);
+        }
+        let graphics = app.world().resource::<GraphicsSettings>();
+        assert_eq!(graphics.tree_distance / CELL_SIZE, 5000.0);
+        assert!(!enabled(Action::TreeMore, graphics));
+        tap(&mut app, window);
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().tree_distance,
+            MAX_TREE_DISTANCE
+        );
+        app.world_mut()
+            .resource_mut::<GraphicsSettings>()
+            .set_quality(GraphicsQuality::High);
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().tree_distance,
+            MAX_TREE_DISTANCE
+        );
+        app.world_mut().despawn(more);
+        target(&mut app, Action::TreeLess);
+        tap(&mut app, window);
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().tree_distance,
+            MAX_TREE_DISTANCE - TREE_DISTANCE_STEP
+        );
+        assert!(app.world().resource::<PauseMenu>().open);
+    }
+
+    #[test]
+    fn keyboard_navigation_skips_disabled_tree_decrease_and_increases_distance() {
+        let (mut app, _) = menu_app();
+        target(&mut app, Action::Resume);
+        target(&mut app, Action::TreeLess);
+        target(&mut app, Action::TreeMore);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Tab);
+        app.update();
+        assert_eq!(
+            app.world().resource::<PauseMenu>().focused,
+            Some(Action::TreeMore)
+        );
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.clear();
+            keys.press(KeyCode::Enter);
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().tree_distance,
+            MIN_TREE_DISTANCE + TREE_DISTANCE_STEP
+        );
+        assert!(app.world().resource::<PauseMenu>().open);
+    }
+
+    #[test]
+    fn mouse_tree_control_applies_a_changed_press_once() {
+        let (mut app, _) = menu_app();
+        let more = target(&mut app, Action::TreeMore);
+        app.world_mut()
+            .entity_mut(more)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().tree_distance,
+            MIN_TREE_DISTANCE + TREE_DISTANCE_STEP
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().tree_distance,
+            MIN_TREE_DISTANCE + TREE_DISTANCE_STEP
+        );
+    }
+
+    #[test]
+    fn tree_distance_label_shows_blocks_and_meters_through_the_cap() {
+        let (mut app, _) = menu_app();
+        app.add_systems(Update, refresh);
+        let value = app.world_mut().spawn((Text::new(""), TreeText)).id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Text>(value).unwrap().0,
+            "256 blocks (128 m)"
+        );
+        app.world_mut()
+            .resource_mut::<GraphicsSettings>()
+            .adjust_tree_distance(10000.0);
+        app.update();
+        assert_eq!(
+            app.world().get::<Text>(value).unwrap().0,
+            "5000 blocks (2500 m)"
+        );
     }
 
     #[test]

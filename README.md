@@ -113,7 +113,7 @@ The launcher references this checkout's `target/debug/rubblekin` binary. It is a
 
 New worlds use a 32.768 km square region, matching the physical extent of Veloren’s default map. The user confirmed the generated island shape on October 4; this pass retains it. Seeds 42, 43, and 123 currently produce peaks around 2.2 km above sea level. A global 513 × 513 plan at 64 m spacing defines mountain ranges, coasts, catchments, rivers, lakes, temperature, moisture, and biomes. An independent 48-pass erosion model incises channels, transports/deposits sediment, weathers steep slopes, and cuts spillways through some enclosed basins. [Veloren’s world-generation guide](https://book.veloren.net/players/world-generation.html) is the scale reference; this is Rubblekin’s own generator.
 
-The client loads 50 cm editable voxels near the player or observer and draws distant terrain from the same geography. The default 48 m near-detail range loads at most 169 nearby chunks; the menu allows 24–96 m (49–625 chunks). Two detail-generation jobs and one distant-mesh job are active at a time. The world uses a bounded column cache and sparse saved edits rather than storing billions of untouched blocks. New local worlds use a separate save path so the original valley stays intact:
+The client loads 50 cm editable voxels near the player or observer and draws distant terrain from the same geography. The default 48 m near-detail range loads at most 169 nearby chunks; the menu allows 24–1000 m (49–63,001 chunks). Two detail-generation jobs and one distant-mesh job are active at a time. The world uses a bounded column cache and sparse saved edits rather than storing billions of untouched blocks. New local worlds use a separate save path so the original valley stays intact:
 
 ```sh
 cargo run --locked -p rubblekin_client -- --local
@@ -127,7 +127,7 @@ Export the actual generated geography as a shaded PPM map, with the spawn marked
 cargo run --locked -p rubblekin_core --example geography -- 42 /tmp/geography.ppm
 ```
 
-New islands use GeographyV3, retaining GeographyV2 landforms and biomes: visibly distinct meadows, broadleaf woods, pine forest, dry scrub, desert, wet forest, tundra, alpine rock, beaches, and snow. Pine trees have taller tiered crowns, scrub is low and sparse, and meadows have fewer trees. River water and its carved bed share a channel profile, avoiding elevated water walls at tributaries and dry banks. Medium/far terrain uses smooth stitched heightmap triangles painted with a 2048² stylized map: biome/canopy patches, gentle relief, actual water, village footprints/fields, and connecting trails. Filtered mip levels limit distant shimmer. Nearby tree/building silhouettes bridge to editable voxels within 128 m; fine grain stays on nearby blocks. Stepped fake voxel LOD and coarse square grain have been removed.
+New islands use GeographyV3, retaining GeographyV2 landforms and biomes: visibly distinct meadows, broadleaf woods, pine forest, dry scrub, desert, wet forest, tundra, alpine rock, beaches, and snow. Pine trees have taller tiered crowns, scrub is low and sparse, and meadows have fewer trees. River water and its carved bed share a channel profile, avoiding elevated water walls at tributaries and dry banks. Medium/far terrain uses smooth stitched heightmap triangles painted with a 2048² stylized map: biome/canopy patches, gentle relief, actual water, village footprints/fields, and connecting trails. Filtered mip levels limit distant shimmer. Simplified trees cover your chosen 128–2500 m range, initially 128 m, while building silhouettes bridge to editable voxels within 128 m; fine grain stays on nearby blocks. Stepped fake voxel LOD and coarse square grain have been removed.
 
 Existing islands retain GeographyV1 or GeographyV2, including their saved edits and terrain. Villages and resources are added only to new GeographyV3 worlds; existing worlds are not silently converted. To try the revised generator without replacing an existing world:
 
@@ -135,7 +135,7 @@ Existing islands retain GeographyV1 or GeographyV2, including their saved edits 
 cargo run --locked -p rubblekin_client -- --local --observe --save saves/detailed-island.json
 ```
 
-Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Individual edits appear only in the nearby detailed area; very distant terrain still uses a coarse surface, and distant vegetation is represented by map color. Village airships are implemented below; gliders and an in-game world map remain future work. Villages and trails are now generated in GeographyV3; live physical settlement expansion remains future work. Representative integrated-graphics measurements remain necessary. The [map-textured valley](artifacts/map-lod-valley.png), [closer view](artifacts/map-lod-near.png), [forest/coast](artifacts/map-lod-forest.png), and [exact 2048² atlas](artifacts/distant-map-atlas.png) show the approved medium/far rendering, enabled automatically in all graphics presets. Nearby [voxel gameplay](artifacts/map-lod-ground.png) and [ground shading](artifacts/terrain-readable-ground.png) are retained. Export the exact atlas with `cargo run --locked -p rubblekin_client --example distant_map -- 42 /tmp/distant-map.ppm`.
+Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Individual edits appear only in the nearby detailed area; very distant terrain still uses a coarse surface, and vegetation beyond the chosen tree range is represented by map color. Village airships are implemented below; gliders and an in-game world map remain future work. Villages and trails are now generated in GeographyV3; live physical settlement expansion remains future work. Representative integrated-graphics measurements remain necessary. The [map-textured valley](artifacts/map-lod-valley.png), [closer view](artifacts/map-lod-near.png), [forest/coast](artifacts/map-lod-forest.png), and [exact 2048² atlas](artifacts/distant-map-atlas.png) show the approved medium/far rendering, enabled automatically in all graphics presets. Nearby [voxel gameplay](artifacts/map-lod-ground.png) and [ground shading](artifacts/terrain-readable-ground.png) are retained. Export the exact atlas with `cargo run --locked -p rubblekin_client --example distant_map -- 42 /tmp/distant-map.ppm`.
 
 ## Villages, resources, and residents
 
@@ -153,7 +153,7 @@ cargo run --locked -p rubblekin_core --example settlements -- 42 /tmp/villages.j
 cargo run --locked -p rubblekin_core --example village_asset_catalog -- /tmp/village-assets.svg
 ```
 
-Existing saves remain available with `--save saves/geography.json` or `--save saves/valley.json`. Protocol v8 requires rebuilt matching clients and servers. This source update does not itself update the public test server.
+Existing saves remain available with `--save saves/geography.json` or `--save saves/valley.json`. Protocol v9 requires rebuilt matching clients and servers. This source update does not itself update the public test server.
 
 ## Controls
 
@@ -179,12 +179,29 @@ Developer controls work only for player sessions when the server allows them:
 
 | Input | Action |
 | --- | --- |
+| Backquote / tilde (` / ~) | Open or close the admin command panel. |
 | F6 / F7 | Force Moss to forage / rest. |
 | F8 | Clear the override and restore autonomous choices. |
 | F9 | Set hunger to 85 and energy to 35 for testing. |
 | `[` / `]` | Favor rest / restore equal forage and rest weights. |
 
 The local auto-host enables these controls for every connected player. They are disabled by default on a dedicated server. On keyboards with media function keys, use the platform's function-key modifier if needed.
+
+## Admin commands
+
+Press the **backquote / tilde key** (` / ~) in an admin-enabled player session to open the command panel. Type a command and press Enter; Escape or the same key closes it. Up/Down recalls commands, Ctrl/Cmd+V pastes, and the mouse wheel scrolls replies. Your movement, building and gameplay shortcuts are blocked while the panel is open; the shared world keeps running.
+
+| Command | Action |
+| --- | --- |
+| `help` | List every console command and its syntax. |
+| `teleport X Y Z` | Move yourself to coordinates. |
+| `teleport Ian X Y Z` | Move Ian to coordinates. |
+| `teleport Violet` | Move yourself beside Violet. |
+| `teleport Ian Violet` | Move Ian beside Violet. |
+
+`tp` is an alias for `teleport`; a leading `/` is optional. Coordinates are **meters**, in X Y Z order, with Y the height of the player's feet. They must be inside the world and clear of terrain and characters. Named destinations choose clear space within three meters so players do not overlap; grounded destinations require a nearby supported floor. Names match in full, ignoring case; quote names containing spaces, for example `teleport "Ian Koski" Violet`. Missing or duplicate names produce a readable error.
+
+The existing server-wide admin setting controls access: local hosting enables it for every connected player, dedicated servers default to disabled, and observers remain read-only. No per-user authentication is added. Teleporting clears velocity and preserves the player's creative-flight toggle. Coordinate teleports detach from airships; teleporting to a passenger places you on their moving deck. Protocol v9 invalidates pre-teleport movement inputs and requires matching rebuilt clients and servers.
 
 ## Ride village airships
 
@@ -196,7 +213,7 @@ Optional **G / Pilot** asks a nearby pilot where they are going and when they le
 
 NPC traders compare the complete airship trip, including approach and waiting, against walking to their destination. They carry their goods aboard and continue to the original destination before delivering; local jobs continue on foot. Journey state and schedules resume from saved simulation time after restart; server downtime is not replayed.
 
-Ports, gangways and ships are additive entities, so existing GeographyV3 terrain and block edits remain compatible. Worlds without villages have no routes. Rebuild both client and server for protocol v8; this local source change does not update the public server.
+Ports, gangways and ships are additive entities, so existing GeographyV3 terrain and block edits remain compatible. Worlds without villages have no routes. Rebuild both client and server for protocol v9; this local source change does not update the public server.
 
 Native macOS captures show the [voxel airship at its landing](artifacts/airship-port.png) and the [open deck in flight](artifacts/airship-onboard.png).
 
@@ -219,7 +236,7 @@ The airship handshake uses **protocol v8**. Rebuild/restart both client and serv
 
 ## Graphics
 
-All presets include terrain corner shading, darker ground sides, and a subtle top-edge cue at actual drops, so descending steps remain visible without sun shadows. Flat ground has no added edge outlines. Fine world-aligned grain fades below pixel size on nearby voxels; medium/far heightmaps use a generated map atlas. The embedded shader and atlas need no downloaded texture assets. Open **Escape** (desktop) or **Menu / Back** (Android) to choose quality, near-detail distance, and shadow distance. Changes apply while the menu is open. Resume returns to play; Leave world returns to the join screen. Player controls stop while the menu is open, and the shared world continues running. F2 still cycles quality, and startup flags override the saved quality:
+All presets include terrain corner shading, darker ground sides, and a subtle top-edge cue at actual drops, so descending steps remain visible without sun shadows. Flat ground has no added edge outlines. Fine world-aligned grain fades below pixel size on nearby voxels; medium/far heightmaps use a generated map atlas. The embedded shader and atlas need no downloaded texture assets. Open **Escape** (desktop) or **Menu / Back** (Android) to choose quality, near-detail distance, medium tree distance, and shadow distance. Changes apply while the menu is open. Resume returns to play; Leave world returns to the join screen. Player controls stop while the menu is open, and the shared world continues running. F2 still cycles quality, and startup flags override the saved quality:
 
 | Preset | Startup option | Shadows and antialiasing |
 | --- | --- | --- |
@@ -227,9 +244,11 @@ All presets include terrain corner shading, darker ground sides, and a subtle to
 | [Balanced](artifacts/shadows-balanced.png), default | `--balanced` | Nearby sun shadows: one 1024 × 1024 shadow map out to 32m camera depth, hardware 2×2 filtering, no MSAA. |
 | [High](artifacts/shadows-high.png) | `--high` | Two 2048 × 2048 shadow maps out to 90m, Gaussian filtering, and 4× MSAA. |
 
-Near detail adjusts the editable voxel square around your player or observer from 24–96 m in 8 m steps (default 48 m). These are approximate cardinal distances because loading follows chunk boundaries. Increasing this range adds memory and rendering work; the map-painted distant landscape stays visible. Legacy valleys already load their full terrain.
+Near detail adjusts the editable voxel square around your player or observer from 24–1000 m in 8 m steps (default 48 m). These are approximate cardinal distances because loading follows chunk boundaries. Increasing this range adds memory and rendering work; the map-painted distant landscape stays visible. Legacy valleys already load their full terrain.
 
-Shadow distance adjusts the final sun-shadow cascade from 8–192 m. Low disables dynamic shadows and its distance controls; Balanced and High restore their 32 m / 90 m shadow defaults when selected. Changing quality retains your near-detail distance. Shadows can only come from loaded terrain and visible characters; distant map terrain does not cast them. Preferences are saved in `graphics.json` beside the client's local data and survive leaving, rejoining, and restarting.
+**Medium tree distance** controls how far simplified trees remain visible outside detailed terrain in geographic worlds: 256–5000 blocks (128–2500 m), default 256 blocks. The controls change it by 256 blocks (128 m), with the final increase reaching exactly 5000 blocks. Trees retain full generated density within the chosen range; increasing it adds generation, memory, and rendering work. Building silhouettes keep their 128 m range, and the map-painted landscape stays visible beyond the trees. The maximum is available for hardware experimentation; its frame rate is unverified.
+
+Shadow distance adjusts the final sun-shadow cascade from 8–192 m. Low disables dynamic shadows and its distance controls; Balanced and High restore their 32 m / 90 m shadow defaults when selected. Changing quality retains your near-detail and tree distances. Shadows can only come from loaded terrain and visible characters; distant map terrain does not cast them. Preferences are saved in `graphics.json` beside the client's local data and survive leaving, rejoining, and restarting. Existing preferences without a tree-distance value keep the 256-block default.
 
 For example, `cargo run --locked -p rubblekin_client -- --low` starts with Low selected. Balanced and High replace the character ground-shadow shapes with real sun shadows. The distant mountain scenery does not cast shadows. Shadow distance is bounded separately from the landscape view distance; the outer shadow boundary has a hard cutoff. These budgets limit rendering work, but performance on the children's computers still needs testing.
 
@@ -339,7 +358,7 @@ cargo run --locked -p rubblekin_client -- --local --screenshot artifacts/geograp
 
 ## Current limits and next feedback
 
-- **World:** new islands span 32.768 km with 50 cm editable cells and bounded local detail. Distant terrain reflects generated geography; remote edits appear only in the nearby voxel region; medium/far heightmaps use the generated map texture, with nearby silhouettes through 128 m. Legacy 160 m valleys keep their original terrain.
+- **World:** new islands span 32.768 km with 50 cm editable cells and bounded local detail. Distant terrain reflects generated geography; remote edits appear only in the nearby voxel region; medium/far heightmaps use the generated map texture, with simplified trees through the chosen 128–2500 m range and buildings through 128 m. Legacy 160 m valleys keep their original terrain.
 - **Simulation:** Moss retains the original foraging loop. GeographyV3 adds up to 60 village residents with hunger/energy, active crop work, shared crop growth, stores, finite extraction reserves, and physical deliveries/trade. Local farm paths use actual terrain and character physics; player-built obstructions can still block residents. Live settlement expansion, prices/currency, player farming/trade interactions, individual plant lifecycles, and flowing water remain future work.
 - **Airships:** scheduled village shuttles, NPC passengers and pilot destination dialogue are implemented. Board physically, move on deck and walk/jump off anywhere. Routes, waits and passenger comfort need playtesting; gliding remains future work.
 - **Building and ownership:** all players have unlimited materials and cooperative edit access. Claims and configurable offline property protection remain planned; no protection system is implemented. Moss does not destroy player structures.

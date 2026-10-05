@@ -57,6 +57,7 @@ fn preserves_delta_for_mode(mode: SessionMode) {
                     body: Body::new([0.25, 2.52, 0.25]),
                     yaw: 0.0,
                     last_input_sequence: 0,
+                    movement_epoch: 0,
                     ride: None,
                     deck_position: None,
                 }]
@@ -234,6 +235,151 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
     assert_eq!(acknowledged, 90, "server did not acknowledge the stop");
     assert_eq!(body.velocity[0], 0.0);
     drop(connection);
+    server.stop().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn localhost_self_and_other_player_teleports_replace_pending_prediction() {
+    use crate::prediction::Prediction;
+    use rubblekin_core::{physics::MoveInput, world::World};
+    use rubblekin_server::{ServerConfig, spawn};
+
+    fn player_state(
+        connection: &mut Connection,
+        id: u64,
+        epoch: u64,
+        acknowledged: u64,
+    ) -> PlayerSnapshot {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            for message in connection.poll() {
+                if let ServerMessage::State { players, .. } = message
+                    && let Some(player) = players.into_iter().find(|player| {
+                        player.id == id
+                            && player.movement_epoch == epoch
+                            && player.last_input_sequence == acknowledged
+                    })
+                {
+                    return player;
+                }
+            }
+            assert!(connection.error.is_none(), "{:?}", connection.error);
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("server did not send epoch {epoch}, acknowledgment {acknowledged}");
+    }
+
+    let directory = std::env::temp_dir().join(format!(
+        "rubblekin-client-teleport-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let server = spawn(ServerConfig {
+        bind_addr: "127.0.0.1:0".into(),
+        save_path: directory.join("world.json"),
+        generation: rubblekin_core::world::WorldGeneration::ValleyV1,
+        allow_admin: true,
+        ..Default::default()
+    })
+    .unwrap();
+    let address = server.addr.to_string();
+    let (mut ian, welcome) =
+        Connection::connect(&address, "Ian".into(), SessionMode::Player).unwrap();
+    let (mut violet, _) =
+        Connection::connect(&address, "Violet".into(), SessionMode::Player).unwrap();
+    let ServerMessage::Welcome {
+        session_id,
+        seed,
+        edits,
+        players,
+        ..
+    } = welcome
+    else {
+        panic!("expected welcome")
+    };
+    let world = World::from_edits(seed, &edits).unwrap();
+    let initial = players
+        .into_iter()
+        .find(|player| player.id == session_id)
+        .unwrap();
+    let mut prediction = Prediction::from_snapshot(&initial);
+    let mut body = initial.body.clone();
+    let walking = MoveInput {
+        direction: [1.0, 0.0],
+        fly: true,
+        ..Default::default()
+    };
+    for (epoch, command) in [
+        (1, "teleport 12.25 20 12.25"),
+        (2, "teleport Ian 24.25 20 24.25"),
+    ] {
+        // Keep both commands pending until the authoritative teleport arrives.
+        let pending_walk = prediction
+            .advance(&world, &mut body, walking, 0.0, 0.02, &[])
+            .unwrap();
+        let pending_jump = prediction
+            .advance(
+                &world,
+                &mut body,
+                MoveInput {
+                    direction: [1.0, 0.0],
+                    jump: true,
+                    ..Default::default()
+                },
+                0.0,
+                0.02,
+                &[],
+            )
+            .unwrap();
+        let request = ClientMessage::AdminCommand {
+            command: command.into(),
+        };
+        if epoch == 1 {
+            ian.send(request);
+        } else {
+            violet.send(request);
+        }
+        let teleported = player_state(&mut ian, session_id, epoch, 0);
+        // Commands sent from the previous location must be ignored even when
+        // they reach the server after another player's teleport command.
+        ian.send(pending_walk);
+        ian.send(pending_jump);
+        prediction
+            .reconcile(&world, &mut body, &teleported, &[])
+            .unwrap();
+        assert_eq!(body.position, teleported.body.position);
+        assert_eq!(body.velocity, teleported.body.velocity);
+        assert_eq!(prediction.movement_epoch(), epoch);
+
+        let next = prediction
+            .advance(&world, &mut body, walking, 0.0, 0.02, &[])
+            .unwrap();
+        assert!(matches!(
+            next,
+            ClientMessage::Input {
+                movement_epoch: actual,
+                sequence: 1,
+                ..
+            } if actual == epoch
+        ));
+        ian.send(next);
+        let acknowledged = player_state(&mut ian, session_id, epoch, 1);
+        let before = body.clone();
+        prediction
+            .reconcile(&world, &mut body, &acknowledged, &[])
+            .unwrap();
+        assert_eq!(body.position, before.position);
+        assert_eq!(body.velocity, before.velocity);
+        assert_eq!(body.on_ground, before.on_ground);
+        assert!(ian.error.is_none(), "{:?}", ian.error);
+    }
+    drop(ian);
+    drop(violet);
     server.stop().unwrap();
     std::fs::remove_dir_all(directory).unwrap();
 }

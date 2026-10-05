@@ -40,6 +40,7 @@ impl Fixture {
             body: Body::new(position),
             yaw: 0.0,
             last_input_sequence: 0,
+            movement_epoch: 0,
             ride: None,
             deck_position: None,
         });

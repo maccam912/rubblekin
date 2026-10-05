@@ -1,4 +1,7 @@
+mod admin_console;
 mod airship_mesh;
+#[cfg(test)]
+mod airship_motion_tests;
 mod airships;
 mod crops;
 mod follow_camera;
@@ -17,6 +20,8 @@ mod terrain_material;
 mod touch;
 mod ui;
 
+#[cfg(test)]
+mod admin_integration_tests;
 #[cfg(test)]
 mod avatar_tests;
 #[cfg(test)]
@@ -83,7 +88,7 @@ pub struct Session {
     pub(crate) airships: AirshipNetwork,
     pub(crate) ride: Option<AirshipRide>,
     pub(crate) deck_position: Option<[f32; 3]>,
-    pub(crate) airship_time: f64,
+    pub(crate) airship_clock: airships::AirshipClock,
     pub status: String,
     pub status_until: f64,
     pub target: Option<(BlockPos, BlockPos)>,
@@ -96,53 +101,55 @@ pub struct Session {
     next_request: u64,
 }
 
-impl Session {
-    fn character_obstacles(&self) -> Vec<[f32; 3]> {
-        self.players
-            .iter()
-            .filter(|player| player.id != self.id)
-            .map(|player| {
-                player
-                    .ride
-                    .and_then(|ride| {
-                        self.airships
-                            .ship(ride.ship_id, self.airship_time)
-                            .map(|ship| {
-                                deck_position(
-                                    &ship,
-                                    player
-                                        .deck_position
-                                        .unwrap_or(initial_deck_position(ride.seat)),
-                                )
-                            })
+fn character_obstacles(
+    own_id: u64,
+    players: &[PlayerSnapshot],
+    npc: &NpcSnapshot,
+    residents: &[ResidentSnapshot],
+    airships: &AirshipNetwork,
+    airship_time: f64,
+) -> Vec<[f32; 3]> {
+    players
+        .iter()
+        .filter(|player| player.id != own_id)
+        .map(|player| {
+            player
+                .ride
+                .and_then(|ride| {
+                    airships.ship(ride.ship_id, airship_time).map(|ship| {
+                        deck_position(
+                            &ship,
+                            player
+                                .deck_position
+                                .unwrap_or(initial_deck_position(ride.seat)),
+                        )
                     })
-                    .unwrap_or(player.body.position)
-            })
-            .chain(std::iter::once(self.npc.position))
-            .chain(self.residents.iter().map(|resident| {
-                resident
-                    .ride
-                    .and_then(|ride| {
-                        self.airships
-                            .ship(ride.ship_id, self.airship_time)
-                            .map(|ship| {
-                                deck_position(
-                                    &ship,
-                                    resident
-                                        .deck_position
-                                        .unwrap_or(initial_deck_position(ride.seat)),
-                                )
-                            })
+                })
+                .unwrap_or(player.body.position)
+        })
+        .chain(std::iter::once(npc.position))
+        .chain(residents.iter().map(|resident| {
+            resident
+                .ride
+                .and_then(|ride| {
+                    airships.ship(ride.ship_id, airship_time).map(|ship| {
+                        deck_position(
+                            &ship,
+                            resident
+                                .deck_position
+                                .unwrap_or(initial_deck_position(ride.seat)),
+                        )
                     })
-                    .unwrap_or(resident.position)
-            }))
-            .collect()
-    }
+                })
+                .unwrap_or(resident.position)
+        }))
+        .collect()
 }
 
 #[derive(Resource, Default)]
 struct Avatars {
     players: HashMap<u64, Entity>,
+    player_epochs: HashMap<u64, u64>,
     player_deck_motion: HashMap<u64, DeckMotion>,
     resident_deck_motion: HashMap<u64, DeckMotion>,
     npc: Option<Entity>,
@@ -251,7 +258,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot\nG talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nEscape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot\nG talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -324,6 +331,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .insert_resource(menu)
         .insert_resource(graphics)
         .init_resource::<pause::PauseMenu>()
+        .init_resource::<admin_console::AdminConsole>()
         .init_resource::<airships::PilotConversation>()
         .insert_resource(Capture {
             path: screenshot,
@@ -356,30 +364,39 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     touch::setup,
                     pause::setup,
                     airships::setup,
+                    admin_console::setup,
                 )
                     .run_if(resource_added::<Session>),
                 touch::read,
                 (
-                    receive_network,
-                    airships::read,
-                    pause::read,
-                    airships::advance_clock,
-                    controls,
-                    graphics::apply_settings,
-                    graphics::save_changed,
-                    camera,
-                    terrain::stream_terrain,
-                    edit_blocks,
-                    update_avatars,
-                    airships::update_scene,
-                    crops::update_crops,
-                    inspection::update,
-                    ui::update_ui,
-                    ui::scroll_panels,
-                    touch::refresh,
-                    pause::refresh,
-                    airships::refresh,
-                    join::leave_world,
+                    (
+                        receive_network,
+                        admin_console::read,
+                        airships::read,
+                        pause::read,
+                        airships::advance_clock,
+                        controls,
+                        graphics::apply_settings,
+                        graphics::save_changed,
+                        camera,
+                    )
+                        .chain(),
+                    (
+                        terrain::stream_terrain,
+                        edit_blocks,
+                        update_avatars,
+                        airships::update_scene,
+                        crops::update_crops,
+                        inspection::update,
+                        ui::update_ui,
+                        ui::scroll_panels,
+                        touch::refresh,
+                        pause::refresh,
+                        airships::refresh,
+                        admin_console::refresh,
+                        join::leave_world,
+                    )
+                        .chain(),
                 )
                     .chain()
                     .run_if(resource_exists::<Session>),
@@ -418,6 +435,7 @@ fn setup(
         &world.0,
         center,
         graphics.near_radius_chunks(),
+        graphics.tree_distance,
     );
     commands.insert_resource(terrain);
     info!("Terrain generated in {:.2}s", start.elapsed().as_secs_f32());
@@ -485,6 +503,8 @@ fn receive_network(
     mut meshes: ResMut<Assets<Mesh>>,
     time: Res<Time>,
     mut conversation: ResMut<airships::PilotConversation>,
+    mut console: Option<ResMut<admin_console::AdminConsole>>,
+    mut follows: Query<&mut CameraFollow, With<GameCamera>>,
 ) {
     let mut latest_authoritative = None;
     for message in connection.poll() {
@@ -507,7 +527,9 @@ fn receive_network(
                 session.residents = residents;
                 session.villages = villages;
                 session.world_time = world_time;
-                session.airship_time = world_time;
+                session
+                    .airship_clock
+                    .observe(world_time, time.elapsed_secs_f64());
             }
             ServerMessage::BlockChanged { edit, .. } => {
                 if world.0.set_block(edit.position, edit.block).is_ok() {
@@ -530,6 +552,17 @@ fn receive_network(
                 session.status_until = time.elapsed_secs_f64() + 5.0;
             }
             ServerMessage::PilotDialog { ship_id, text } => conversation.reply(ship_id, text),
+            ServerMessage::AdminCommandResult { text } => {
+                session.status = if text.contains('\n') {
+                    "Command help is displayed in the admin panel.".into()
+                } else {
+                    text.clone()
+                };
+                session.status_until = time.elapsed_secs_f64() + 5.0;
+                if let Some(console) = &mut console {
+                    console.reply(text);
+                }
+            }
             _ => {}
         }
     }
@@ -537,19 +570,33 @@ fn receive_network(
     // the newest acknowledgment, with all received terrain edits available.
     if let Some(authoritative) = latest_authoritative {
         let session = &mut *session;
-        let obstacles = session.character_obstacles();
+        let previous_epoch = session.prediction.movement_epoch();
         let result = session.prediction.reconcile_airships(
             &world.0,
             &mut session.body,
             &authoritative,
-            &obstacles,
+            |time| {
+                character_obstacles(
+                    session.id,
+                    &session.players,
+                    &session.npc,
+                    &session.residents,
+                    &session.airships,
+                    time,
+                )
+            },
             &session.airships,
-            session.airship_time,
+            session.world_time,
             &mut session.ride,
             &mut session.deck_position,
         );
         if let Err(error) = result {
             connection.fail(error.into());
+        } else if session.prediction.movement_epoch() != previous_epoch {
+            for mut follow in &mut follows {
+                *follow = CameraFollow::default();
+            }
+            session.target = None;
         }
     }
     if let Some(error) = &connection.error {
@@ -572,6 +619,7 @@ fn controls(
     mut connection: ResMut<Connection>,
     mut graphics: ResMut<GraphicsSettings>,
     pause: Option<Res<pause::PauseMenu>>,
+    console: Option<Res<admin_console::AdminConsole>>,
     conversation: Option<Res<airships::PilotConversation>>,
     diagnostics: Res<DiagnosticsStore>,
     touch: Res<touch::TouchControls>,
@@ -584,10 +632,15 @@ fn controls(
         || conversation
             .as_ref()
             .is_some_and(|dialog| dialog.open() || dialog.input_blocked);
+    let blocked = blocked
+        || console
+            .as_ref()
+            .is_some_and(|console| console.input_blocked);
     let resumed = pause.as_ref().is_some_and(|menu| menu.just_closed)
         || conversation
             .as_ref()
             .is_some_and(|dialog| dialog.just_closed);
+    let resumed = resumed || console.as_ref().is_some_and(|console| console.just_closed);
     if touch.enabled {
         session.captured =
             window.focused && !blocked && !touch.menu_open && connection.error.is_none();
@@ -714,7 +767,12 @@ fn controls(
             session.inspector = false;
         }
     }
-    if window.focused && keys.just_pressed(KeyCode::F2) {
+    if !console
+        .as_ref()
+        .is_some_and(|console| console.input_blocked)
+        && window.focused
+        && keys.just_pressed(KeyCode::F2)
+    {
         let quality = graphics.quality.next();
         graphics.set_quality(quality);
     }
@@ -802,7 +860,14 @@ fn controls(
         if let Some(observer) = &mut session.observer {
             observer.advance(observer_input, session.yaw, session.pitch, input.sprint, dt);
         } else {
-            let obstacles = session.character_obstacles();
+            let obstacles = character_obstacles(
+                session.id,
+                &session.players,
+                &session.npc,
+                &session.residents,
+                &session.airships,
+                session.airship_clock.time,
+            );
             let command = session.prediction.advance_airships(
                 &world.0,
                 &mut session.body,
@@ -811,7 +876,7 @@ fn controls(
                 dt,
                 &obstacles,
                 &session.airships,
-                session.airship_time,
+                session.airship_clock.time,
                 &mut session.ride,
                 &mut session.deck_position,
             );
@@ -842,7 +907,16 @@ fn camera(
         return;
     }
     let eye = Vec3::from_array(session.body.position) + Vec3::Y * EYE_HEIGHT;
-    let follow_eye = follow.advance(eye, time.delta_secs());
+    let ship = session.ride.and_then(|ride| {
+        session
+            .airships
+            .ship(ride.ship_id, session.airship_clock.time)
+    });
+    let follow_eye = if let Some(ship) = &ship {
+        follow.advance_on_airship(eye, time.delta_secs(), ship)
+    } else {
+        follow.advance(eye, time.delta_secs())
+    };
     **transform = follow_camera::transform(
         &world.0,
         eye,
@@ -851,9 +925,7 @@ fn camera(
         session.pitch,
         session.camera_distance,
     );
-    if let Some(ride) = session.ride
-        && let Some(ship) = session.airships.ship(ride.ship_id, session.airship_time)
-    {
+    if let Some(ship) = ship {
         transform.translation = airships::camera_position(&ship, eye, transform.translation);
     }
 }
@@ -870,9 +942,11 @@ fn edit_blocks(
     touch: Res<touch::TouchControls>,
     pause: Option<Res<pause::PauseMenu>>,
     conversation: Option<Res<airships::PilotConversation>>,
+    console: Option<Res<admin_console::AdminConsole>>,
 ) {
     if pause.is_some_and(|menu| menu.open || menu.input_blocked)
         || conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
+        || console.is_some_and(|console| console.input_blocked)
         || session.ride.is_some()
     {
         session.target = None;
@@ -1142,7 +1216,9 @@ fn update_avatars(
             if player.id == session.id {
                 session.body.position
             } else if let Some(ride) = player.ride
-                && let Some(ship) = session.airships.ship(ride.ship_id, session.airship_time)
+                && let Some(ship) = session
+                    .airships
+                    .ship(ride.ship_id, session.airship_clock.time)
             {
                 deck_position(
                     &ship,
@@ -1161,7 +1237,7 @@ fn update_avatars(
                 .and_then(|ride| {
                     session
                         .airships
-                        .ship(ride.ship_id, session.airship_time)
+                        .ship(ride.ship_id, session.airship_clock.time)
                         .map(|ship| {
                             deck_position(
                                 &ship,
@@ -1185,7 +1261,15 @@ fn update_avatars(
         }
     });
     avatars.player_deck_motion.retain(|id, _| live.contains(id));
+    avatars.player_epochs.retain(|id, _| live.contains(id));
     for (index, player) in session.players.iter().enumerate() {
+        let teleported = avatars
+            .player_epochs
+            .insert(player.id, player.movement_epoch)
+            .is_some_and(|previous| previous != player.movement_epoch);
+        if teleported {
+            avatars.player_deck_motion.remove(&player.id);
+        }
         let entity = *avatars.players.entry(player.id).or_insert_with(|| {
             let entity = character(&mut commands, &mut meshes, &mut materials, false);
             commands
@@ -1204,17 +1288,18 @@ fn update_avatars(
                 (player.body.position, player.yaw)
             };
             let previous = transform.translation;
-            transform.translation = if player.id == session.id || player.ride.is_some() {
-                Vec3::from_array(position)
-            } else {
-                smoothed_avatar_position(
-                    &world.0,
-                    previous,
-                    &mut positions,
-                    index,
-                    (time.delta_secs() * 15.0).min(1.0),
-                )
-            };
+            transform.translation =
+                if player.id == session.id || player.ride.is_some() || teleported {
+                    Vec3::from_array(position)
+                } else {
+                    smoothed_avatar_position(
+                        &world.0,
+                        previous,
+                        &mut positions,
+                        index,
+                        (time.delta_secs() * 15.0).min(1.0),
+                    )
+                };
             let (ride, local) = if player.id == session.id {
                 (session.ride, session.deck_position)
             } else {
@@ -1417,9 +1502,10 @@ fn capture_frame(
     keys: Res<ButtonInput<KeyCode>>,
     mut capture: ResMut<Capture>,
     session: Option<Res<Session>>,
+    console: Option<Res<admin_console::AdminConsole>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if keys.just_pressed(KeyCode::F12) {
+    if keys.just_pressed(KeyCode::F12) && !console.is_some_and(|console| console.input_blocked) {
         let _ = std::fs::create_dir_all("artifacts");
         commands
             .spawn(Screenshot::primary_window())

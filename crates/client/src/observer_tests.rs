@@ -50,6 +50,7 @@ fn observer_controls_move_only_the_camera_and_never_send_gameplay_messages() {
             body: Body::new([1.0, 3.0, 1.0]),
             yaw: 0.0,
             last_input_sequence: 0,
+            movement_epoch: 0,
             ride: None,
             deck_position: None,
         });

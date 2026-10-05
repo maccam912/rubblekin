@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    graphics::GraphicsSettings,
+    graphics::{GraphicsSettings, MAX_TREE_DISTANCE, MIN_TREE_DISTANCE},
     terrain_material::{TerrainMaterial, terrain_material},
 };
 use bevy::{
@@ -28,10 +28,8 @@ const DETAIL_JOBS: usize = 2;
 const CHUNK_METERS: f32 = CHUNK_SIZE as f32 * CELL_SIZE;
 // Eight samples across a maximum 1024 m leaf retain 128 m mountain detail.
 const MAX_LOD_TILE_CHUNKS: i32 = 128;
-// Silhouettes bridge the local voxel square to the painted heightmap.
-// Medium and far terrain use the map itself for forests and settlements.
-const LOD_TREE_DISTANCE: f32 = 128.0;
-const MAX_LOD_TREES: usize = 512;
+// Buildings bridge the local voxel square; tree range is a client preference.
+const LOD_BUILDING_DISTANCE: f32 = 128.0;
 const TREE_GRID_METERS: f32 = 12.0;
 
 type ChunkKey = (i32, i32);
@@ -62,6 +60,7 @@ struct ChunkMesh {
 struct Landscape {
     center: ChunkKey,
     near_radius: i32,
+    tree_distance: f32,
     terrain: Handle<Mesh>,
     water: Handle<Mesh>,
     triangles: usize,
@@ -69,6 +68,7 @@ struct Landscape {
 
 struct LandscapeJob {
     near_radius: i32,
+    tree_distance: f32,
     task: Task<(ChunkKey, Geometry, Geometry)>,
 }
 
@@ -86,6 +86,7 @@ pub fn setup_terrain(
     world: &World,
     center: [f32; 3],
     near_radius: i32,
+    tree_distance: f32,
 ) -> TerrainScene {
     let opaque_material = terrain_materials.add(terrain_material(None));
     let glass_material = materials.add(StandardMaterial {
@@ -118,7 +119,7 @@ pub fn setup_terrain(
         let map_water_material = terrain_materials.add(map_water);
         let landscape_material = terrain_materials.add(terrain_material(Some(albedo)));
         let center = chunk_key(center);
-        let (land, water) = landscape_geometry(world, center, near_radius);
+        let (land, water) = landscape_geometry(world, center, near_radius, tree_distance);
         let triangles = (land.indices.len() + water.indices.len()) / 3;
         let terrain = meshes.add(land.into_mesh());
         let water = meshes.add(water.into_mesh());
@@ -137,6 +138,7 @@ pub fn setup_terrain(
         scene.landscape = Some(Landscape {
             center,
             near_radius,
+            tree_distance,
             terrain,
             water,
             triangles,
@@ -194,10 +196,13 @@ pub fn stream_terrain(
         .map_or(session.body.position, |camera| camera.position.to_array());
     let center = chunk_key(position);
     let near_radius = settings.near_radius_chunks();
+    let tree_distance = settings
+        .tree_distance
+        .clamp(MIN_TREE_DISTANCE, MAX_TREE_DISTANCE);
     if scene
         .pending_landscape
         .as_ref()
-        .is_some_and(|job| job.near_radius != near_radius)
+        .is_some_and(|job| job.near_radius != near_radius || job.tree_distance != tree_distance)
     {
         // A cancelled distance change must not install an obsolete cutout.
         scene.pending_landscape = None;
@@ -223,6 +228,7 @@ pub fn stream_terrain(
         let old_triangles = landscape.triangles;
         landscape.center = ready_center;
         landscape.near_radius = near_radius;
+        landscape.tree_distance = tree_distance;
         landscape.triangles = next_triangles;
         if let Some(mut mesh) = meshes.get_mut(&landscape.terrain) {
             *mesh = land.into_mesh();
@@ -234,13 +240,17 @@ pub fn stream_terrain(
     }
     let landscape = scene.landscape.as_ref().unwrap();
     if scene.pending_landscape.is_none()
-        && (landscape.center != center || landscape.near_radius != near_radius)
+        && (landscape.center != center
+            || landscape.near_radius != near_radius
+            || landscape.tree_distance != tree_distance)
     {
         let snapshot = world.0.clone();
         scene.pending_landscape = Some(LandscapeJob {
             near_radius,
+            tree_distance,
             task: AsyncComputeTaskPool::get().spawn(async move {
-                let (land, water) = landscape_geometry(&snapshot, center, near_radius);
+                let (land, water) =
+                    landscape_geometry(&snapshot, center, near_radius, tree_distance);
                 (center, land, water)
             }),
         });
@@ -308,10 +318,16 @@ fn move_local_square(
     meshes: &mut Assets<Mesh>,
 ) {
     let wanted = local_keys(center, near_radius, world);
+    let first = (-world.radius_cells()).div_euclid(CHUNK_SIZE);
+    let last = (world.radius_cells() - 1).div_euclid(CHUNK_SIZE);
+    let wanted_x = center.0.saturating_sub(near_radius).max(first)
+        ..=center.0.saturating_add(near_radius).min(last);
+    let wanted_z = center.1.saturating_sub(near_radius).max(first)
+        ..=center.1.saturating_add(near_radius).min(last);
     let expired: Vec<_> = scene
         .chunks
         .keys()
-        .filter(|key| !wanted.contains(key))
+        .filter(|&&(x, z)| !wanted_x.contains(&x) || !wanted_z.contains(&z))
         .copied()
         .collect();
     for key in expired {
@@ -592,7 +608,12 @@ impl CellCache {
 
 /// A quadtree concentrates samples around the camera, with at most eight
 /// samples across each leaf. Every leaf uses the authoritative geography.
-fn landscape_geometry(world: &World, center: ChunkKey, near_radius: i32) -> (Geometry, Geometry) {
+fn landscape_geometry(
+    world: &World,
+    center: ChunkKey,
+    near_radius: i32,
+    tree_distance: f32,
+) -> (Geometry, Geometry) {
     let geography = world.geography().expect("geographic landscape");
     let mut land = Geometry::default();
     let mut water = Geometry::default();
@@ -621,6 +642,7 @@ fn landscape_geometry(world: &World, center: ChunkKey, near_radius: i32) -> (Geo
         world,
         center,
         near_radius,
+        tree_distance,
         &tile_lookup,
         &surfaces,
         &mut land,
@@ -654,7 +676,7 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
             ) * CELL_SIZE;
             let size = Vec3::new(width as f32, height as f32, depth as f32) * CELL_SIZE;
             let building_center = Vec2::new(base.x + size.x * 0.5, base.z + size.z * 0.5);
-            if building_center.distance(camera) > LOD_TREE_DISTANCE {
+            if building_center.distance(camera) > LOD_BUILDING_DISTANCE {
                 continue;
             }
             let walls = (size.y * 0.58).min(3.5);
@@ -682,34 +704,28 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
     }
 }
 
-fn lod_tree_cells(center: ChunkKey) -> Vec<(i32, i32)> {
+fn lod_tree_cells(center: ChunkKey, distance: f32) -> Vec<(i32, i32)> {
+    let distance = distance.clamp(MIN_TREE_DISTANCE, MAX_TREE_DISTANCE);
     let x = (center.0 as f32 + 0.5) * CHUNK_METERS;
     let z = (center.1 as f32 + 0.5) * CHUNK_METERS;
-    let first_x = ((x - LOD_TREE_DISTANCE) / TREE_GRID_METERS).floor() as i32;
-    let last_x = ((x + LOD_TREE_DISTANCE) / TREE_GRID_METERS).floor() as i32;
-    let first_z = ((z - LOD_TREE_DISTANCE) / TREE_GRID_METERS).floor() as i32;
-    let last_z = ((z + LOD_TREE_DISTANCE) / TREE_GRID_METERS).floor() as i32;
+    let first_x = ((x - distance) / TREE_GRID_METERS).floor() as i32;
+    let last_x = ((x + distance) / TREE_GRID_METERS).floor() as i32;
+    let first_z = ((z - distance) / TREE_GRID_METERS).floor() as i32;
+    let last_z = ((z + distance) / TREE_GRID_METERS).floor() as i32;
     let mut cells = Vec::new();
     for gx in first_x..=last_x {
         for gz in first_z..=last_z {
             let dx = (gx as f32 + 0.5) * TREE_GRID_METERS - x;
             let dz = (gz as f32 + 0.5) * TREE_GRID_METERS - z;
             let distance_squared = dx * dx + dz * dz;
-            if distance_squared > LOD_TREE_DISTANCE.powi(2) {
+            if distance_squared > distance.powi(2) {
                 continue;
             }
             cells.push((gx, gz));
         }
     }
-    cells.sort_unstable_by(|&(ax, az), &(bx, bz)| {
-        let distance = |gx: i32, gz: i32| {
-            ((gx as f32 + 0.5) * TREE_GRID_METERS - x).powi(2)
-                + ((gz as f32 + 0.5) * TREE_GRID_METERS - z).powi(2)
-        };
-        distance(ax, az)
-            .total_cmp(&distance(bx, bz))
-            .then((ax, az).cmp(&(bx, bz)))
-    });
+    // The distance bounds the work. Keep full density throughout that circle;
+    // a fixed nearest-tree budget would silently erase the requested far trees.
     cells
 }
 
@@ -726,16 +742,13 @@ fn add_landscape_trees(
     world: &World,
     center: ChunkKey,
     near_radius: i32,
+    tree_distance: f32,
     tiles: &HashMap<ChunkKey, i32>,
     surfaces: &HashMap<ChunkKey, SampledSurface>,
     land: &mut Geometry,
 ) {
     let cutout = local_bounds(center, near_radius);
-    let mut trees = 0;
-    for (gx, gz) in lod_tree_cells(center) {
-        if trees >= MAX_LOD_TREES {
-            break;
-        }
+    for (gx, gz) in lod_tree_cells(center, tree_distance) {
         let Some(tree) = world.tree_at(gx, gz) else {
             continue;
         };
@@ -755,7 +768,6 @@ fn add_landscape_trees(
             }
             size *= 2;
         }
-        let before = land.indices.len();
         add_tree_proxy(
             land,
             tree,
@@ -763,7 +775,6 @@ fn add_landscape_trees(
             ProxyClip::Outside(cutout),
             tree_leaf_color(world, tree.kind),
         );
-        trees += usize::from(land.indices.len() > before);
     }
 }
 
@@ -2046,9 +2057,9 @@ mod tests {
     #[test]
     fn nearby_tree_selection_is_bounded_stable_and_preserves_full_density() {
         for center in [(0, 0), (-130, 42), (2047, -2048), (100_000, 100_000)] {
-            let cells = lod_tree_cells(center);
-            assert_eq!(cells, lod_tree_cells(center));
-            assert!(cells.len() <= MAX_LOD_TREES, "near candidates stay bounded");
+            let cells = lod_tree_cells(center, MIN_TREE_DISTANCE);
+            assert_eq!(cells, lod_tree_cells(center, MIN_TREE_DISTANCE));
+            assert!(cells.len() <= 512, "near candidates stay bounded");
             let camera = Vec2::new(
                 (center.0 as f32 + 0.5) * CHUNK_METERS,
                 (center.1 as f32 + 0.5) * CHUNK_METERS,
@@ -2058,18 +2069,30 @@ mod tests {
                     (x as f32 + 0.5) * TREE_GRID_METERS,
                     (z as f32 + 0.5) * TREE_GRID_METERS,
                 );
-                assert!(position.distance(camera) <= LOD_TREE_DISTANCE + 0.1);
+                assert!(position.distance(camera) <= MIN_TREE_DISTANCE + 0.1);
             }
             let nearest = (
                 (camera.x / TREE_GRID_METERS).floor() as i32,
                 (camera.y / TREE_GRID_METERS).floor() as i32,
             );
-            assert!(lod_tree_cells(center).contains(&nearest));
+            assert!(lod_tree_cells(center, MIN_TREE_DISTANCE).contains(&nearest));
         }
+        let extended = lod_tree_cells((-130, 42), MAX_TREE_DISTANCE);
+        assert!(extended.len() > 130_000);
+        assert!(
+            extended.len() < 140_000,
+            "maximum range bounds candidate work"
+        );
+        let extended: std::collections::HashSet<_> = extended.into_iter().collect();
+        assert!(
+            lod_tree_cells((-130, 42), MIN_TREE_DISTANCE)
+                .into_iter()
+                .all(|cell| extended.contains(&cell))
+        );
     }
 
     #[test]
-    fn medium_and_far_landscape_use_only_the_painted_heightmap() {
+    fn default_landscape_keeps_painted_heightmap_and_short_tree_range() {
         let world = World::generate(42, WorldGeneration::GeographyV3);
         let geo = world.geography().unwrap();
         let peak = geo
@@ -2089,7 +2112,8 @@ mod tests {
                 center.0 as f32 * CHUNK_METERS,
                 center.1 as f32 * CHUNK_METERS,
             );
-            let (land, water) = landscape_geometry(&world, center, DETAIL_RADIUS);
+            let (land, water) =
+                landscape_geometry(&world, center, DETAIL_RADIUS, MIN_TREE_DISTANCE);
             let triangles = (land.indices.len() + water.indices.len()) / 3;
             eprintln!("{name}: {triangles} landscape triangles");
             assert!(triangles < 350_000, "stitched heightmap stays bounded");
@@ -2097,7 +2121,7 @@ mod tests {
                 if uv[0] == 0.0 {
                     let distance = Vec2::new(position[0], position[2]).distance(camera);
                     // Include the final crown/roof footprint at the band edge.
-                    assert!(distance <= LOD_TREE_DISTANCE + 16.0);
+                    assert!(distance <= MIN_TREE_DISTANCE + 16.0);
                 }
             }
             assert!(land.uvs.iter().any(|uv| uv[0] == 1.0));
@@ -2108,6 +2132,126 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn maximum_tree_range_draws_full_forests_beyond_the_old_tree_budget() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let center = chunk_key([-10_606., 0., -3_150.]);
+        let camera = Vec2::new(
+            (center.0 as f32 + 0.5) * CHUNK_METERS,
+            (center.1 as f32 + 0.5) * CHUNK_METERS,
+        );
+        let start = std::time::Instant::now();
+        let (land, water) = landscape_geometry(&world, center, DETAIL_RADIUS, MAX_TREE_DISTANCE);
+        eprintln!(
+            "5000-block forest: {} triangles generated in {:.2}s",
+            (land.indices.len() + water.indices.len()) / 3,
+            start.elapsed().as_secs_f32()
+        );
+        let cutout = local_bounds(center, DETAIL_RADIUS);
+        let mut farthest = 0.0_f32;
+        let mut trunk_bottom_vertices = 0;
+        for (((position, uv), normal), color) in land
+            .positions
+            .iter()
+            .zip(&land.uvs)
+            .zip(&land.normals)
+            .zip(&land.colors)
+        {
+            if uv[0] != 0.0 {
+                continue;
+            }
+            let distance = Vec2::new(position[0], position[2]).distance(camera);
+            farthest = farthest.max(distance);
+            assert!(distance <= MAX_TREE_DISTANCE + TREE_GRID_METERS);
+            assert!(
+                position[0] <= cutout[0]
+                    || position[0] >= cutout[2]
+                    || position[2] <= cutout[1]
+                    || position[2] >= cutout[3],
+                "proxies never overlap the detailed voxel square"
+            );
+            if *normal == [0.0, -1.0, 0.0] && *color == srgb_linear(Block::Wood.color()) {
+                trunk_bottom_vertices += 1;
+            }
+        }
+        assert!(trunk_bottom_vertices / 4 > 512, "no fixed nearest-tree cap");
+        assert!(
+            farthest > MAX_TREE_DISTANCE - 50.0,
+            "trees reach the selected outer range"
+        );
+    }
+
+    #[test]
+    fn changing_tree_range_replaces_an_obsolete_landscape_job_without_moving() {
+        use crate::graphics::GraphicsQuality;
+        use rubblekin_core::protocol::SessionMode;
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let (_, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(SessionMode::Player),
+            "terrain test".into(),
+            GraphicsQuality::Balanced,
+            0.,
+            SessionMode::Player,
+        )
+        .unwrap();
+        session.body.position = [0.; 3];
+        let mut settings = GraphicsSettings::new(GraphicsQuality::Balanced);
+        let near_radius = settings.near_radius_chunks();
+        settings.tree_distance = MAX_TREE_DISTANCE;
+        let scene = TerrainScene {
+            chunks: HashMap::new(),
+            opaque_material: default(),
+            glass_material: default(),
+            water_material: default(),
+            landscape: Some(Landscape {
+                center: (0, 0),
+                near_radius,
+                tree_distance: MIN_TREE_DISTANCE,
+                terrain: default(),
+                water: default(),
+                triangles: 0,
+            }),
+            pending_landscape: Some(LandscapeJob {
+                near_radius,
+                tree_distance: MIN_TREE_DISTANCE,
+                task: AsyncComputeTaskPool::get().spawn(std::future::pending()),
+            }),
+            pending_chunks: HashMap::new(),
+            triangle_count: 0,
+        };
+        let mut app = App::new();
+        app.insert_resource(crate::VoxelWorld(World::generate(
+            42,
+            WorldGeneration::GeographyV1,
+        )))
+        .insert_resource(session)
+        .insert_resource(settings)
+        .insert_resource(scene)
+        .init_resource::<Assets<Mesh>>()
+        .add_systems(Update, stream_terrain);
+        app.update();
+        let scene = app.world().resource::<TerrainScene>();
+        assert_eq!(
+            scene.landscape.as_ref().unwrap().tree_distance,
+            MIN_TREE_DISTANCE
+        );
+        assert_eq!(
+            scene.pending_landscape.as_ref().unwrap().tree_distance,
+            MAX_TREE_DISTANCE
+        );
+        // Returning to the installed range cancels the larger pending mesh too.
+        app.world_mut()
+            .resource_mut::<GraphicsSettings>()
+            .tree_distance = MIN_TREE_DISTANCE;
+        app.update();
+        assert!(
+            app.world()
+                .resource::<TerrainScene>()
+                .pending_landscape
+                .is_none()
+        );
     }
 
     #[test]
@@ -2236,7 +2380,7 @@ mod tests {
         let entering_center = (original_center.0 + 8, original_center.1);
         let original_bounds = local_bounds(original_center, DETAIL_RADIUS);
         let entering_keys = local_keys(entering_center, DETAIL_RADIUS, &world);
-        let tree = lod_tree_cells(entering_center)
+        let tree = lod_tree_cells(entering_center, MIN_TREE_DISTANCE)
             .into_iter()
             .filter_map(|(x, z)| world.tree_at(x, z))
             .find(|tree| {
@@ -2264,6 +2408,7 @@ mod tests {
             &world,
             world.spawn_position(),
             DETAIL_RADIUS,
+            MIN_TREE_DISTANCE,
         );
         queue.apply(&mut ecs);
         assert!(
@@ -2512,6 +2657,7 @@ mod tests {
             &world,
             world.spawn_position(),
             DETAIL_RADIUS,
+            MIN_TREE_DISTANCE,
         );
         rebuild_one(&mut scene, center, &world, &mut commands, &mut meshes);
         queue.apply(&mut ecs);
@@ -2666,6 +2812,7 @@ mod tests {
             &world,
             world.spawn_position(),
             DETAIL_RADIUS,
+            MIN_TREE_DISTANCE,
         );
         assert!(scene.chunks.len() <= 169);
         assert!(scene.triangle_count < 600_000);
