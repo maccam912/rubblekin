@@ -43,10 +43,10 @@ def verify(binary):
         environment["SENTRY_DSN"] = f"http://public@127.0.0.1:{server.server_port}/1"
         environment["SENTRY_ENVIRONMENT"] = "verification"
         environment.pop("SENTRY_AUTH_TOKEN", None)
-        for mode in ("error", "panic", "abort"):
+        for mode in ("error", "renderer", "panic", "abort"):
             result = subprocess.run([str(binary), mode], env=environment,
                                     capture_output=True, timeout=30)
-            expected_success = mode == "error"
+            expected_success = mode in ("error", "renderer")
             assert (result.returncode == 0) == expected_success, result.stderr.decode(errors="replace")
             records = list(items(received.get(timeout=15)))
             event = next(json.loads(payload) for metadata, payload in records
@@ -60,6 +60,9 @@ def verify(binary):
                            and payload.startswith(b"MDMP") for metadata, payload in records), records
             else:
                 assert event.get("exception", {}).get("values"), event
+            if mode == "renderer":
+                assert "Renderer DeviceLost" in json.dumps(event), event
+                assert received.empty(), "Repeated renderer polling sent duplicate events"
             print(f"PASS: {mode} uploaded a real Sentry event with build/context metadata")
         for dsn in ("", "invalid-dsn"):
             environment["SENTRY_DSN"] = dsn

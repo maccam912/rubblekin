@@ -8,6 +8,8 @@ import com.google.androidgamesdk.GameActivity;
 
 /** GameActivity supplies the native lifecycle, multitouch, and software keyboard. */
 public final class MainActivity extends GameActivity {
+    private native void requestNativeExit();
+
     /** Called through JNI from Rust; instance methods avoid worker class-loader issues. */
     public void reportRustPanic(String message, String stack) {
         RubblekinApplication.reportRust(message, stack, io.sentry.SentryLevel.FATAL);
@@ -50,6 +52,26 @@ public final class MainActivity extends GameActivity {
         if (hasFocus) {
             hideSystemUi();
         }
+    }
+
+    @Override
+    public void finish() {
+        // Bevy's AndroidApp is process-global and supports one GameActivity
+        // lifetime. Request exit while it is still resumed: winit stops Bevy
+        // updates on pause and ignores Destroy. Bevy drops its local server
+        // (saving the world), then android_main ends this process and window.
+        io.sentry.Sentry.flush(2000);
+        requestNativeExit();
+    }
+
+    @Override
+    protected void onDestroy() {
+        // Configuration changes are handled in-place by the manifest. If the
+        // OS destroys this activity directly, end the process before native
+        // onDestroy waits indefinitely for winit's suspended loop.
+        io.sentry.Sentry.flush(2000);
+        android.os.Process.killProcess(android.os.Process.myPid());
+        super.onDestroy();
     }
 
     @SuppressWarnings("deprecation")

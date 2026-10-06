@@ -334,7 +334,12 @@ fn run(
             if connection.closing_at.is_none() {
                 match connection.receive() {
                     Ok(messages) => inbox.extend(messages.into_iter().map(|message| (id, message))),
-                    Err(_) => connection.dead = true,
+                    Err(error) => {
+                        eprintln!(
+                            "Session {id} disconnected while reading client messages: {error}"
+                        );
+                        connection.dead = true;
+                    }
                 }
             }
             if (connection.mode.is_none()
@@ -363,6 +368,12 @@ fn run(
                 config,
                 &mut edit_budget,
             )?;
+        }
+        // A busy tick can accumulate more than half a second of legitimate
+        // input. Spend its actual elapsed time across the bounded receive
+        // batch before limiting the reserve kept for the next batch.
+        for connection in connections.values_mut() {
+            connection.input_credit = connection.input_credit.min(MAX_INPUT_CREDIT);
         }
         connections.retain(|_, client| !client.dead);
         let next_world_time = sim.world_time + DT as f64;
@@ -686,6 +697,9 @@ fn handle_message(
                 return Ok(());
             }
             if movement_epoch != current_epoch {
+                eprintln!(
+                    "Session {id} disconnected: unexpected movement epoch {movement_epoch}, expected {current_epoch}"
+                );
                 connections.get_mut(&id).unwrap().dead = true;
                 return Ok(());
             }
@@ -700,18 +714,25 @@ fn handle_message(
                 || dt > MAX_INPUT_DT
                 || player.last_input_sequence.checked_add(1) != Some(sequence)
             {
+                eprintln!(
+                    "Session {id} disconnected: invalid movement input (sequence {sequence}, last {}, dt {dt})",
+                    player.last_input_sequence
+                );
                 connection.dead = true;
                 return Ok(());
             }
 
-            // The server owns the time budget. Allow a bounded network burst,
-            // but neither unlimited catch-up nor faster-than-real-time input.
+            // The server owns the time budget. Do not discard time accrued
+            // while this server was busy before spending queued commands.
+            // The receive loop bounds the batch and then caps its reserve.
             let now = Instant::now();
-            connection.input_credit = (connection.input_credit
-                + now.duration_since(connection.credit_updated).as_secs_f64())
-            .min(MAX_INPUT_CREDIT);
+            connection.input_credit += now.duration_since(connection.credit_updated).as_secs_f64();
             connection.credit_updated = now;
             if dt as f64 > connection.input_credit + 0.000_001 {
+                eprintln!(
+                    "Session {id} disconnected: movement time {dt} exceeded available credit {} at sequence {sequence}",
+                    connection.input_credit
+                );
                 connection.dead = true;
                 return Ok(());
             }

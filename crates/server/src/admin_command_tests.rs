@@ -94,6 +94,53 @@ impl Fixture {
 }
 
 #[test]
+fn queued_movement_can_spend_a_busy_servers_elapsed_time_but_not_more() {
+    let mut f = Fixture::new();
+    f.player(1, "Delayed", [10.0, 60.0, 10.0]);
+    let connection = f.connections.get_mut(&1).unwrap();
+    connection.input_credit = 0.0;
+    connection.credit_updated = Instant::now() - Duration::from_millis(1010);
+    for sequence in 1..=4 {
+        f.send(
+            1,
+            ClientMessage::Input {
+                movement_epoch: 0,
+                sequence,
+                dt: MAX_INPUT_DT,
+                input: MoveInput {
+                    fly: true,
+                    ..Default::default()
+                },
+                yaw: 0.0,
+            },
+        );
+        assert!(
+            !f.connections[&1].dead,
+            "server work must not discard legitimate time"
+        );
+        assert_eq!(f.snapshot(1).last_input_sequence, sequence);
+    }
+    f.send(
+        1,
+        ClientMessage::Input {
+            movement_epoch: 0,
+            sequence: 5,
+            dt: MAX_INPUT_DT,
+            input: MoveInput {
+                fly: true,
+                ..Default::default()
+            },
+            yaw: 0.0,
+        },
+    );
+    assert!(
+        f.connections[&1].dead,
+        "elapsed time is still a strict budget"
+    );
+    assert_eq!(f.snapshot(1).last_input_sequence, 4);
+}
+
+#[test]
 fn admin_gate_observer_read_only_and_help_do_not_mutate_players() {
     let mut f = Fixture::new();
     f.player(1, "Ian", [10.0, 60.0, 10.0]);

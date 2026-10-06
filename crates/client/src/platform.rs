@@ -2,6 +2,31 @@
 use crate::graphics::GraphicsQuality;
 use bevy::{prelude::*, window::WindowResolution};
 
+#[cfg(target_os = "android")]
+static ANDROID_EXIT_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+extern "system" fn Java_net_rubblekin_client_MainActivity_requestNativeExit(
+    _env: jni::EnvUnowned<'_>,
+    _activity: jni::objects::JObject<'_>,
+) {
+    ANDROID_EXIT_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
+    if let Some(app) = bevy::android::ANDROID_APP.get() {
+        app.create_waker().wake();
+    }
+}
+
+pub fn activity_exit(mut exit: MessageWriter<bevy::app::AppExit>) {
+    #[cfg(target_os = "android")]
+    if ANDROID_EXIT_REQUESTED.load(std::sync::atomic::Ordering::Acquire) {
+        exit.write(bevy::app::AppExit::Success);
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = &mut exit;
+}
+
 pub fn frame_time(mut strategy: ResMut<bevy::time::TimeUpdateStrategy>) {
     // Render timestamps can arrive late, then release several long deltas in
     // quick succession. Movement commands must spend actual client frame time

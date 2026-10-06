@@ -1,5 +1,47 @@
 //! Sentry is optional until a project DSN is configured. Initialize before Bevy/workers.
 
+use bevy::{
+    app::AppExit,
+    prelude::*,
+    render::{
+        error_handler::{RenderError, RenderErrorPolicy},
+        renderer::RenderAdapterInfo,
+    },
+};
+
+#[derive(Resource, Default)]
+pub struct RendererFailureReported(bool);
+
+pub fn renderer_error(
+    error: &RenderError,
+    main_world: &mut World,
+    render_world: &mut World,
+) -> RenderErrorPolicy {
+    // Bevy polls this handler again until the app exits. Report the original
+    // failure once, before renderer teardown can panic and obscure its cause.
+    let mut reported = main_world.resource_mut::<RendererFailureReported>();
+    if !reported.0 {
+        reported.0 = true;
+        let adapter = render_world
+            .get_resource::<RenderAdapterInfo>()
+            .map(|info| {
+                format!(
+                    "{} ({:?}), driver {} {}",
+                    info.name, info.backend, info.driver, info.driver_info
+                )
+            })
+            .unwrap_or_else(|| "unknown GPU".into());
+        let message = format!(
+            "Renderer {:?}: {} [GPU: {adapter}]",
+            error.ty, error.description
+        );
+        error!("{message}");
+        startup_error(&std::io::Error::other(message));
+        main_world.write_message(AppExit::error());
+    }
+    RenderErrorPolicy::StopRendering
+}
+
 #[cfg(not(target_os = "android"))]
 pub fn init() -> Option<sentry::ClientInitGuard> {
     use std::time::Duration;
@@ -86,7 +128,9 @@ pub fn init() {
 
 #[cfg(target_os = "android")]
 pub fn startup_error(error: &(dyn std::error::Error + 'static)) {
-    let _ = android_report("reportRustError", &error.to_string(), "");
+    if let Err(error) = android_report("reportRustError", &error.to_string(), "") {
+        eprintln!("Rubblekin: could not record Rust error: {error}");
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -124,4 +168,31 @@ fn android_report(method: &str, message: &str, stack: &str) -> jni::errors::Resu
         )?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::{ecs::message::Messages, render::error_handler::ErrorType};
+
+    #[test]
+    fn device_loss_stops_rendering_and_requests_exit_only_once() {
+        let mut app = App::new();
+        app.add_message::<AppExit>()
+            .init_resource::<RendererFailureReported>();
+        let mut render_world = World::new();
+        let error = RenderError {
+            ty: ErrorType::DeviceLost,
+            description: "Device is lost".into(),
+            source: None,
+        };
+        for _ in 0..2 {
+            assert!(matches!(
+                renderer_error(&error, app.world_mut(), &mut render_world),
+                RenderErrorPolicy::StopRendering
+            ));
+        }
+        assert!(app.world().resource::<RendererFailureReported>().0);
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 1);
+    }
 }

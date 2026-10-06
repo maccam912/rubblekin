@@ -274,7 +274,31 @@ fn options() -> Result<Options, String> {
     Ok(result)
 }
 
-#[bevy_main]
+// Bevy's AndroidApp is a OnceLock. Each native game lifecycle must therefore
+// finish its process rather than let a second GameActivity reuse a freed app.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+fn android_main(android_app: bevy::android::android_activity::AndroidApp) {
+    if bevy::android::ANDROID_APP.set(android_app).is_err() {
+        finish_android_process(1);
+    }
+    let result = std::panic::catch_unwind(main);
+    // The panic hook reports and flushes before unwinding reaches this point.
+    finish_android_process(if result.is_ok() { 0 } else { 1 });
+}
+
+#[cfg(target_os = "android")]
+fn finish_android_process(status: i32) -> ! {
+    unsafe extern "C" {
+        fn _exit(status: i32) -> !;
+    }
+    // Rust's app/resources have already dropped. C exit would additionally
+    // destroy GameActivity's C++ globals on this native thread, although their
+    // retained JNIEnv belongs to Java's UI thread (fatal DeleteGlobalRef).
+    unsafe { _exit(status) }
+}
+
+#[cfg_attr(not(target_os = "android"), bevy_main)]
 pub fn main() {
     let _crash_reporting = crash_reporting::init();
     if let Err(error) = run() {
@@ -282,6 +306,9 @@ pub fn main() {
         crash_reporting::startup_error(error.as_ref());
         #[cfg(not(target_os = "android"))]
         drop(_crash_reporting);
+        #[cfg(target_os = "android")]
+        finish_android_process(1);
+        #[cfg(not(target_os = "android"))]
         std::process::exit(1);
     }
 }
@@ -355,9 +382,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             primary_window: Some(platform::window(options.touch)),
             ..default()
         }))
+        .init_resource::<crash_reporting::RendererFailureReported>()
+        .insert_resource(bevy::render::error_handler::RenderErrorHandler(
+            crash_reporting::renderer_error,
+        ))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(terrain_material::TerrainMaterialPlugin)
         .add_systems(First, platform::frame_time.before(bevy::time::TimeSystems))
+        .add_systems(First, platform::activity_exit)
         .add_message::<join::MenuKey>()
         .add_systems(Startup, join::setup)
         .add_systems(Last, update_crash_context)

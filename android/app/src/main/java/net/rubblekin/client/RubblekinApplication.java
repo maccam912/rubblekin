@@ -1,6 +1,7 @@
 package net.rubblekin.client;
 
 import android.app.Application;
+import android.util.Log;
 import io.sentry.Sentry;
 import io.sentry.SentryEvent;
 import io.sentry.SentryLevel;
@@ -13,6 +14,7 @@ public final class RubblekinApplication extends Application {
     public void onCreate() {
         super.onCreate();
         if (BuildConfig.SENTRY_DSN.isEmpty()) {
+            Log.w("RubblekinCrash", "Sentry is disabled: no project DSN was configured");
             return;
         }
         SentryAndroid.init(this, options -> {
@@ -46,6 +48,7 @@ public final class RubblekinApplication extends Application {
 
     static void reportRust(String text, String stack, SentryLevel level) {
         if (!Sentry.isEnabled()) {
+            Log.w("RubblekinCrash", "Cannot report Rust failure: Sentry is disabled");
             return;
         }
         SentryEvent event = new SentryEvent();
@@ -55,7 +58,7 @@ public final class RubblekinApplication extends Application {
         event.setLevel(level);
         event.setExtra("rust.backtrace", stack);
         event.setTag("error.source", "rust");
-        Sentry.captureEvent(event);
+        Log.i("RubblekinCrash", "Recorded Rust failure: " + Sentry.captureEvent(event));
         // A fatal panic may abort without running destructors. Give the Android
         // SDK a bounded chance to cache/send the event before native termination.
         Sentry.flush(2000);
