@@ -419,6 +419,7 @@ pub(super) fn read(
     modals: (
         Option<Res<PauseMenu>>,
         Option<Res<crate::admin_console::AdminConsole>>,
+        Option<Res<crate::world_map::WorldMap>>,
     ),
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -439,7 +440,7 @@ pub(super) fn read(
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<DialogRoot>>,
 ) {
-    let (pause, console) = modals;
+    let (pause, console, map) = modals;
     let was_open = conversation.open();
     conversation.just_closed = false;
     conversation.input_blocked = was_open;
@@ -448,6 +449,7 @@ pub(super) fn read(
         .any(|key| key.input.state.is_pressed() && key.input.logical_key == Key::BrowserBack);
     if pause.is_some_and(|menu| menu.open || menu.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
+        || map.is_some_and(|map| map.open || map.input_blocked)
         || !windows.iter().any(|window| window.focused)
     {
         fingers.clear();
@@ -585,6 +587,7 @@ pub(super) fn refresh(
     conversation: Res<PilotConversation>,
     touch: Res<TouchControls>,
     pause: Res<PauseMenu>,
+    map: Option<Res<crate::world_map::WorldMap>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut roots: Query<&mut Node, (With<DialogRoot>, Without<TravelHint>)>,
     mut buttons: Query<(&Action, &mut Node), (Without<DialogRoot>, Without<TravelHint>)>,
@@ -595,7 +598,8 @@ pub(super) fn refresh(
         Query<&mut Text, Without<DialogText>>,
     )>,
 ) {
-    let open = conversation.open() && !pause.open;
+    let map_open = map.is_some_and(|map| map.open);
+    let open = conversation.open() && !pause.open && !map_open;
     for mut node in &mut roots {
         node.display = if open { Display::Flex } else { Display::None };
         node.justify_content = if windows.iter().any(|w| w.height() < 500.) {
@@ -654,6 +658,7 @@ pub(super) fn refresh(
         node.display = if hint.is_some()
             && !open
             && !pause.open
+            && !map_open
             && !(touch.enabled && (session.help || session.inspector))
         {
             Display::Flex

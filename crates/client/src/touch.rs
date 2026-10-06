@@ -428,6 +428,7 @@ pub fn read(
     pause: Option<Res<crate::pause::PauseMenu>>,
     conversation: Option<Res<crate::airships::PilotConversation>>,
     console: Option<Res<crate::admin_console::AdminConsole>>,
+    map: Option<Res<crate::world_map::WorldMap>>,
     mouse: Res<ButtonInput<MouseButton>>,
     window: Single<(Entity, &Window), With<PrimaryWindow>>,
     session: Option<Res<Session>>,
@@ -471,6 +472,7 @@ pub fn read(
     }
     if conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
+        || map.is_some_and(|map| map.open || map.input_blocked)
     {
         controls.reset();
         events.clear();
@@ -638,6 +640,7 @@ pub fn refresh(
     controls: Res<TouchControls>,
     session: Res<Session>,
     conversation: Option<Res<crate::airships::PilotConversation>>,
+    map: Option<Res<crate::world_map::WorldMap>>,
     mut nodes: Query<
         (
             &mut Node,
@@ -661,6 +664,7 @@ pub fn refresh(
         if !controls.enabled
             || controls.menu_open
             || conversation.as_ref().is_some_and(|dialog| dialog.open())
+            || map.as_ref().is_some_and(|map| map.open)
         {
             continue;
         }
@@ -912,7 +916,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_systems_send_touch_movement_and_edits_and_reset_after_focus_pause_disconnect() {
+    fn actual_systems_send_touch_movement_and_edits_and_reset_after_focus_pause_map_disconnect() {
         use bevy::{
             diagnostic::DiagnosticsStore,
             gizmos::{AppGizmoBuilder, config::DefaultGizmoConfigGroup},
@@ -969,6 +973,7 @@ mod tests {
                 crate::graphics::GraphicsQuality::Low,
             ))
             .init_resource::<crate::pause::PauseMenu>()
+            .init_resource::<crate::world_map::WorldMap>()
             .insert_resource(session)
             .insert_resource(connection)
             .insert_resource(time)
@@ -1107,6 +1112,40 @@ mod tests {
             .resource_mut::<crate::pause::PauseMenu>()
             .open = false;
         app.world_mut().resource_mut::<TouchControls>().menu_open = false;
+        app.world_mut().write_message(TouchInput {
+            window,
+            ..event(3, TouchPhase::Moved, movement)
+        });
+        app.world_mut().run_schedule(Update);
+        assert!(
+            matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
+            if input.direction == [0.0; 2])
+        );
+        // Opening the map drops contacts; closing cannot reuse held fingers.
+        for open in [true, false] {
+            {
+                let mut map = app.world_mut().resource_mut::<crate::world_map::WorldMap>();
+                map.open = open;
+                map.input_blocked = true;
+            }
+            for (id, position) in [(3, movement), (7, build)] {
+                app.world_mut().write_message(TouchInput {
+                    window,
+                    ..event(id, TouchPhase::Started, position)
+                });
+            }
+            app.world_mut().run_schedule(Update);
+            assert!(
+                matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
+                if input.direction == [0.0; 2] && !input.jump && input.vertical == 0.0)
+            );
+            assert!(app.world().resource::<TouchControls>().contacts.is_empty());
+            app.world_mut()
+                .resource_mut::<Connection>()
+                .send(ClientMessage::Ping);
+            assert!(matches!(read_message(&mut peer), ClientMessage::Ping));
+        }
+        *app.world_mut().resource_mut::<crate::world_map::WorldMap>() = default();
         app.world_mut().write_message(TouchInput {
             window,
             ..event(3, TouchPhase::Moved, movement)

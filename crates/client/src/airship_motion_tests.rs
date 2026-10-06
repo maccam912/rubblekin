@@ -83,6 +83,7 @@ fn setup_receive_terrain(
         session.body.position,
         0,
         graphics::MIN_TREE_DISTANCE,
+        2048,
     );
     commands.insert_resource(terrain);
 }

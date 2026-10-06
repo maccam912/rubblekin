@@ -998,6 +998,7 @@ pub fn leave_world(
     mut touch: Option<ResMut<crate::touch::TouchControls>>,
     mut pause: Option<ResMut<crate::pause::PauseMenu>>,
     mut console: Option<ResMut<crate::admin_console::AdminConsole>>,
+    mut map: Option<ResMut<crate::world_map::WorldMap>>,
 ) {
     let menu_leave = pause.as_ref().is_some_and(|pause| pause.leave);
     let leave = touch.as_mut().is_some_and(|touch| {
@@ -1031,6 +1032,9 @@ pub fn leave_world(
     }
     if let Some(console) = console.as_mut() {
         **console = crate::admin_console::AdminConsole::default();
+    }
+    if let Some(map) = map.as_mut() {
+        **map = crate::world_map::WorldMap::default();
     }
     if let Some(touch) = touch.as_mut() {
         touch.reset();
@@ -1640,6 +1644,7 @@ pub(crate) mod tests {
         let mut app = App::new();
         app.insert_resource(menu)
             .init_resource::<crate::pause::PauseMenu>()
+            .init_resource::<crate::world_map::WorldMap>()
             .init_resource::<InputFocus>()
             .init_resource::<Time>()
             .init_resource::<Assets<Font>>()
@@ -1694,11 +1699,15 @@ pub(crate) mod tests {
             .resource_mut::<crate::pause::PauseMenu>()
             .open = true;
         app.world_mut()
+            .resource_mut::<crate::world_map::WorldMap>()
+            .open = true;
+        app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::F10);
         app.update();
         assert!(!app.world().contains_resource::<Session>());
         assert!(!app.world().resource::<crate::pause::PauseMenu>().open);
+        assert!(!app.world().resource::<crate::world_map::WorldMap>().open);
         assert!(!app.world().contains_resource::<Connection>());
         assert_eq!(
             app.world_mut()

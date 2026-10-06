@@ -127,9 +127,9 @@ pub fn setup_ui(
         children![
             (Text::new(if observing { "OBSERVE THE WORLD" } else { "MAKE YOURSELF AT HOME" }), TextFont::from_font_size(14.0).with_font(font.clone()), TextColor(Color::srgb(0.90, 0.73, 0.42))),
             (Text::new(format!("{}{}", if observing {
-                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect aimed target     •     F2   graphics\nV   visit next village\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
+                "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect aimed target     •     F2   graphics\nV   visit next village     •     M   world map\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
-                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
+                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot     •     M   world map\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
             }, if session.can_admin { "\n` / ~   admin commands (help lists commands)" } else { "" })), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
         ],
     ));
@@ -359,8 +359,10 @@ pub(super) struct PanelScroll {
 }
 
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn scroll_panels(
     touch: Option<Res<crate::touch::TouchControls>>,
+    map: Option<Res<crate::world_map::WorldMap>>,
     session: Res<Session>,
     window: Single<&Window, With<bevy::window::PrimaryWindow>>,
     touches: Res<Touches>,
@@ -371,7 +373,9 @@ pub fn scroll_panels(
         Or<(With<NpcPanel>, With<HelpPanel>)>,
     >,
 ) {
-    if !touch.is_some_and(|touch| touch.enabled && !touch.menu_open) {
+    if map.is_some_and(|map| map.open || map.input_blocked)
+        || !touch.is_some_and(|touch| touch.enabled && !touch.menu_open)
+    {
         drag.finger = None;
         return;
     }

@@ -54,6 +54,7 @@ pub(super) struct QualityNote;
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     Resume,
+    Map,
     Quality(GraphicsQuality),
     NearLess,
     NearMore,
@@ -200,6 +201,7 @@ pub fn setup(
                     });
                     content.spawn((PauseActions, Node { width: px(220), flex_shrink: 0., flex_direction: FlexDirection::Column, row_gap: px(8), ..default() },)).with_children(|actions| {
                         actions.spawn(button(Action::Resume, percent(100))).with_child(label("Resume", &font, 18.));
+                        actions.spawn(button(Action::Map, percent(100))).with_child(label("Map", &font, 18.));
                         actions.spawn((Node { column_gap: px(8), ..default() },)).with_children(|row| {
                             row.spawn(button(Action::Inspect, percent(50))).with_child(label("Inspect", &font, 16.));
                             row.spawn(button(Action::Controls, percent(50))).with_child(label("Controls", &font, 16.));
@@ -237,6 +239,7 @@ fn activate(
     pause: &mut PauseMenu,
     graphics: &mut GraphicsSettings,
     touch: &mut TouchControls,
+    map: Option<&mut crate::world_map::WorldMap>,
 ) {
     if !enabled(action, graphics) {
         return;
@@ -254,6 +257,11 @@ fn activate(
             pause.just_closed = true;
             touch.reset();
             match action {
+                Action::Map => {
+                    if let Some(map) = map {
+                        map.requested = true;
+                    }
+                }
                 Action::Inspect => touch.inspect = true,
                 Action::Controls => touch.help = true,
                 Action::ReturnSpawn => touch.return_spawn = true,
@@ -274,6 +282,7 @@ pub fn read(
     modals: (
         Option<Res<crate::airships::PilotConversation>>,
         Option<Res<crate::admin_console::AdminConsole>>,
+        Option<ResMut<crate::world_map::WorldMap>>,
     ),
     keys: Res<ButtonInput<KeyCode>>,
     wheel: Res<AccumulatedMouseScroll>,
@@ -294,7 +303,7 @@ pub fn read(
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
 ) {
-    let (conversation, console) = modals;
+    let (conversation, console, mut map) = modals;
     pause.just_closed = false;
     let back = native
         .read()
@@ -308,7 +317,11 @@ pub fn read(
         return;
     }
     let was_open = pause.open;
-    if console.is_some_and(|console| console.input_blocked) {
+    if console.is_some_and(|console| console.input_blocked)
+        || map
+            .as_ref()
+            .is_some_and(|map| map.open || map.input_blocked)
+    {
         pause.input_blocked = false;
         pause.scroll_finger = None;
         touch.reset();
@@ -398,6 +411,7 @@ pub fn read(
     {
         let choices: Vec<_> = [
             Action::Resume,
+            Action::Map,
             Action::Quality(GraphicsQuality::Low),
             Action::Quality(GraphicsQuality::Balanced),
             Action::Quality(GraphicsQuality::High),
@@ -445,7 +459,13 @@ pub fn read(
         scroll.0.y = (scroll.0.y + scroll_delta).clamp(0., max.max(0.));
     }
     if let Some(action) = chosen {
-        activate(action, &mut pause, &mut graphics, &mut touch);
+        activate(
+            action,
+            &mut pause,
+            &mut graphics,
+            &mut touch,
+            map.as_deref_mut(),
+        );
     }
     touch.menu_open = pause.open;
 }
@@ -774,6 +794,56 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<PauseMenu>().input_blocked);
         assert!(!app.world().resource::<PauseMenu>().just_closed);
+    }
+
+    #[test]
+    fn map_button_requests_map_and_cancels_pause_input_for_touch_and_keyboard() {
+        for keyboard in [false, true] {
+            let (mut app, window) = menu_app();
+            app.init_resource::<crate::world_map::WorldMap>();
+            target(&mut app, Action::Map);
+            {
+                let mut touch = app.world_mut().resource_mut::<TouchControls>();
+                touch.movement = Vec2::ONE;
+                touch.dig = true;
+            }
+            if keyboard {
+                app.world_mut().resource_mut::<PauseMenu>().focused = Some(Action::Map);
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::Enter);
+                app.update();
+            } else {
+                tap(&mut app, window);
+            }
+            assert!(
+                app.world()
+                    .resource::<crate::world_map::WorldMap>()
+                    .requested
+            );
+            let pause = app.world().resource::<PauseMenu>();
+            assert!(!pause.open && pause.input_blocked && pause.just_closed);
+            let touch = app.world().resource::<TouchControls>();
+            assert!(!touch.menu_open && !touch.dig);
+            assert_eq!(touch.movement, Vec2::ZERO);
+        }
+    }
+
+    #[test]
+    fn escape_does_not_open_pause_while_map_is_open_or_closing() {
+        for open in [false, true] {
+            let (mut app, _) = menu_app();
+            app.world_mut().resource_mut::<PauseMenu>().open = false;
+            let mut map = crate::world_map::WorldMap::default();
+            map.open = open;
+            map.input_blocked = true;
+            app.insert_resource(map);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Escape);
+            app.update();
+            assert!(!app.world().resource::<PauseMenu>().open);
+        }
     }
 
     #[test]

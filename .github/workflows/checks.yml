@@ -52,7 +52,8 @@ jobs:
       run:
         shell: bash
     env:
-      CARGO_BUILD_JOBS: 2
+      # Use all four CPUs except on the 7 GB Apple Silicon runners.
+      CARGO_BUILD_JOBS: ${{ matrix.target == 'aarch64-apple-darwin' && 2 || 4 }}
       CARGO_INCREMENTAL: 0
       TARGET: ${{ matrix.target }}
       # Keep release tests identical to the downstream client build configuration.

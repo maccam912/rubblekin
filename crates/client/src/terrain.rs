@@ -15,7 +15,7 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
 use rubblekin_core::{
-    geography::{Biome, Geography},
+    geography::{Biome, Geography, SEA_LEVEL},
     world::{
         Block, BlockPos, CELL_SIZE, CHUNK_SIZE, GeneratedTree, TreeKind, WATER_LEVEL, WORLD_RADIUS,
         World, WorldGeneration, berry_patch_positions,
@@ -26,6 +26,7 @@ use rubblekin_core::{
 const DETAIL_RADIUS: i32 = 6;
 const DETAIL_JOBS: usize = 2;
 const CHUNK_METERS: f32 = CHUNK_SIZE as f32 * CELL_SIZE;
+pub const GEOGRAPHIC_VIEW_DISTANCE: f32 = 45_000.0;
 // Eight samples across a maximum 1024 m leaf retain 128 m mountain detail.
 const MAX_LOD_TILE_CHUNKS: i32 = 128;
 // Buildings bridge the local voxel square; tree range is a client preference.
@@ -38,6 +39,8 @@ type ChunkGeometry = (Geometry, Geometry);
 /// Mesh and job ownership stays here so leaving a world cancels its work.
 #[derive(Resource)]
 pub struct TerrainScene {
+    /// Share the generated terrain atlas with the in-game world map.
+    pub map_image: Option<Handle<Image>>,
     chunks: HashMap<ChunkKey, ChunkMesh>,
     opaque_material: Handle<TerrainMaterial>,
     glass_material: Handle<StandardMaterial>,
@@ -87,6 +90,7 @@ pub fn setup_terrain(
     center: [f32; 3],
     near_radius: i32,
     tree_distance: f32,
+    max_texture_side: u32,
 ) -> TerrainScene {
     let opaque_material = terrain_materials.add(terrain_material(None));
     let glass_material = materials.add(StandardMaterial {
@@ -103,6 +107,7 @@ pub fn setup_terrain(
         ..default()
     });
     let mut scene = TerrainScene {
+        map_image: None,
         chunks: HashMap::new(),
         opaque_material,
         glass_material,
@@ -113,7 +118,16 @@ pub fn setup_terrain(
         triangle_count: 0,
     };
     if world.geography().is_some() {
-        let albedo = images.add(crate::terrain_albedo::distant_albedo(world));
+        let side = crate::terrain_albedo::atlas_side(max_texture_side, cfg!(target_os = "android"));
+        let started = std::time::Instant::now();
+        let image = crate::terrain_albedo::distant_albedo(world, side);
+        info!(
+            "Distant terrain atlas: {side}x{side}, {:.1} MiB with mips, generated in {:.2}s",
+            image.data.as_ref().map_or(0, Vec::len) as f64 / 1_048_576.0,
+            started.elapsed().as_secs_f32(),
+        );
+        let albedo = images.add(image);
+        scene.map_image = Some(albedo.clone());
         let mut map_water = terrain_material(Some(albedo.clone()));
         map_water.base.base_color = Color::srgb(0.23, 0.52, 0.59);
         let map_water_material = terrain_materials.add(map_water);
@@ -638,6 +652,7 @@ fn landscape_geometry(
         );
         surfaces.insert((x, z), surface);
     }
+    add_outer_ocean(world.radius_cells() as f32 * CELL_SIZE, center, &mut water);
     add_landscape_trees(
         world,
         center,
@@ -654,6 +669,39 @@ fn landscape_geometry(
         &mut land,
     );
     (land, water)
+}
+
+/// Four sea-level strips continue the ocean beyond the finite terrain square.
+/// Keep their outer edges past the camera's far plane, including when an admin
+/// flies outside the world. Reuse the water atlas (clamped to its ocean border),
+/// material and fog so the map boundary has neither a seam nor another draw call.
+fn add_outer_ocean(radius: f32, center: ChunkKey, water: &mut Geometry) {
+    let padding = GEOGRAPHIC_VIEW_DISTANCE + CHUNK_METERS * 2.0;
+    let x = center.0 as f32 * CHUNK_METERS;
+    let z = center.1 as f32 * CHUNK_METERS;
+    let left = (-radius).min(x) - padding;
+    let right = radius.max(x) + padding;
+    let back = (-radius).min(z) - padding;
+    let front = radius.max(z) + padding;
+    let start = water.positions.len();
+    for [x0, z0, x1, z1] in [
+        [left, back, right, -radius],
+        [left, radius, right, front],
+        [left, -radius, -radius, radius],
+        [radius, -radius, right, radius],
+    ] {
+        water.quad(
+            [
+                [x0, SEA_LEVEL + 0.025, z1],
+                [x1, SEA_LEVEL + 0.025, z1],
+                [x1, SEA_LEVEL + 0.025, z0],
+                [x0, SEA_LEVEL + 0.025, z0],
+            ],
+            [0.0, 1.0, 0.0],
+            [[1.0; 4]; 4],
+        );
+    }
+    water.uvs[start..].fill([1.0, 0.0]);
 }
 
 /// Nearby silhouettes bridge the painted map to editable assets and remain
@@ -1703,6 +1751,59 @@ mod tests {
     use rubblekin_core::world::MAX_Y;
 
     #[test]
+    fn outer_ocean_covers_every_view_direction_without_filling_the_island() {
+        let radius = rubblekin_core::geography::WORLD_SIZE * 0.5;
+        for center in [(0, 0), (2047, -2048), (10_000, -18_000)] {
+            let mut ocean = Geometry::default();
+            add_outer_ocean(radius, center, &mut ocean);
+            assert_eq!(ocean.indices.len() / 3, 8);
+            assert!(ocean.uvs.iter().all(|&uv| uv == [1.0, 0.0]));
+            assert!(ocean.positions.iter().all(|p| p[1] == SEA_LEVEL + 0.025));
+            for triangle in ocean.indices.as_chunks::<3>().0 {
+                let [a, b, c] = std::array::from_fn(|i| {
+                    Vec3::from_array(ocean.positions[triangle[i] as usize])
+                });
+                assert!((b - a).cross(c - a).y > 0.0);
+            }
+            let covers = |point: Vec2| {
+                ocean.indices.as_chunks::<3>().0.iter().any(|triangle| {
+                    let vertices: [Vec2; 3] = std::array::from_fn(|i| {
+                        let p = ocean.positions[triangle[i] as usize];
+                        Vec2::new(p[0], p[2])
+                    });
+                    (0..3).all(|i| {
+                        (vertices[(i + 1) % 3] - vertices[i]).perp_dot(point - vertices[i]) <= 0.0
+                    })
+                })
+            };
+            for point in [Vec2::ZERO, Vec2::splat(radius - 1.0)] {
+                assert!(!covers(point), "never flood the terrain square");
+            }
+            // Check the join on all four map edges, including the corners.
+            for x in [-radius - 1.0, 0.0, radius + 1.0] {
+                for z in [-radius - 1.0, 0.0, radius + 1.0] {
+                    if x != 0.0 || z != 0.0 {
+                        assert!(covers(Vec2::new(x, z)), "uncovered map edge {x}, {z}");
+                    }
+                }
+            }
+            let camera = Vec2::new(center.0 as f32, center.1 as f32) * CHUNK_METERS
+                + Vec2::splat(CHUNK_METERS - 0.1);
+            for direction in [
+                Vec2::X,
+                Vec2::Y,
+                -Vec2::X,
+                -Vec2::Y,
+                Vec2::ONE.normalize(),
+                -Vec2::ONE.normalize(),
+            ] {
+                let point = camera + direction * GEOGRAPHIC_VIEW_DISTANCE;
+                assert!(covers(point), "ocean reaches the far plane at {point:?}");
+            }
+        }
+    }
+
+    #[test]
     fn distant_albedo_marks_ground_without_recoloring_batched_foliage() {
         let world = World::generate(42, WorldGeneration::GeographyV2);
         let mut land = Geometry::default();
@@ -2201,6 +2302,7 @@ mod tests {
         let near_radius = settings.near_radius_chunks();
         settings.tree_distance = MAX_TREE_DISTANCE;
         let scene = TerrainScene {
+            map_image: None,
             chunks: HashMap::new(),
             opaque_material: default(),
             glass_material: default(),
@@ -2409,6 +2511,7 @@ mod tests {
             world.spawn_position(),
             DETAIL_RADIUS,
             MIN_TREE_DISTANCE,
+            2048,
         );
         queue.apply(&mut ecs);
         assert!(
@@ -2658,6 +2761,7 @@ mod tests {
             world.spawn_position(),
             DETAIL_RADIUS,
             MIN_TREE_DISTANCE,
+            2048,
         );
         rebuild_one(&mut scene, center, &world, &mut commands, &mut meshes);
         queue.apply(&mut ecs);
@@ -2813,6 +2917,7 @@ mod tests {
             world.spawn_position(),
             DETAIL_RADIUS,
             MIN_TREE_DISTANCE,
+            2048,
         );
         assert!(scene.chunks.len() <= 169);
         assert!(scene.triangle_count < 600_000);

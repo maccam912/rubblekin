@@ -19,6 +19,8 @@ mod terrain_albedo;
 mod terrain_material;
 mod touch;
 mod ui;
+mod world_map;
+mod world_map_image;
 
 #[cfg(test)]
 mod admin_integration_tests;
@@ -258,7 +260,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot\nG talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nG talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -331,6 +333,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .insert_resource(menu)
         .insert_resource(graphics)
         .init_resource::<pause::PauseMenu>()
+        .init_resource::<world_map::WorldMap>()
         .init_resource::<admin_console::AdminConsole>()
         .init_resource::<airships::PilotConversation>()
         .insert_resource(Capture {
@@ -365,7 +368,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     pause::setup,
                     airships::setup,
                     admin_console::setup,
+                    world_map::setup,
                 )
+                    .chain()
                     .run_if(resource_added::<Session>),
                 touch::read,
                 (
@@ -374,6 +379,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         admin_console::read,
                         airships::read,
                         pause::read,
+                        world_map::read,
                         airships::advance_clock,
                         controls,
                         graphics::apply_settings,
@@ -394,6 +400,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         pause::refresh,
                         airships::refresh,
                         admin_console::refresh,
+                        world_map::refresh,
                         join::leave_world,
                     )
                         .chain(),
@@ -420,6 +427,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut terrain_materials: ResMut<Assets<terrain_material::TerrainMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    render_device: Res<bevy::render::renderer::RenderDevice>,
 ) {
     let start = std::time::Instant::now();
     let center = session
@@ -436,6 +444,7 @@ fn setup(
         center,
         graphics.near_radius_chunks(),
         graphics.tree_distance,
+        render_device.limits().max_texture_dimension_2d,
     );
     commands.insert_resource(terrain);
     info!("Terrain generated in {:.2}s", start.elapsed().as_secs_f32());
@@ -459,7 +468,7 @@ fn setup(
         },
         Projection::Perspective(PerspectiveProjection {
             far: if world.0.geography().is_some() {
-                45000.0
+                terrain::GEOGRAPHIC_VIEW_DISTANCE
             } else {
                 1000.0
             },
@@ -605,7 +614,7 @@ fn receive_network(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn controls(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -618,12 +627,16 @@ fn controls(
     mut session: ResMut<Session>,
     mut connection: ResMut<Connection>,
     mut graphics: ResMut<GraphicsSettings>,
-    pause: Option<Res<pause::PauseMenu>>,
-    console: Option<Res<admin_console::AdminConsole>>,
-    conversation: Option<Res<airships::PilotConversation>>,
+    modals: (
+        Option<Res<pause::PauseMenu>>,
+        Option<Res<world_map::WorldMap>>,
+        Option<Res<admin_console::AdminConsole>>,
+        Option<Res<airships::PilotConversation>>,
+    ),
     diagnostics: Res<DiagnosticsStore>,
     touch: Res<touch::TouchControls>,
 ) {
+    let (pause, map, console, conversation) = modals;
     let dt = time.delta_secs().min(MAX_INPUT_DT);
     let observing = session.observer.is_some();
     let blocked = pause
@@ -635,12 +648,17 @@ fn controls(
     let blocked = blocked
         || console
             .as_ref()
-            .is_some_and(|console| console.input_blocked);
+            .is_some_and(|console| console.input_blocked)
+        || map
+            .as_ref()
+            .is_some_and(|map| map.open || map.input_blocked);
     let resumed = pause.as_ref().is_some_and(|menu| menu.just_closed)
         || conversation
             .as_ref()
             .is_some_and(|dialog| dialog.just_closed);
-    let resumed = resumed || console.as_ref().is_some_and(|console| console.just_closed);
+    let resumed = resumed
+        || console.as_ref().is_some_and(|console| console.just_closed)
+        || map.as_ref().is_some_and(|map| map.just_closed);
     if touch.enabled {
         session.captured =
             window.focused && !blocked && !touch.menu_open && connection.error.is_none();
@@ -648,7 +666,11 @@ fn controls(
             cursor.grab_mode = CursorGrabMode::None;
             cursor.visible = true;
         }
-    } else if resumed && window.focused && connection.error.is_none() {
+    } else if resumed
+        && !map.as_ref().is_some_and(|map| map.open)
+        && window.focused
+        && connection.error.is_none()
+    {
         session.captured = true;
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
@@ -941,10 +963,12 @@ fn edit_blocks(
     mut gizmos: Gizmos,
     touch: Res<touch::TouchControls>,
     pause: Option<Res<pause::PauseMenu>>,
+    map: Option<Res<world_map::WorldMap>>,
     conversation: Option<Res<airships::PilotConversation>>,
     console: Option<Res<admin_console::AdminConsole>>,
 ) {
     if pause.is_some_and(|menu| menu.open || menu.input_blocked)
+        || map.is_some_and(|map| map.open || map.input_blocked)
         || conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
         || session.ride.is_some()

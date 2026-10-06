@@ -303,6 +303,7 @@ pub(crate) fn read(
     session: Option<Res<Session>>,
     pause: Option<Res<PauseMenu>>,
     conversation: Option<Res<PilotConversation>>,
+    map: Option<Res<crate::world_map::WorldMap>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut keyboard: MessageReader<MenuKey>,
     mut clipboard: Option<ResMut<Clipboard>>,
@@ -340,6 +341,7 @@ pub(crate) fn read(
         && toggle
         && !pause.is_some_and(|pause| pause.open || pause.input_blocked)
         && !conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
+        && !map.is_some_and(|map| map.open || map.input_blocked)
     {
         console.open = true;
         console.follow_output = 3;
@@ -596,6 +598,26 @@ mod tests {
         );
         app.update();
         assert!(!app.world().resource::<AdminConsole>().open);
+    }
+
+    #[test]
+    fn map_open_and_closing_frames_block_console_shortcut() {
+        for open in [false, true] {
+            let (mut app, window) = console_app(true, SessionMode::Player);
+            let mut map = crate::world_map::WorldMap::default();
+            map.open = open;
+            map.input_blocked = true;
+            app.insert_resource(map);
+            key(
+                &mut app,
+                window,
+                KeyCode::Backquote,
+                Key::Character("`".into()),
+                Some("`"),
+            );
+            app.update();
+            assert!(!app.world().resource::<AdminConsole>().open);
+        }
     }
 
     #[test]

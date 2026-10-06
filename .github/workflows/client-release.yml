@@ -31,7 +31,8 @@ jobs:
       run:
         shell: bash
     env:
-      CARGO_BUILD_JOBS: 2
+      # Match checks: four jobs, with two on the 7 GB Apple Silicon runners.
+      CARGO_BUILD_JOBS: ${{ matrix.target == 'aarch64-apple-darwin' && 2 || 4 }}
       CARGO_INCREMENTAL: 0
       TARGET: ${{ matrix.target }}
       COMMIT: ${{ matrix.commit }}
@@ -100,7 +101,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     env:
-      CARGO_BUILD_JOBS: 2
+      CARGO_BUILD_JOBS: 4
       CARGO_INCREMENTAL: 0
       COMMIT: ${{ matrix.commit }}
     steps:
