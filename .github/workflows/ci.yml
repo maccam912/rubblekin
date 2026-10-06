@@ -109,6 +109,8 @@ jobs:
     with:
       commits: ${{ needs.plan.outputs.commits }}
       matrix: ${{ needs.plan.outputs.client_matrix }}
+    secrets:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   server:
     name: Server builds

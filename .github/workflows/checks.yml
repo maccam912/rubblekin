@@ -84,6 +84,13 @@ jobs:
       - name: Test workspace
         if: matrix.check == 'test'
         run: cargo test --workspace --locked --target "$TARGET" --timings
+      - name: Verify real desktop crash capture against a local collector
+        if: matrix.check == 'test'
+        run: |
+          if test -f scripts/test_crash_reporting.py; then
+            cargo build --locked --target "$TARGET" -p rubblekin_client --example crash_report
+            python scripts/test_crash_reporting.py --binary "target/$TARGET/debug/examples/crash_report"
+          fi
       - name: Clippy
         if: matrix.check == 'clippy'
         run: cargo clippy --workspace --all-targets --locked --target "$TARGET" -- -D warnings

@@ -53,6 +53,10 @@ def main():
     environment["ANDROID_NDK_HOME"] = str(ndk)
     environment.setdefault("CARGO_BUILD_JOBS", "4")
     environment.setdefault("CARGO_INCREMENTAL", "0")
+    # Keep line tables in the pre-packaged .so for Sentry symbolication. Gradle
+    # strips the APK copy; the matching unstripped file stays outside the APK.
+    environment.setdefault("CARGO_PROFILE_RELEASE_DEBUG", "1")
+    environment["COMMIT"] = git("rev-parse", "HEAD")
     # Android's 16 KB page-size devices need matching ELF and APK alignment.
     environment["CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS"] = (
         environment.get("CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS", "")
@@ -65,6 +69,12 @@ def main():
         "rustc", "--locked", "--profile", args.profile, "--lib", "--crate-type", "cdylib",
         "-p", "rubblekin_client",
     ], env=environment)
+
+    if environment.get("SENTRY_AUTH_TOKEN"):
+        run([
+            sys.executable, "scripts/release/sentry_symbols.py", "--android",
+            "--binary-dir", "android/app/src/main/jniLibs/arm64-v8a",
+        ], env=environment)
 
     # First-parent main releases have increasing version codes. Sideloading an
     # older historical build may need adb install -r -d (this APK is debuggable).

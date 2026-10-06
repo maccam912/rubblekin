@@ -58,6 +58,51 @@ The script builds optimized Rust, packages the GameActivity application with the
 
 Preview the touch interface on desktop with `cargo run --locked -p rubblekin_client -- --touch`. This helps inspect layout and single-pointer interaction; it does not replace Android or multitouch testing.
 
+## Automatic crash reports
+
+Release builds use hosted Sentry when the GitHub repository variable `SENTRY_DSN`
+is configured. Android initializes reporting before the updater/game, captures
+Java exceptions, native crashes and ANRs, and records Rust panic messages and
+backtraces through JNI. Cached Android reports can upload on the next launch.
+Desktop clients capture Rust panics/startup errors and native crashes through
+Sentry's separate crash-reporter process. Desktop uploads currently require
+connectivity when the crash occurs; durable offline retry is not implemented.
+Reports include the exact source commit, operating system/device information,
+graphics preset and whether the client was at the join screen or in a world.
+Screenshots, replay and performance tracing are disabled.
+
+For automatic native stack symbolication, configure these repository settings:
+
+- Actions variables: `SENTRY_DSN`, `SENTRY_ORG`, and `SENTRY_PROJECT`.
+- Actions secret: `SENTRY_AUTH_TOKEN`, with permission to upload debug files to the
+  selected Sentry project. Keep this token out of client configuration and Git.
+
+CI retains Rust release line tables and uploads the matching Android ELF,
+Linux ELF, macOS dSYM or Windows PDB before packaging. The APK contains Gradle's
+stripped library. Without the upload token, crash reporting still works, but
+native traces may contain unresolved addresses. Failed configured symbol uploads
+fail that build so it cannot publish a release with silently missing symbols.
+
+Source builds read `SENTRY_DSN` and `SENTRY_ENVIRONMENT` at build time. Desktop
+also allows runtime overrides; setting `SENTRY_DSN=''` disables reporting. Builds
+without a DSN remain usable without a Sentry account. Android uses the values
+embedded in its APK and needs rebuilding when configuration changes.
+
+To verify desktop reporting without sending events to the hosted project:
+
+```sh
+cargo build --locked -p rubblekin_client --example crash_report
+python3 scripts/test_crash_reporting.py
+```
+
+This deliberately triggers a startup error, Rust panic and native abort in
+separate processes, receiving the actual events/minidump at a local collector.
+It also checks that absent/malformed DSNs leave startup working without uploads.
+For a manual symbol upload, set the three private-build variables above and run
+`python3 scripts/release/sentry_symbols.py --binary-dir target/release` (or pass
+`--android --binary-dir android/app/src/main/jniLibs/arm64-v8a`). Node.js is
+required for the pinned Sentry CLI. No upload token is embedded in the game.
+
 ## Automatic client releases
 
 [Checks and builds](.github/workflows/ci.yml) is the single entry point for branch pushes, pull requests, and manual runs. It selects the exact commits, then runs formatting, Python tooling tests, and Rust tests/Clippy on Linux x64. All four check jobs per commit run in parallel, subject to runner availability. Both the commit matrix and its check matrix use [GitHub's fail-fast cancellation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstrategyfail-fast): one failed check cancels remaining checks and blocks publication. Independent builds can finish and cache useful work. Superseded branch/PR runs are cancelled; main pushes are retained for per-commit releases.

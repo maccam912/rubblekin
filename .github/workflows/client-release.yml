@@ -11,6 +11,9 @@ on:
         description: 'JSON client platform/commit build matrix'
         required: true
         type: string
+    secrets:
+      SENTRY_AUTH_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -33,6 +36,9 @@ jobs:
       CARGO_INCREMENTAL: 0
       TARGET: ${{ matrix.target }}
       COMMIT: ${{ matrix.commit }}
+      SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+      SENTRY_ENVIRONMENT: production
+      CARGO_PROFILE_RELEASE_DEBUG: 1
       # The explicit target prevents this flag from affecting host build tools.
       RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
       # rust-cache retains dependencies; sccache pilots reusable local libraries
@@ -77,6 +83,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libegl1-mesa-dev libgl1-mesa-dev
       - name: Build client and standalone launcher
         run: cargo build --release --locked --timings --target "$TARGET" -p rubblekin_client -p rubblekin_launcher
+      - name: Upload client debug symbols to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          if test -n "$SENTRY_AUTH_TOKEN" && test -f scripts/release/sentry_symbols.py; then
+            python scripts/release/sentry_symbols.py --binary-dir "target/$TARGET/release"
+          fi
       - name: Log Linux runtime requirements
         if: runner.os == 'Linux'
         run: |
@@ -122,6 +137,9 @@ jobs:
       CARGO_BUILD_JOBS: 4
       CARGO_INCREMENTAL: 0
       COMMIT: ${{ matrix.commit }}
+      SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+      SENTRY_ENVIRONMENT: production
+      CARGO_PROFILE_RELEASE_DEBUG: 1
       RUSTC_WORKSPACE_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: 'true'
       SCCACHE_GHA_VERSION: rubblekin-workspace-v1
@@ -143,6 +161,16 @@ jobs:
             echo 'supported=true' >> "$GITHUB_OUTPUT"
           else
             echo 'supported=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify Sentry upload credentials before compiling Android
+        if: steps.android.outputs.supported == 'true'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          if test -n "$SENTRY_AUTH_TOKEN" && test -f scripts/release/sentry_symbols.py; then
+            npx --yes @sentry/cli@3.8.0 info
           fi
       - uses: dtolnay/rust-toolchain@stable
         if: steps.android.outputs.supported == 'true'
@@ -196,6 +224,10 @@ jobs:
       - name: Build and verify development APK
         if: steps.android.outputs.supported == 'true'
         shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
         run: |
           cargo ndk --version
           android_args=()

@@ -3,6 +3,7 @@ mod airship_mesh;
 #[cfg(test)]
 mod airship_motion_tests;
 mod airships;
+mod crash_reporting;
 mod crops;
 mod follow_camera;
 mod graphics;
@@ -275,8 +276,12 @@ fn options() -> Result<Options, String> {
 
 #[bevy_main]
 pub fn main() {
+    let _crash_reporting = crash_reporting::init();
     if let Err(error) = run() {
         eprintln!("Rubblekin: {error}");
+        crash_reporting::startup_error(error.as_ref());
+        #[cfg(not(target_os = "android"))]
+        drop(_crash_reporting);
         std::process::exit(1);
     }
 }
@@ -288,6 +293,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(quality) = options.graphics {
         graphics.set_quality(quality);
     }
+    crash_reporting::context("join", graphics.quality.label());
     let mut menu = join::JoinScreen::new(
         options
             .connect
@@ -354,6 +360,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .add_systems(First, platform::frame_time.before(bevy::time::TimeSystems))
         .add_message::<join::MenuKey>()
         .add_systems(Startup, join::setup)
+        .add_systems(Last, update_crash_context)
         .add_systems(
             Update,
             (
@@ -415,6 +422,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .run();
     Ok(())
+}
+
+fn update_crash_context(
+    graphics: Res<GraphicsSettings>,
+    session: Option<Res<Session>>,
+    mut previous: Local<Option<(bool, GraphicsQuality)>>,
+) {
+    let current = (session.is_some(), graphics.quality);
+    if *previous != Some(current) {
+        crash_reporting::context(if current.0 { "world" } else { "join" }, current.1.label());
+        *previous = Some(current);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

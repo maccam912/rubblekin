@@ -8,6 +8,22 @@ import com.google.androidgamesdk.GameActivity;
 
 /** GameActivity supplies the native lifecycle, multitouch, and software keyboard. */
 public final class MainActivity extends GameActivity {
+    /** Called through JNI from Rust; instance methods avoid worker class-loader issues. */
+    public void reportRustPanic(String message, String stack) {
+        RubblekinApplication.reportRust(message, stack, io.sentry.SentryLevel.FATAL);
+    }
+
+    public void reportRustError(String message, String stack) {
+        RubblekinApplication.reportRust(message, stack, io.sentry.SentryLevel.ERROR);
+    }
+
+    public void setCrashContext(String phase, String graphics) {
+        io.sentry.Sentry.configureScope(scope -> {
+            scope.setTag("client.phase", phase);
+            scope.setTag("graphics", graphics);
+        });
+    }
+
     static {
         System.loadLibrary("rubblekin_client");
     }
