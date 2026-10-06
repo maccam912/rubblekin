@@ -1,0 +1,65 @@
+name: Publish client releases
+
+on:
+  workflow_call:
+    inputs:
+      commits:
+        description: 'JSON list of exact commits whose checks passed'
+        required: true
+        type: string
+    secrets:
+      RELEASE_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+# Only ci.yml calls this after checks succeed and all build jobs finish.
+jobs:
+  publish:
+    name: Release ${{ matrix.commit }}
+    # ci.yml requires checks to pass; a failed build for one commit must not
+    # discard other complete commits.
+    # A missing platform fails manifest assembly for that commit only.
+    if: always() && !cancelled()
+    strategy:
+      fail-fast: false
+      matrix:
+        commit: ${{ fromJSON(inputs.commits) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    concurrency:
+      group: client-release-publication
+      queue: max
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: client-${{ matrix.commit }}-*
+          path: dist
+          merge-multiple: true
+      - name: Publish complete release and promote newest main commit
+        env:
+          # An optional repository-scoped token permits historical releases whose
+          # workflow files differ from main (Contents + Workflows write).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          COMMIT: ${{ matrix.commit }}
+        run: |
+          android_args=()
+          if git cat-file -e "$COMMIT:scripts/build_android.py" 2>/dev/null; then
+            android_args=(--android)
+          fi
+          if git cat-file -e "$COMMIT:android/app/src/main/java/net/rubblekin/client/LaunchActivity.java" 2>/dev/null; then
+            android_args+=(--android-updater --expected-version-code "$(git rev-list --first-parent --count "$COMMIT")")
+          fi
+          python scripts/release/publish.py --directory dist --commit "$COMMIT" --repository "$GITHUB_REPOSITORY" "${android_args[@]}"

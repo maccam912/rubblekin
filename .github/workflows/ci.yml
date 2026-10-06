@@ -100,23 +100,50 @@ jobs:
           PY
 
   client:
-    name: Client releases
-    needs: [plan, checks, reserve]
-    if: needs.checks.result == 'success' && needs.plan.outputs.release_clients == 'true'
+    name: Client builds
+    needs: plan
+    if: needs.plan.outputs.release_clients == 'true'
     permissions:
-      contents: write
+      contents: read
     uses: ./.github/workflows/client-release.yml
     with:
       commits: ${{ needs.plan.outputs.commits }}
       matrix: ${{ needs.plan.outputs.client_matrix }}
+
+  server:
+    name: Server builds
+    needs: plan
+    if: needs.plan.outputs.build_server == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/server-image.yml
+
+  client_publish:
+    name: Publish checked client releases
+    needs: [plan, checks, reserve, client]
+    # A failed platform in one commit must not discard another complete commit.
+    # The publisher validates a complete artifact set separately for every SHA.
+    if: >-
+      always() && !cancelled() && needs.plan.result == 'success' &&
+      needs.checks.result == 'success' && needs.reserve.result == 'success' &&
+      needs.plan.outputs.release_clients == 'true' &&
+      (needs.client.result == 'success' || needs.client.result == 'failure')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/client-publish.yml
+    with:
+      commits: ${{ needs.plan.outputs.commits }}
     secrets:
       RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
-  server:
-    name: Server image
-    needs: [plan, checks]
-    if: needs.checks.result == 'success' && needs.plan.outputs.build_server == 'true'
+  server_publish:
+    name: Publish checked server image
+    needs: [plan, checks, server]
+    if: >-
+      needs.checks.result == 'success' && needs.server.result == 'success' &&
+      needs.plan.outputs.build_server == 'true' &&
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/server-image.yml
+    uses: ./.github/workflows/server-publish.yml

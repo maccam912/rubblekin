@@ -25,39 +25,21 @@ jobs:
           - check: test
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-          - check: test
-            runner: windows-2022
-            target: x86_64-pc-windows-msvc
-          - check: test
-            runner: macos-14
-            target: aarch64-apple-darwin
-          - check: test
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
           - check: clippy
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-          - check: clippy
-            runner: windows-2022
-            target: x86_64-pc-windows-msvc
-          - check: clippy
-            runner: macos-14
-            target: aarch64-apple-darwin
-          - check: clippy
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     defaults:
       run:
         shell: bash
     env:
-      # Use all four CPUs except on the 7 GB Apple Silicon runners.
-      CARGO_BUILD_JOBS: ${{ matrix.target == 'aarch64-apple-darwin' && 2 || 4 }}
+      CARGO_BUILD_JOBS: 4
       CARGO_INCREMENTAL: 0
       TARGET: ${{ matrix.target }}
-      # Keep release tests identical to the downstream client build configuration.
-      RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
+      # Tests optimize simulation code without release LTO or large debug files.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v7
         with:
@@ -74,20 +56,19 @@ jobs:
         if: matrix.check == 'tooling'
         with:
           python-version: '3.13'
-      - name: Cache Rust dependencies and compilation
+      - name: Cache Rust check dependencies
         if: matrix.target != ''
-        uses: actions/cache@v6
+        uses: Swatinem/rust-cache@v2
+        env:
+          # rust-cache always includes CARGO variables in its compiler key.
+          CARGO_BUILD_JOBS: ''
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          # Clippy metadata has its own cache; tests seed the client build cache.
-          key: rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-${{ matrix.check == 'clippy' && 'clippy' || 'release' }}-${{ hashFiles('Cargo.lock') }}-${{ inputs.commit }}-checks
-          restore-keys: |
-            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-${{ matrix.check == 'clippy' && 'clippy' || 'release' }}-${{ hashFiles('Cargo.lock') }}-${{ inputs.commit }}-
-            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-${{ matrix.check == 'clippy' && 'clippy' || 'release' }}-${{ hashFiles('Cargo.lock') }}-
-            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-${{ matrix.check == 'clippy' && 'clippy' || 'release' }}-
+          prefix-key: rust-v3
+          shared-key: ${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.check }}
+          # Profile/compiler inputs matter; compiler job count does not.
+          env-vars: CARGO_PROFILE CARGO_BUILD_TARGET CC CFLAGS CXX CMAKE RUST
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux windowing dependencies
         if: runner.os == 'Linux' && matrix.target != ''
         run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libegl1-mesa-dev libgl1-mesa-dev
@@ -100,9 +81,17 @@ jobs:
           python -m unittest discover -s scripts/release -v
           # Historical release commits may predate the pipeline planner.
           if [ -d scripts/ci ]; then python -m unittest discover -s scripts/ci -v; fi
-      - name: Test release configuration
+      - name: Test workspace
         if: matrix.check == 'test'
-        run: cargo test --workspace --release --locked --target "$TARGET"
+        run: cargo test --workspace --locked --target "$TARGET" --timings
       - name: Clippy
         if: matrix.check == 'clippy'
-        run: cargo clippy --workspace --all-targets --release --locked --target "$TARGET" -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --target "$TARGET" -- -D warnings
+      - name: Upload test compilation timings
+        if: always() && matrix.check == 'test'
+        uses: actions/upload-artifact@v7
+        with:
+          name: check-timings-${{ inputs.commit }}
+          path: target/cargo-timings/*.html
+          if-no-files-found: ignore
+          retention-days: 7

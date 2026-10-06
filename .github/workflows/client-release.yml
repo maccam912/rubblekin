@@ -1,24 +1,21 @@
-name: Client releases
+name: Client builds
 
 on:
   workflow_call:
     inputs:
       commits:
-        description: 'JSON list of exact commits that passed every check'
+        description: 'JSON list of exact commits to build and validate'
         required: true
         type: string
       matrix:
         description: 'JSON client platform/commit build matrix'
         required: true
         type: string
-    secrets:
-      RELEASE_TOKEN:
-        required: false
 
 permissions:
   contents: read
 
-# Only ci.yml calls this workflow, after the complete checks matrix succeeds.
+# Build alongside checks. ci.yml gates the separate publisher on their success.
 jobs:
   build:
     name: ${{ matrix.target }} at ${{ matrix.commit }}
@@ -31,13 +28,18 @@ jobs:
       run:
         shell: bash
     env:
-      # Match checks: four jobs, with two on the 7 GB Apple Silicon runners.
+      # Four jobs, with two on the 7 GB Apple Silicon runners.
       CARGO_BUILD_JOBS: ${{ matrix.target == 'aarch64-apple-darwin' && 2 || 4 }}
       CARGO_INCREMENTAL: 0
       TARGET: ${{ matrix.target }}
       COMMIT: ${{ matrix.commit }}
       # The explicit target prevents this flag from affecting host build tools.
       RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
+      # rust-cache retains dependencies; sccache pilots reusable local libraries
+      # without duplicating the large dependency archive in its object cache.
+      RUSTC_WORKSPACE_WRAPPER: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_VERSION: rubblekin-workspace-v1
     steps:
       - uses: actions/checkout@v7
         with:
@@ -51,25 +53,30 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - name: Restore checked compilation and cache finished builds
-        uses: actions/cache@v6
+      - name: Install pinned compiler cache for Linux pilot
+        if: runner.os == 'Linux'
+        id: sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          # Same runner, target, toolchain, flags, and profile as checks.yml.
-          # A distinct suffix lets builds save progress beyond the immutable test cache.
-          key: rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-release-${{ hashFiles('Cargo.lock') }}-${{ matrix.commit }}-build
-          restore-keys: |
-            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-release-${{ hashFiles('Cargo.lock') }}-${{ matrix.commit }}-
-            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-release-${{ hashFiles('Cargo.lock') }}-
-            rust-v2-${{ matrix.runner }}-${{ matrix.target }}-1.98.1-release-
+          version: v0.16.0
+      - name: Cache release dependencies across commits
+        uses: Swatinem/rust-cache@v2
+        env:
+          # rust-cache always hashes CARGO-prefixed variables; exclude this
+          # scheduling knob only while the cache key is calculated.
+          CARGO_BUILD_JOBS: ''
+        with:
+          prefix-key: rust-v3
+          shared-key: ${{ matrix.runner }}-${{ matrix.target }}-release
+          # Include compilation settings, without keying on Cargo's job count.
+          env-vars: CARGO_INCREMENTAL CARGO_PROFILE CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_TARGET CARGO_TARGET RUST CC CFLAGS CXX CMAKE
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Linux windowing dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libegl1-mesa-dev libgl1-mesa-dev
       - name: Build client and standalone launcher
-        run: cargo build --release --locked --target "$TARGET" -p rubblekin_client -p rubblekin_launcher
+        run: cargo build --release --locked --timings --target "$TARGET" -p rubblekin_client -p rubblekin_launcher
       - name: Log Linux runtime requirements
         if: runner.os == 'Linux'
         run: |
@@ -80,10 +87,21 @@ jobs:
         run: python scripts/release/package.py package --target "$TARGET" --binary-dir "target/$TARGET/release" --output-dir dist --commit "$COMMIT"
       - name: Verify extracted packages start
         run: python scripts/release/smoke.py --target "$TARGET" --directory dist
-      - name: Verify launcher installs and starts the native client
+      - name: Verify launcher suite and native client installation
         env:
           RUBBLEKIN_TEST_CLIENT_ARCHIVE: ${{ github.workspace }}/dist/rubblekin-client-${{ matrix.target }}.zip
-        run: cargo test --release --locked --target "$TARGET" -p rubblekin_launcher --lib tests::installs_packaged_client_and_starts_help -- --ignored --exact
+        run: cargo test --release --locked --target "$TARGET" -p rubblekin_launcher --lib -- --include-ignored
+      - name: Report compiler cache hits for Linux pilot
+        if: always() && steps.sccache.outcome == 'success'
+        run: sccache --show-stats
+      - name: Upload native build timing report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: client-timings-${{ matrix.commit }}-${{ matrix.target }}
+          path: target/cargo-timings/*.html
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         with:
           name: client-${{ matrix.commit }}-${{ matrix.target }}
@@ -104,6 +122,9 @@ jobs:
       CARGO_BUILD_JOBS: 4
       CARGO_INCREMENTAL: 0
       COMMIT: ${{ matrix.commit }}
+      RUSTC_WORKSPACE_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_VERSION: rubblekin-workspace-v1
     steps:
       - uses: actions/checkout@v7
         with:
@@ -137,29 +158,46 @@ jobs:
         if: steps.android.outputs.supported == 'true'
         with:
           python-version: '3.13'
-      - uses: actions/cache@v6
+      - name: Cache Gradle dependencies separately
+        uses: gradle/actions/setup-gradle@v6
+        if: steps.android.outputs.supported == 'true'
+      - name: Install pinned compiler cache for Android pilot
+        uses: mozilla-actions/sccache-action@v0.0.11
+        if: steps.android.outputs.supported == 'true'
+        id: sccache
+        with:
+          version: v0.16.0
+      - name: Cache Android release dependencies across commits
+        uses: Swatinem/rust-cache@v2
+        if: steps.android.outputs.supported == 'true'
+        env:
+          CARGO_BUILD_JOBS: ''
+        with:
+          prefix-key: rust-v3
+          shared-key: ubuntu-22.04-aarch64-linux-android-ndk28.2.13676358-release
+          env-vars: CARGO_INCREMENTAL CARGO_PROFILE CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_TARGET CARGO_TARGET RUST CC CFLAGS CXX CMAKE
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Cache pinned cargo-ndk executable
+        uses: actions/cache@v6
         if: steps.android.outputs.supported == 'true'
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-            target
-          key: android-v1-1.98.1-ndk28-${{ hashFiles('Cargo.lock', 'android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}-${{ matrix.commit }}
-          restore-keys: |
-            android-v1-1.98.1-ndk28-${{ hashFiles('Cargo.lock', 'android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}-
-            android-v1-1.98.1-ndk28-
+          path: ${{ runner.temp }}/cargo-ndk/bin
+          key: cargo-ndk-ubuntu-22.04-${{ runner.arch }}-1.98.1-v4.1.2
       - name: Install pinned Android build tools
         if: steps.android.outputs.supported == 'true'
         shell: bash
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
-          cargo install cargo-ndk --version 4.1.2 --locked
+          if ! test -x "$RUNNER_TEMP/cargo-ndk/bin/cargo-ndk"; then
+            cargo install cargo-ndk --version 4.1.2 --locked --root "$RUNNER_TEMP/cargo-ndk"
+          fi
+          echo "$RUNNER_TEMP/cargo-ndk/bin" >> "$GITHUB_PATH"
       - name: Build and verify development APK
         if: steps.android.outputs.supported == 'true'
         shell: bash
         run: |
+          cargo ndk --version
           android_args=()
           # Old Android commits lack both the updater and its metadata fields.
           if test -f android/app/src/main/java/net/rubblekin/client/LaunchActivity.java; then
@@ -175,6 +213,10 @@ jobs:
           grep -Fxq 'Signer #1 certificate SHA-256 digest: 36bf02be798e34ae69ed06c1533df861bf92bc9ca28126075556bd6bb82ffc90' <<< "$signing_output"
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 dist/rubblekin-client-aarch64-linux-android.apk
           python scripts/release/package.py android --apk dist/rubblekin-client-aarch64-linux-android.apk --output-dir dist --commit "$COMMIT" "${android_args[@]}"
+      - name: Report compiler cache hits for Android pilot
+        if: always() && steps.sccache.outcome == 'success'
+        shell: bash
+        run: sccache --show-stats
       - uses: actions/upload-artifact@v7
         if: steps.android.outputs.supported == 'true'
         with:
@@ -183,51 +225,3 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
-
-  publish:
-    name: Release ${{ matrix.commit }}
-    needs: [build, android]
-    # A failed build for one commit must not discard other complete commits.
-    # A missing platform fails manifest assembly for that commit only.
-    if: always() && !cancelled()
-    strategy:
-      fail-fast: false
-      matrix:
-        commit: ${{ fromJSON(inputs.commits) }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    concurrency:
-      group: client-release-publication
-      queue: max
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          lfs: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: client-${{ matrix.commit }}-*
-          path: dist
-          merge-multiple: true
-      - name: Publish complete release and promote newest main commit
-        env:
-          # An optional repository-scoped token permits historical releases whose
-          # workflow files differ from main (Contents + Workflows write).
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          COMMIT: ${{ matrix.commit }}
-        run: |
-          android_args=()
-          if git cat-file -e "$COMMIT:scripts/build_android.py" 2>/dev/null; then
-            android_args=(--android)
-          fi
-          if git cat-file -e "$COMMIT:android/app/src/main/java/net/rubblekin/client/LaunchActivity.java" 2>/dev/null; then
-            android_args+=(--android-updater --expected-version-code "$(git rev-list --first-parent --count "$COMMIT")")
-          fi
-          python scripts/release/publish.py --directory dist --commit "$COMMIT" --repository "$GITHUB_REPOSITORY" "${android_args[@]}"
