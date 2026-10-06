@@ -99,6 +99,11 @@ struct Resident {
     waypoint: usize,
     elapsed: f32,
     stuck: f32,
+    /// A displacement checkpoint prevents passing jitter from hiding a jam.
+    #[serde(skip)]
+    walk_progress: Option<([f32; 3], f32)>,
+    #[serde(skip)]
+    passing_left: bool,
     trail: Option<usize>,
     #[serde(default)]
     resume: Option<Resume>,
@@ -235,6 +240,8 @@ impl VillageLife {
                     waypoint: 0,
                     elapsed: 0.0,
                     stuck: 0.0,
+                    walk_progress: None,
+                    passing_left: false,
                     trail,
                     resume: None,
                     farm_waypoint: 0,
@@ -548,6 +555,10 @@ impl VillageLife {
                                 || resume.farm_waypoint == 0
                                 || resume.farm_waypoint >= resident.farm_path.len()
                                 || resident.farm_waypoint > resume.farm_waypoint
+                                    && farm_needs_entrance(
+                                        &resident.farm_path,
+                                        resume.farm_waypoint,
+                                    ) == 0
                         }))
                 || resident.resume.as_ref().is_some_and(|resume| {
                     resume.waypoint >= local.path.len()
@@ -836,7 +847,9 @@ impl VillageLife {
                     if resident.snapshot.role == ResidentRole::Farmer && resident.farm_waypoint > 0
                     {
                         resident.phase = Phase::ToFarmExit;
-                        resident.farm_waypoint -= 1;
+                        if farm_needs_entrance(&resident.farm_path, resident.farm_waypoint) == 0 {
+                            resident.farm_waypoint -= 1;
+                        }
                     } else {
                         resident.phase = if hungry { Phase::ToFood } else { Phase::ToRest };
                     }
@@ -1671,7 +1684,8 @@ fn advance_resident(
                         && resume.farm_waypoint > 0
                     {
                         resident.phase = Phase::ToFarmResume;
-                        resident.farm_waypoint = 0;
+                        resident.farm_waypoint =
+                            farm_needs_entrance(&resident.farm_path, resume.farm_waypoint);
                         resident.elapsed = 0.0;
                     } else {
                         let resume = resident.resume.take().unwrap();
@@ -1693,6 +1707,29 @@ fn advance_resident(
             resident.elapsed = 0.0;
         }
         return;
+    }
+    let delivering_at_store = resident.phase == Phase::ToHome
+        && resident.snapshot.carrying.is_some()
+        && resident.waypoint == route.store_index;
+    if resident.waypoint != end && !delivering_at_store && resident.stuck >= 0.3 {
+        let next = if forward {
+            resident.waypoint + 1
+        } else {
+            resident.waypoint - 1
+        };
+        if obstacles
+            .iter()
+            .any(|p| rubblekin_core::physics::characters_overlap(target, *p))
+            && farm_edge_is_walkable(world, resident.body.position, points[next])
+        {
+            // A shared junction is a transit gate, not a workstation. Walk
+            // onward only when the actual terrain controller can reach it.
+            resident.waypoint = next;
+            resident.stuck = 0.0;
+            resident.snapshot.target = Some(points[next]);
+            walk_toward(world, resident, points[next], dt, obstacles);
+            return;
+        }
     }
     walk_toward(world, resident, target, dt, obstacles);
 }
@@ -1976,6 +2013,72 @@ fn farm_point_reached(resident: &Resident, point: &FarmPoint) -> bool {
     }
 }
 
+/// A closed field tour has the same entrance at either end. Use the shorter
+/// physical branch for a needs trip instead of traversing the rest of the tour.
+fn farm_needs_entrance(path: &[FarmPoint], task: usize) -> usize {
+    let distance = |points: &[FarmPoint]| {
+        points
+            .windows(2)
+            .map(|points| horizontal_distance(points[0].position, points[1].position))
+            .sum::<f32>()
+    };
+    if distance(&path[..=task]) <= distance(&path[task..]) {
+        0
+    } else {
+        path.len() - 1
+    }
+}
+
+/// A collision sidestep can leave a narrow field ledge and make its next gate
+/// unreachable. Rejoin an earlier nearby gate by walking over proven terrain,
+/// keeping the saved work task, elapsed progress, and physical cargo intact.
+fn rejoin_farm_path(world: &World, resident: &mut Resident) -> bool {
+    if resident.stuck < 1.0 || !resident.body.on_ground || resident.farm_waypoint == 0 {
+        return false;
+    }
+    let current = &resident.farm_path[resident.farm_waypoint];
+    if current.work || farm_edge_is_walkable(world, resident.body.position, current.position) {
+        return false;
+    }
+    let candidate_after = match resident.phase {
+        Phase::ToFarmExit => {
+            farm_needs_entrance(
+                &resident.farm_path,
+                resident.resume.as_ref().unwrap().farm_waypoint,
+            ) > resident.farm_waypoint
+        }
+        Phase::ToFarmResume => {
+            resident.resume.as_ref().unwrap().farm_waypoint < resident.farm_waypoint
+        }
+        _ => false,
+    };
+    let candidate = resident
+        .farm_path
+        .iter()
+        .enumerate()
+        .filter(|(index, point)| {
+            (if candidate_after {
+                *index > resident.farm_waypoint
+            } else {
+                *index < resident.farm_waypoint
+            }) && !point.work
+                && horizontal_distance(resident.body.position, point.position) <= 2.0
+        })
+        .filter(|(_, point)| farm_edge_is_walkable(world, resident.body.position, point.position))
+        .min_by(|(_, a), (_, b)| {
+            horizontal_distance(resident.body.position, a.position)
+                .total_cmp(&horizontal_distance(resident.body.position, b.position))
+        })
+        .map(|(index, _)| index);
+    if let Some(index) = candidate {
+        resident.farm_waypoint = index;
+        resident.stuck = 0.0;
+        true
+    } else {
+        false
+    }
+}
+
 fn skip_occupied_farm_gate(
     world: &World,
     resident: &mut Resident,
@@ -1987,7 +2090,6 @@ fn skip_occupied_farm_gate(
         || resident.stuck < 0.3
         || next == resident.farm_waypoint
         || next >= resident.farm_path.len()
-        || horizontal_distance(resident.body.position, current.position) > 0.9
         || !obstacles
             .iter()
             .any(|p| rubblekin_core::physics::characters_overlap(current.position, *p))
@@ -2018,6 +2120,19 @@ fn advance_farm_detour(
     let point = &resident.farm_path[resident.farm_waypoint];
     let target = point.position;
     let exiting = resident.phase == Phase::ToFarmExit;
+    let task = resident.resume.as_ref().unwrap().farm_waypoint;
+    let end = if exiting {
+        farm_needs_entrance(&resident.farm_path, task)
+    } else {
+        task
+    };
+    let next = if resident.farm_waypoint < end {
+        resident.farm_waypoint + 1
+    } else if resident.farm_waypoint > end {
+        resident.farm_waypoint - 1
+    } else {
+        end
+    };
     resident.snapshot.target = Some(target);
     resident.snapshot.action = if resident.stuck >= 8.0 {
         ResidentAction::Blocked
@@ -2035,12 +2150,9 @@ fn advance_farm_detour(
     }
     .into();
     if !farm_point_reached(resident, point) {
-        let next = if exiting {
-            resident.farm_waypoint.saturating_sub(1)
-        } else {
-            (resident.farm_waypoint + 1).min(resident.resume.as_ref().unwrap().farm_waypoint)
-        };
-        if skip_occupied_farm_gate(world, resident, next, obstacles) {
+        if rejoin_farm_path(world, resident)
+            || skip_occupied_farm_gate(world, resident, next, obstacles)
+        {
             let next_target = resident.farm_path[resident.farm_waypoint].position;
             resident.snapshot.target = Some(next_target);
             walk_toward(world, resident, next_target, dt, obstacles);
@@ -2057,7 +2169,7 @@ fn advance_farm_detour(
         obstacles,
     );
     resident.stuck = 0.0;
-    if exiting && resident.farm_waypoint == 0 {
+    if exiting && resident.farm_waypoint == end {
         resident.phase = if resident.snapshot.hunger >= HUNGRY && economy.snapshot.food >= MEAL {
             Phase::ToFood
         } else if resident.snapshot.energy <= TIRED {
@@ -2065,15 +2177,12 @@ fn advance_farm_detour(
         } else {
             Phase::Resuming
         };
-    } else if !exiting && resident.farm_waypoint == resident.resume.as_ref().unwrap().farm_waypoint
-    {
+    } else if !exiting && resident.farm_waypoint == end {
         let resume = resident.resume.take().unwrap();
         resident.phase = Phase::Working;
         resident.elapsed = resume.elapsed;
-    } else if exiting {
-        resident.farm_waypoint -= 1;
     } else {
-        resident.farm_waypoint += 1;
+        resident.farm_waypoint = next;
     }
 }
 
@@ -2100,7 +2209,9 @@ fn advance_farmer(
             ResidentAction::Walking
         };
         resident.snapshot.reason = "Walking between assigned crop rows".into();
-        if skip_occupied_farm_gate(world, resident, resident.farm_waypoint + 1, obstacles) {
+        if rejoin_farm_path(world, resident)
+            || skip_occupied_farm_gate(world, resident, resident.farm_waypoint + 1, obstacles)
+        {
             let next = resident.farm_path[resident.farm_waypoint].position;
             resident.snapshot.target = Some(next);
             walk_toward(world, resident, next, dt, obstacles);
@@ -2194,6 +2305,7 @@ fn walk_toward(
 ) {
     let distance = horizontal_distance(resident.body.position, target);
     let mut input = MoveInput::default();
+    let mut passing = None;
     if distance > 0.001 {
         let factor = 0.52_f32.min(distance / (3.8 * dt));
         let direction = [
@@ -2208,14 +2320,9 @@ fn walk_toward(
                 && dx * direction[0] + dz * direction[1] < 1.2
                 && (dx * direction[1] - dz * direction[0]).abs() < 0.65
         });
+        input.direction = direction.map(|d| d * factor);
         if near.is_some() && distance > 0.1 {
-            let side = 1.0;
-            input.direction = [
-                (direction[0] - direction[1] * side * 0.8) * factor,
-                (direction[1] + direction[0] * side * 0.8) * factor,
-            ];
-        } else {
-            input.direction = direction.map(|d| d * factor);
+            passing = Some((direction, factor));
         }
     }
     input.jump = resident.snapshot.role == ResidentRole::Farmer
@@ -2227,12 +2334,62 @@ fn walk_toward(
         && resident.body.on_ground
         && target[1] - resident.body.position[1] > 0.3
         && distance < 1.25;
-    let old = resident.body.position;
-    move_character_with_obstacles(world, &mut resident.body, input, dt, obstacles);
-    if horizontal_distance(old, resident.body.position) < 0.01 {
-        resident.stuck = (resident.stuck + dt).min(10.0);
+    let before = resident.body.clone();
+    if resident
+        .walk_progress
+        .is_some_and(|(old_target, _)| old_target != target)
+    {
+        resident.passing_left = false;
+    }
+    if let Some((direction, factor)) = passing {
+        // Compare actual collision-resolved steps. A fixed passing side can
+        // lead into a wall or another waiting body; the other side may be free.
+        let mut best_step = -1.0_f32;
+        let preferred = if resident.passing_left { -1.0 } else { 1.0 };
+        for side in [preferred, -preferred] {
+            let mut alternative = before.clone();
+            let mut passing_input = input;
+            passing_input.direction = [
+                (direction[0] - direction[1] * side * 0.8) * factor,
+                (direction[1] + direction[0] * side * 0.8) * factor,
+            ];
+            move_character_with_obstacles(world, &mut alternative, passing_input, dt, obstacles);
+            let step = horizontal_distance(before.position, alternative.position);
+            let precision_farm_gate = matches!(
+                resident.phase,
+                Phase::Working | Phase::ToFarmExit | Phase::ToFarmResume
+            ) && resident
+                .farm_path
+                .get(resident.farm_waypoint)
+                .is_some_and(|point| !point.work && !point.route_gate);
+            if step > best_step + 0.001
+                && (!precision_farm_gate
+                    || farm_edge_is_walkable(world, alternative.position, target))
+            {
+                resident.body = alternative;
+                best_step = step;
+                resident.passing_left = side < 0.0;
+                if step >= 0.01 {
+                    break;
+                }
+            }
+        }
+        if best_step < 0.0 {
+            move_character_with_obstacles(world, &mut resident.body, input, dt, obstacles);
+        }
     } else {
+        move_character_with_obstacles(world, &mut resident.body, input, dt, obstacles);
+        resident.passing_left = false;
+    }
+    let (progress_target, progress_distance) =
+        resident.walk_progress.get_or_insert((target, distance));
+    let remaining = horizontal_distance(resident.body.position, target);
+    if *progress_target != target || *progress_distance - remaining >= 0.1 {
+        *progress_target = target;
+        *progress_distance = remaining;
         resident.stuck = 0.0;
+    } else {
+        resident.stuck = (resident.stuck + dt).min(10.0);
     }
 }
 
@@ -3259,6 +3416,39 @@ mod tests {
     }
 
     #[test]
+    fn returning_cargo_cannot_bypass_an_occupied_store_gate() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let plan = world.settlements().unwrap();
+        let life = VillageLife::new(&world);
+        let mut resident = life
+            .residents
+            .iter()
+            .find(|r| r.trail.is_some())
+            .unwrap()
+            .clone();
+        let route = &plan.villages[resident.village].resident_routes[resident.route];
+        resident.phase = Phase::ToHome;
+        resident.waypoint = route.store_index;
+        resident.body = Body::new(route.path[route.store_index - 1]);
+        resident.snapshot.carrying = Some(ResourceCargo {
+            kind: ResourceKind::Timber,
+            amount: 6.0,
+        });
+        resident.stuck = 1.0;
+        let blocked_store = [route.path[route.store_index]];
+        assert!(!at_station(resident.body.position, blocked_store[0]));
+        advance_resident(&world, plan, &mut resident, 0.05, &blocked_store);
+        assert_eq!(resident.waypoint, route.store_index);
+        assert_eq!(resident.snapshot.carrying.as_ref().unwrap().amount, 6.0);
+
+        // Without cargo this is just another transit gate on the way home.
+        resident.snapshot.carrying = None;
+        resident.stuck = 1.0;
+        advance_resident(&world, plan, &mut resident, 0.05, &blocked_store);
+        assert_eq!(resident.waypoint, route.store_index - 1);
+    }
+
+    #[test]
     fn trader_carries_real_surplus_over_the_entire_generated_trail_before_transfer() {
         let world = World::generate(42, WorldGeneration::GeographyV3);
         let plan = world.settlements().unwrap();
@@ -3815,6 +4005,182 @@ mod tests {
     }
 
     #[test]
+    fn saved_town_center_food_queue_recovers_then_resumes_each_job() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let village = &world.settlements().unwrap().villages[5];
+        let mut life = VillageLife::new(&world);
+        // Reproduce the separated, mutually blocked queue observed in a
+        // 2029-second save. Every resident has food available but cannot reach it.
+        let queue = [
+            (46, [2175.2358, 268.0, 3063.968]),
+            (13, [2176.042, 268.0, 3065.0896]),
+            (47, [2175.7964, 268.0, 3063.968]),
+            (48, [2175.6794, 268.0, 3064.5288]),
+            (43, [2176.5674, 268.0, 3065.6504]),
+        ];
+        for resident in life
+            .residents
+            .iter_mut()
+            .filter(|r| r.village == 5 && r.trail.is_none())
+        {
+            let (waypoint, position) = queue[resident.route];
+            resident.body = Body::new(position);
+            resident.snapshot.position = position;
+            resident.snapshot.hunger = 100.0;
+            resident.snapshot.energy = 0.0;
+            resident.phase = Phase::ToFood;
+            resident.waypoint = waypoint;
+            resident.stuck = 10.0;
+            resident.resume = Some(Resume {
+                phase: Phase::ToWork,
+                waypoint: village.resident_routes[resident.route].path.len() - 1,
+                elapsed: 0.0,
+                farm_waypoint: 0,
+            });
+        }
+        let encoded = serde_json::to_vec(&life).unwrap();
+        let mut life: VillageLife = serde_json::from_slice(&encoded).unwrap();
+        assert!(life.validate(&world));
+        life.residents
+            .retain(|r| r.village == 5 && r.trail.is_none());
+        let mut ate = [false; 5];
+        let mut worked = [false; 5];
+        for _ in 0..12_000 {
+            life.tick(&world, 0.05);
+            for resident in &life.residents {
+                ate[resident.route] |= resident.snapshot.action == ResidentAction::Eating;
+                worked[resident.route] |= matches!(
+                    resident.snapshot.action,
+                    ResidentAction::Working
+                        | ResidentAction::Planting
+                        | ResidentAction::Tending
+                        | ResidentAction::Harvesting
+                );
+                for other in life.residents.iter().filter(|r| r.route > resident.route) {
+                    assert!(!rubblekin_core::physics::characters_overlap(
+                        resident.body.position,
+                        other.body.position
+                    ));
+                }
+            }
+        }
+        assert!(ate.into_iter().all(|value| value), "{:?}", life.residents());
+        assert!(
+            worked.into_iter().all(|value| value),
+            "{:?}",
+            life.residents()
+        );
+        assert!(life.villages[5].deliveries > 0);
+    }
+
+    #[test]
+    fn every_village_keeps_working_after_repeated_meals_and_rest() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let mut life = VillageLife::new(&world);
+        // Each village's complete local crowd participates; long-distance
+        // traders and their transport have separate journey regressions.
+        life.residents.retain(|resident| resident.trail.is_none());
+        let mut worked_late = vec![false; life.residents.len()];
+        let mut late_counts = Vec::new();
+        // At the server's 20 Hz, repeated needs trips must not leave a village
+        // gridlocked at a shared center gate after its first successful tours.
+        for tick in 0..30_000 {
+            if tick == 24_000 {
+                late_counts = life
+                    .villages
+                    .iter()
+                    .map(|economy| (economy.harvests, economy.deliveries))
+                    .collect::<Vec<_>>();
+            }
+            let had_cargo: Vec<_> = life
+                .residents
+                .iter()
+                .map(|r| {
+                    r.snapshot
+                        .carrying
+                        .as_ref()
+                        .is_some_and(|cargo| cargo.amount > 0.0)
+                })
+                .collect();
+            life.tick(&world, 0.05);
+            for (index, resident) in life.residents.iter().enumerate() {
+                for other in life.residents.iter().skip(index + 1) {
+                    assert!(
+                        !rubblekin_core::physics::characters_overlap(
+                            resident.body.position,
+                            other.body.position,
+                        ),
+                        "Residents {} and {} overlap at tick {tick}",
+                        resident.snapshot.id,
+                        other.snapshot.id,
+                    );
+                }
+                if tick < 24_000 {
+                    continue;
+                }
+                let route = &world.settlements().unwrap().villages[resident.village]
+                    .resident_routes[resident.route];
+                if had_cargo[index] && resident.snapshot.carrying.is_none() {
+                    assert!(at_station(
+                        resident.body.position,
+                        route.path[route.store_index]
+                    ));
+                    worked_late[index] = true;
+                }
+                match resident.snapshot.action {
+                    ResidentAction::Planting
+                    | ResidentAction::Tending
+                    | ResidentAction::Harvesting => {
+                        let target = resident.snapshot.target.unwrap();
+                        assert!(at_station(resident.body.position, target));
+                        let soil = BlockPos::new(
+                            (target[0] / CELL_SIZE).floor() as i32,
+                            ((target[1] - CELL_SIZE) / CELL_SIZE).round() as i32,
+                            (target[2] / CELL_SIZE).floor() as i32,
+                        );
+                        assert!(matches!(world.block(soil), Block::Dirt | Block::Grass));
+                        worked_late[index] = true;
+                    }
+                    ResidentAction::Working if resident.phase == Phase::Working => {
+                        assert!(at_station(resident.body.position, route.work));
+                        worked_late[index] = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let idle: Vec<_> = life
+            .residents
+            .iter()
+            .enumerate()
+            .filter(|(index, resident)| resident.trail.is_none() && !worked_late[*index])
+            .map(|(_, resident)| {
+                (
+                    resident.snapshot.id,
+                    resident.phase,
+                    resident.waypoint,
+                    resident.stuck,
+                    resident.body.position,
+                    resident.snapshot.target,
+                )
+            })
+            .collect();
+        assert!(
+            idle.is_empty(),
+            "Local workers stopped working or physically delivering during the final 300 seconds: {idle:?}",
+        );
+        for (index, economy) in life.villages.iter().enumerate() {
+            let (harvests, deliveries) = late_counts[index];
+            assert!(
+                economy.harvests > harvests && economy.deliveries > deliveries,
+                "Village {index} stopped harvesting or physically delivering: {harvests}/{deliveries} -> {}/{}",
+                economy.harvests,
+                economy.deliveries,
+            );
+        }
+    }
+
+    #[test]
     fn corrupt_identifiers_and_route_indices_are_rejected_without_panicking() {
         let world = World::generate(42, WorldGeneration::GeographyV3);
         let original = VillageLife::new(&world);
@@ -3830,5 +4196,172 @@ mod tests {
         let mut life = original;
         life.villages[0].snapshot.food = -1.0;
         assert!(!life.validate(&world));
+    }
+
+    #[test]
+    fn fallen_farmer_walks_to_the_entrance_then_resumes_the_saved_task_with_cargo() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let mut life = VillageLife::new(&world);
+        let village = &world.settlements().unwrap().villages[3];
+        let route = &village.resident_routes[2];
+        let path = farm_path(&world, village, 2);
+        // This generated return corner is supported by neighboring raised
+        // columns. A small collision sidestep falls onto ground 1.5 m lower.
+        let gate = path
+            .iter()
+            .rposition(|point| point.position == [-1247.25, 226.5, -5638.75])
+            .unwrap();
+        let task = gate + 1;
+        let mut resident = life
+            .residents
+            .iter()
+            .find(|resident| resident.village == 3 && resident.route == 2)
+            .unwrap()
+            .clone();
+        resident.phase = Phase::ToFarmExit;
+        resident.waypoint = route.path.len() - 1;
+        resident.farm_waypoint = gate;
+        resident.farm_path = path.clone();
+        resident.body = Body::new([-1247.22, 225.0, -5638.78]);
+        move_character_with_obstacles(&world, &mut resident.body, MoveInput::default(), 0.05, &[]);
+        resident.snapshot.position = resident.body.position;
+        resident.snapshot.hunger = 75.0;
+        resident.snapshot.energy = 20.0;
+        resident.stuck = 10.0;
+        resident.resume = Some(Resume {
+            phase: Phase::Working,
+            waypoint: resident.waypoint,
+            elapsed: 0.7,
+            farm_waypoint: task,
+        });
+        let cargo = ResourceCargo {
+            kind: ResourceKind::Food,
+            amount: 12.0,
+        };
+        resident.snapshot.carrying = Some(cargo.clone());
+        assert!(resident.body.on_ground);
+        assert!(!farm_edge_is_walkable(
+            &world,
+            resident.body.position,
+            path[gate].position
+        ));
+        assert!(farm_edge_is_walkable(
+            &world,
+            resident.body.position,
+            path[0].position
+        ));
+        life.residents = vec![resident];
+        let mut visited_entrance = false;
+        let mut resumed = false;
+        for _ in 0..6_000 {
+            let previous = life.residents[0].body.position;
+            life.tick(&world, 0.05);
+            let resident = &life.residents[0];
+            assert!(horizontal_distance(previous, resident.body.position) <= 0.15);
+            assert_eq!(resident.snapshot.carrying, Some(cargo.clone()));
+            visited_entrance |= at_station(resident.body.position, path[0].position)
+                && (resident.farm_waypoint == 0 || resident.farm_waypoint == path.len() - 1);
+            if resident.phase == Phase::Working && resident.resume.is_none() {
+                assert!(visited_entrance);
+                assert_eq!(resident.farm_path, path);
+                assert_eq!(resident.farm_waypoint, task);
+                assert!((resident.elapsed - 0.7).abs() < 0.001);
+                assert!(farm_point_reached(resident, &path[task]));
+                assert!(resident.snapshot.hunger < HUNGRY && resident.snapshot.energy > 75.0);
+                resumed = true;
+                break;
+            }
+        }
+        assert!(resumed, "{:?}", life.residents());
+    }
+
+    #[test]
+    fn late_field_needs_trips_use_the_nearby_entrance_and_resume_from_that_end() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let original = VillageLife::new(&world);
+        let index = original
+            .residents
+            .iter()
+            .position(|resident| resident.village == 6 && resident.route == 1)
+            .unwrap();
+        let village = &world.settlements().unwrap().villages[6];
+        let route = &village.resident_routes[1];
+        let path = farm_path(&world, village, 1);
+        let task = path.len() - 10;
+        assert!(path.len() > 300);
+        assert_eq!(farm_needs_entrance(&path, task), path.len() - 1);
+        for legacy_retreat in [false, true] {
+            let mut life = original.clone();
+            let resident = &mut life.residents[index];
+            resident.phase = if legacy_retreat {
+                Phase::ToFarmExit
+            } else {
+                Phase::Working
+            };
+            resident.waypoint = route.path.len() - 1;
+            resident.farm_waypoint = if legacy_retreat { task - 1 } else { task };
+            resident.body = Body::new(path[resident.farm_waypoint].position);
+            resident.snapshot.position = resident.body.position;
+            resident.snapshot.hunger = 75.0;
+            resident.snapshot.energy = 20.0;
+            resident.farm_path = path.clone();
+            resident.elapsed = 0.7;
+            if legacy_retreat {
+                resident.resume = Some(Resume {
+                    phase: Phase::Working,
+                    waypoint: resident.waypoint,
+                    elapsed: 0.7,
+                    farm_waypoint: task,
+                });
+                resident.elapsed = 0.0;
+            }
+            let cargo = ResourceCargo {
+                kind: ResourceKind::Food,
+                amount: 5.0,
+            };
+            resident.snapshot.carrying = Some(cargo.clone());
+            assert!(life.validate(&world));
+            life = serde_json::from_slice(&serde_json::to_vec(&life).unwrap()).unwrap();
+            assert!(life.validate(&world));
+            let resident = life.residents[index].clone();
+            life.residents = vec![resident];
+            let mut forward_exit = false;
+            let mut backward_resume = false;
+            let mut resumed = false;
+            for _ in 0..3_000 {
+                let previous = life.residents[0].body.position;
+                life.tick(&world, 0.05);
+                let resident = &life.residents[0];
+                assert!(horizontal_distance(previous, resident.body.position) <= 0.15);
+                assert_eq!(resident.snapshot.carrying, Some(cargo.clone()));
+                forward_exit |=
+                    resident.phase == Phase::ToFarmExit && resident.farm_waypoint > task;
+                backward_resume |=
+                    resident.phase == Phase::ToFarmResume && resident.farm_waypoint > task;
+                if matches!(resident.phase, Phase::ToFarmExit | Phase::ToFarmResume) {
+                    let mut validation = original.clone();
+                    validation.residents[index] = resident.clone();
+                    assert!(
+                        validation.validate(&world),
+                        "Invalid forward exit/backward resumption: {:?}",
+                        resident
+                    );
+                }
+                if forward_exit
+                    && backward_resume
+                    && resident.phase == Phase::Working
+                    && resident.resume.is_none()
+                {
+                    assert_eq!(resident.farm_waypoint, task);
+                    assert_eq!(resident.farm_path, path);
+                    assert!((resident.elapsed - 0.7).abs() < 0.001);
+                    assert!(farm_point_reached(resident, &path[task]));
+                    assert!(resident.snapshot.hunger < HUNGRY && resident.snapshot.energy > 75.0);
+                    resumed = true;
+                    break;
+                }
+            }
+            assert!(resumed, "legacy={legacy_retreat}: {:?}", life.residents());
+        }
     }
 }
