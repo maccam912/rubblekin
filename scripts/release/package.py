@@ -29,6 +29,8 @@ ANDROID_SIGNING = "public-development-key"
 ANDROID_MAX_VERSION_CODE = 2_147_483_647
 ANDROID_MAX_APK_SIZE = 256 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[2]
+# Keep releases installable by existing launchers (their bounds are unchanged).
+DESKTOP_MAX_SIZE = 512 * 1024 * 1024
 
 
 def validate_commit(commit):
@@ -82,6 +84,10 @@ def stage_product(binary_dir, stage, target, commit, launcher=False, sign=True):
         raise ValueError(f"missing regular binary: {source}")
     shutil.copyfile(source, executable)
     executable.chmod(0o755)
+    if target == "x86_64-unknown-linux-gnu":
+        # CI uploads the original ELF to Sentry before packaging. Strip only
+        # this staged copy, preserving the build ID and runtime/unwind sections.
+        subprocess.run(["strip", "--strip-debug", str(executable)], check=True)
     license_path = stage / "OFL.txt"
     shutil.copyfile(ROOT / "assets/fonts/OFL.txt", license_path)
     if "apple-darwin" in target:
@@ -108,6 +114,9 @@ def stage_product(binary_dir, stage, target, commit, launcher=False, sign=True):
             # signing/notarization needs a separately configured certificate.
             subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
             subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True)
+    size = executable.stat().st_size
+    if not 0 < size <= DESKTOP_MAX_SIZE:
+        raise ValueError(f"packaged executable {relative} is {size} bytes; launcher limit is {DESKTOP_MAX_SIZE} bytes")
     return relative
 
 
@@ -120,7 +129,10 @@ def package(binary_dir, output_dir, target, commit, sign=True):
         for launcher in (False, True):
             stage = Path(directory) / ("launcher" if launcher else "client")
             stage_product(binary_dir, stage, target, commit, launcher, sign)
-            write_zip(stage, output_dir / archive_name(target, launcher))
+            archive = output_dir / archive_name(target, launcher)
+            write_zip(stage, archive)
+            if archive.stat().st_size > DESKTOP_MAX_SIZE:
+                raise ValueError(f"packaged archive {archive.name} exceeds the launcher download limit of {DESKTOP_MAX_SIZE} bytes")
     asset = archive_name(target)
     metadata = {
         "commit": commit,

@@ -78,10 +78,13 @@ For automatic native stack symbolication, configure these repository settings:
   selected Sentry project. Keep this token out of client configuration and Git.
 
 CI retains Rust release line tables and uploads the matching Android ELF,
-Linux ELF, macOS dSYM or Windows PDB before packaging. The APK contains Gradle's
-stripped library. Without the upload token, crash reporting still works, but
-native traces may contain unresolved addresses. Failed configured symbol uploads
-fail that build so it cannot publish a release with silently missing symbols.
+Linux ELF, macOS dSYM or Windows PDB before packaging. Linux packages strip debug
+sections from staged copies, retaining the build ID and original symbol inputs;
+desktop packaging enforces the existing launcher's 512 MiB executable/download
+limits. The APK contains Gradle's stripped library. Without the upload token,
+crash reporting still works, but native traces may contain unresolved addresses.
+Failed configured symbol uploads fail that build so it cannot publish a release
+with silently missing symbols.
 
 Source builds read `SENTRY_DSN` and `SENTRY_ENVIRONMENT` at build time. Desktop
 also allows runtime overrides; setting `SENTRY_DSN=''` disables reporting. Builds

@@ -5,6 +5,8 @@ use rubblekin_core::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::navigation::{Navigation, Walker, Walking};
+
 pub use rubblekin_core::world::berry_patch_positions;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -21,6 +23,8 @@ pub(crate) struct Forager {
     home: [f32; 2],
     #[serde(default)]
     stuck_elapsed: f32,
+    #[serde(skip)]
+    navigation: Navigation,
 }
 
 impl Forager {
@@ -58,6 +62,7 @@ impl Forager {
             wander_step: 0,
             home: [origin[0], origin[2]],
             stuck_elapsed: 0.0,
+            navigation: Navigation::default(),
         };
         result.decide(world);
         result
@@ -190,7 +195,7 @@ impl Forager {
                             (target[0] - self.body.position[0]) / distance * 0.45,
                             (target[2] - self.body.position[2]) / distance * 0.45,
                         ];
-                        // Simple obstacle response, not a hidden teleport or a navigation framework.
+                        // Terrain jumps remain separate from the shared crowd steering below.
                         input.jump = self.body.on_ground && self.stuck_elapsed > 0.4;
                         self.harvest_elapsed = 0.0;
                     } else if (self.body.position[1] - target[1]).abs() < 1.0 {
@@ -212,14 +217,33 @@ impl Forager {
                 }
             }
         }
-        let previous = self.body.position;
-        move_character_with_obstacles(world, &mut self.body, input, dt, obstacles);
-        if input.direction != [0.0, 0.0]
-            && self.body.on_ground
-            && horizontal_distance(previous, self.body.position) < 0.01
+        if input.direction != [0.0; 2]
+            && let Some(target) = self.snapshot.target
         {
-            self.stuck_elapsed += dt;
+            let mut walker = Walker::on_foot(&self.body);
+            // Crowd jams use walking detours, rather than jumping over people.
+            let jump = input.jump
+                && !obstacles
+                    .iter()
+                    .any(|p| horizontal_distance(self.body.position, *p) < 2.0);
+            Walking {
+                world,
+                obstacles,
+                airships: None,
+            }
+            .walk(
+                &mut walker,
+                &mut self.navigation,
+                target,
+                0.45,
+                jump,
+                dt,
+                |_| true,
+            );
+            self.body = walker.body;
+            self.stuck_elapsed = self.navigation.stalled;
         } else {
+            move_character_with_obstacles(world, &mut self.body, input, dt, obstacles);
             self.stuck_elapsed = 0.0;
         }
         self.snapshot.position = self.body.position;

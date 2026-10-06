@@ -3,6 +3,7 @@
 
 mod admin_commands;
 mod airships;
+mod navigation;
 mod npc;
 mod persistence;
 mod villages;

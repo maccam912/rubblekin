@@ -16,7 +16,10 @@ use rubblekin_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
-use crate::airships::free_seat;
+use crate::{
+    airships::free_seat,
+    navigation::{Navigation, Walker, Walking},
+};
 
 pub(crate) const MAX_RESIDENTS: usize = 60;
 const MAX_STOCK: f32 = 10_000.0;
@@ -99,11 +102,9 @@ struct Resident {
     waypoint: usize,
     elapsed: f32,
     stuck: f32,
-    /// A displacement checkpoint prevents passing jitter from hiding a jam.
+    /// Local crowd detours are disposable and rebuilt against live obstacles.
     #[serde(skip)]
-    walk_progress: Option<([f32; 3], f32)>,
-    #[serde(skip)]
-    passing_left: bool,
+    navigation: Navigation,
     trail: Option<usize>,
     #[serde(default)]
     resume: Option<Resume>,
@@ -240,8 +241,7 @@ impl VillageLife {
                     waypoint: 0,
                     elapsed: 0.0,
                     stuck: 0.0,
-                    walk_progress: None,
-                    passing_left: false,
+                    navigation: Navigation::default(),
                     trail,
                     resume: None,
                     farm_waypoint: 0,
@@ -1539,61 +1539,29 @@ fn walk_on_transport(
     time: f64,
     transit: &mut Transit,
 ) {
-    let distance = horizontal_distance(resident.body.position, target);
-    let factor = 0.52_f32.min(distance / (3.8 * dt));
-    let input = MoveInput {
-        direction: if distance > 0.001 {
-            let direction = [
-                (target[0] - resident.body.position[0]) / distance,
-                (target[2] - resident.body.position[2]) / distance,
-            ];
-            let pilots: Vec<_> = network
-                .ships(time)
-                .iter()
-                .map(rubblekin_core::airships::pilot_position)
-                .collect();
-            let near = obstacles.iter().chain(&pilots).find(|position| {
-                let dx = position[0] - resident.body.position[0];
-                let dz = position[2] - resident.body.position[2];
-                let along = dx * direction[0] + dz * direction[1];
-                (position[1] - resident.body.position[1]).abs() < 1.7
-                    && along > 0.0
-                    && along < 1.4
-                    && (dx * direction[1] - dz * direction[0]).abs() < 0.85
-            });
-            if let Some(position) = near.filter(|_| transit.ride.is_some()) {
-                let across = (position[0] - resident.body.position[0]) * direction[1]
-                    - (position[2] - resident.body.position[2]) * direction[0];
-                let side = if across < 0.0 { -1.0 } else { 1.0 };
-                [
-                    (direction[0] - direction[1] * side * 0.8) * factor,
-                    (direction[1] + direction[0] * side * 0.8) * factor,
-                ]
-            } else {
-                direction.map(|value| value * factor)
-            }
-        } else {
-            [0.0; 2]
-        },
-        ..Default::default()
-    };
-    let before = resident.body.position;
-    move_character_with_airships(
+    let walking = Walking {
         world,
-        &mut resident.body,
-        input,
-        dt,
         obstacles,
-        network,
-        time,
-        &mut transit.ride,
-        &mut transit.deck_position,
-    );
-    resident.stuck = if horizontal_distance(before, resident.body.position) < 0.01 {
-        (resident.stuck + dt).min(10.0)
-    } else {
-        0.0
+        airships: Some((network, time)),
     };
+    let mut walker = Walker {
+        body: resident.body.clone(),
+        ride: transit.ride,
+        local: transit.deck_position,
+    };
+    walking.walk(
+        &mut walker,
+        &mut resident.navigation,
+        target,
+        0.52,
+        false,
+        dt,
+        |_| true,
+    );
+    resident.body = walker.body;
+    transit.ride = walker.ride;
+    transit.deck_position = walker.local;
+    resident.stuck = resident.navigation.stalled;
     if resident.stuck >= 8.0 {
         resident.snapshot.action = ResidentAction::Blocked;
         resident.snapshot.reason = "The airship boarding or landing path is blocked".into();
@@ -2033,7 +2001,11 @@ fn farm_needs_entrance(path: &[FarmPoint], task: usize) -> usize {
 /// unreachable. Rejoin an earlier nearby gate by walking over proven terrain,
 /// keeping the saved work task, elapsed progress, and physical cargo intact.
 fn rejoin_farm_path(world: &World, resident: &mut Resident) -> bool {
-    if resident.stuck < 1.0 || !resident.body.on_ground || resident.farm_waypoint == 0 {
+    if resident.stuck < 1.0
+        || resident.navigation.is_detouring()
+        || !resident.body.on_ground
+        || resident.farm_waypoint == 0
+    {
         return false;
     }
     let current = &resident.farm_path[resident.farm_waypoint];
@@ -2170,6 +2142,18 @@ fn advance_farm_detour(
     );
     resident.stuck = 0.0;
     if exiting && resident.farm_waypoint == end {
+        if end == resident.farm_path.len() - 1
+            && resident
+                .farm_path
+                .iter()
+                .rposition(|point| point.work)
+                .is_some_and(|last_work| task > last_work)
+        {
+            // This needs trip already completed the return from the crops.
+            // Resume here, rather than walking back along the finished leg
+            // only to return again (and potentially need another meal).
+            resident.resume.as_mut().unwrap().farm_waypoint = end;
+        }
         resident.phase = if resident.snapshot.hunger >= HUNGRY && economy.snapshot.food >= MEAL {
             Phase::ToFood
         } else if resident.snapshot.energy <= TIRED {
@@ -2304,28 +2288,7 @@ fn walk_toward(
     obstacles: &[[f32; 3]],
 ) {
     let distance = horizontal_distance(resident.body.position, target);
-    let mut input = MoveInput::default();
-    let mut passing = None;
-    if distance > 0.001 {
-        let factor = 0.52_f32.min(distance / (3.8 * dt));
-        let direction = [
-            (target[0] - resident.body.position[0]) / distance,
-            (target[2] - resident.body.position[2]) / distance,
-        ];
-        let near = obstacles.iter().find(|p| {
-            let dx = p[0] - resident.body.position[0];
-            let dz = p[2] - resident.body.position[2];
-            (p[1] - resident.body.position[1]).abs() < 1.7
-                && dx * direction[0] + dz * direction[1] > 0.0
-                && dx * direction[0] + dz * direction[1] < 1.2
-                && (dx * direction[1] - dz * direction[0]).abs() < 0.65
-        });
-        input.direction = direction.map(|d| d * factor);
-        if near.is_some() && distance > 0.1 {
-            passing = Some((direction, factor));
-        }
-    }
-    input.jump = resident.snapshot.role == ResidentRole::Farmer
+    let jump = resident.snapshot.role == ResidentRole::Farmer
         && matches!(
             resident.phase,
             Phase::Working | Phase::ToFarmExit | Phase::ToFarmResume
@@ -2334,63 +2297,30 @@ fn walk_toward(
         && resident.body.on_ground
         && target[1] - resident.body.position[1] > 0.3
         && distance < 1.25;
-    let before = resident.body.clone();
-    if resident
-        .walk_progress
-        .is_some_and(|(old_target, _)| old_target != target)
-    {
-        resident.passing_left = false;
+    let precision_farm_gate = matches!(
+        resident.phase,
+        Phase::Working | Phase::ToFarmExit | Phase::ToFarmResume
+    ) && resident
+        .farm_path
+        .get(resident.farm_waypoint)
+        .is_some_and(|point| !point.work && !point.route_gate);
+    let mut walker = Walker::on_foot(&resident.body);
+    Walking {
+        world,
+        obstacles,
+        airships: None,
     }
-    if let Some((direction, factor)) = passing {
-        // Compare actual collision-resolved steps. A fixed passing side can
-        // lead into a wall or another waiting body; the other side may be free.
-        let mut best_step = -1.0_f32;
-        let preferred = if resident.passing_left { -1.0 } else { 1.0 };
-        for side in [preferred, -preferred] {
-            let mut alternative = before.clone();
-            let mut passing_input = input;
-            passing_input.direction = [
-                (direction[0] - direction[1] * side * 0.8) * factor,
-                (direction[1] + direction[0] * side * 0.8) * factor,
-            ];
-            move_character_with_obstacles(world, &mut alternative, passing_input, dt, obstacles);
-            let step = horizontal_distance(before.position, alternative.position);
-            let precision_farm_gate = matches!(
-                resident.phase,
-                Phase::Working | Phase::ToFarmExit | Phase::ToFarmResume
-            ) && resident
-                .farm_path
-                .get(resident.farm_waypoint)
-                .is_some_and(|point| !point.work && !point.route_gate);
-            if step > best_step + 0.001
-                && (!precision_farm_gate
-                    || farm_edge_is_walkable(world, alternative.position, target))
-            {
-                resident.body = alternative;
-                best_step = step;
-                resident.passing_left = side < 0.0;
-                if step >= 0.01 {
-                    break;
-                }
-            }
-        }
-        if best_step < 0.0 {
-            move_character_with_obstacles(world, &mut resident.body, input, dt, obstacles);
-        }
-    } else {
-        move_character_with_obstacles(world, &mut resident.body, input, dt, obstacles);
-        resident.passing_left = false;
-    }
-    let (progress_target, progress_distance) =
-        resident.walk_progress.get_or_insert((target, distance));
-    let remaining = horizontal_distance(resident.body.position, target);
-    if *progress_target != target || *progress_distance - remaining >= 0.1 {
-        *progress_target = target;
-        *progress_distance = remaining;
-        resident.stuck = 0.0;
-    } else {
-        resident.stuck = (resident.stuck + dt).min(10.0);
-    }
+    .walk(
+        &mut walker,
+        &mut resident.navigation,
+        target,
+        0.52,
+        jump,
+        dt,
+        |body| !precision_farm_gate || farm_edge_is_walkable(world, body.position, target),
+    );
+    resident.body = walker.body;
+    resident.stuck = resident.navigation.stalled;
 }
 
 fn resource_index(kind: ResourceKind) -> usize {
@@ -2651,6 +2581,143 @@ mod tests {
                             );
                         }
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn opposing_traders_pass_on_each_landing_without_overlap_or_losing_cargo() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let network = AirshipNetwork::new(&world);
+        let plan = world.settlements().unwrap();
+        let life = VillageLife::new(&world);
+        for route in network.routes() {
+            for (origin, destination) in [(route.from, route.to), (route.to, route.from)] {
+                for dt in [0.05, 0.25] {
+                    let leg = network.next_leg(origin, destination, 0.0).unwrap();
+                    let time = (leg.departure_in as f64 - 1.0).max(0.0);
+                    let ship = network.ship(leg.ship_id, time).unwrap();
+                    let path = network.landing_path(ship.id, origin).unwrap();
+                    let mut boarding = life
+                        .residents
+                        .iter()
+                        .find(|r| r.snapshot.village_id == origin && r.trail.is_some())
+                        .unwrap()
+                        .clone();
+                    boarding.phase = Phase::ToTrade;
+                    let waypoint = path
+                        .iter()
+                        .rposition(|p| horizontal_distance(*p, ship.position) >= 14.0)
+                        .unwrap();
+                    boarding.body = Body::new(path[waypoint]);
+                    boarding.body.on_ground = true;
+                    boarding.transit = Some(Transit {
+                        origin,
+                        destination,
+                        next_stop: destination,
+                        stage: TransitStage::Boarding,
+                        waypoint,
+                        ride: None,
+                        reservation: Some(AirshipRide {
+                            ship_id: ship.id,
+                            seat: 0,
+                        }),
+                        deck_position: None,
+                    });
+                    let mut alighting = boarding.clone();
+                    alighting.phase = Phase::Returning;
+                    let exit_waypoint = path
+                        .iter()
+                        .rposition(|p| horizontal_distance(*p, ship.position) >= 11.0)
+                        .unwrap();
+                    alighting.body = Body::new(path[exit_waypoint]);
+                    alighting.body.on_ground = true;
+                    alighting.transit = Some(Transit {
+                        origin: destination,
+                        destination: origin,
+                        next_stop: origin,
+                        stage: TransitStage::Alighting,
+                        waypoint: exit_waypoint,
+                        ride: None,
+                        reservation: Some(AirshipRide {
+                            ship_id: ship.id,
+                            seat: 7,
+                        }),
+                        deck_position: None,
+                    });
+                    let cargo = Some(ResourceCargo {
+                        kind: ResourceKind::Timber,
+                        amount: 6.0,
+                    });
+                    boarding.snapshot.carrying = cargo.clone();
+                    alighting.snapshot.carrying = cargo.clone();
+                    // Runtime passing preferences/checkpoints are rebuilt on load.
+                    boarding.stuck = 10.0;
+                    alighting.stuck = 10.0;
+                    boarding =
+                        serde_json::from_slice(&serde_json::to_vec(&boarding).unwrap()).unwrap();
+                    alighting =
+                        serde_json::from_slice(&serde_json::to_vec(&alighting).unwrap()).unwrap();
+                    let mut completed = [false; 2];
+                    for _ in 0..4_000 {
+                        let before = [boarding.body.position, alighting.body.position];
+                        if !completed[0] {
+                            advance_transit(
+                                &world,
+                                plan,
+                                &mut boarding,
+                                dt,
+                                &[alighting.body.position],
+                                &network,
+                                time,
+                                &[],
+                            );
+                            completed[0] =
+                                boarding.transit.as_ref().unwrap().stage == TransitStage::Riding;
+                        }
+                        if !completed[1] {
+                            advance_transit(
+                                &world,
+                                plan,
+                                &mut alighting,
+                                dt,
+                                &[boarding.body.position],
+                                &network,
+                                time,
+                                &[],
+                            );
+                            completed[1] = alighting.transit.as_ref().unwrap().waypoint
+                                < waypoint.saturating_sub(8);
+                        }
+                        assert!(
+                            character_position_is_clear(
+                                &world,
+                                boarding.body.position,
+                                &[alighting.body.position]
+                            ),
+                            "route={} village={origin}: traders overlapped",
+                            route.id
+                        );
+                        assert!(
+                            horizontal_distance(before[0], boarding.body.position)
+                                <= 3.0 * dt + 0.03
+                        );
+                        assert!(
+                            horizontal_distance(before[1], alighting.body.position)
+                                <= 3.0 * dt + 0.03
+                        );
+                        assert_eq!(boarding.snapshot.carrying, cargo);
+                        assert_eq!(alighting.snapshot.carrying, cargo);
+                        if completed == [true; 2] {
+                            break;
+                        }
+                    }
+                    assert_eq!(
+                        completed, [true; 2],
+                        "route={} village={origin} dt={dt}: boarding={:?}; alighting={:?}",
+                        route.id, boarding, alighting
+                    );
                 }
             }
         }
@@ -4074,6 +4141,57 @@ mod tests {
     }
 
     #[test]
+    fn needs_trip_keeps_completed_farm_return_progress_and_cargo() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let village = &world.settlements().unwrap().villages[6];
+        let life = VillageLife::new(&world);
+        for cargo in [
+            None,
+            Some(ResourceCargo {
+                kind: ResourceKind::Food,
+                amount: 12.0,
+            }),
+        ] {
+            let mut resident = life
+                .residents
+                .iter()
+                .find(|r| r.snapshot.id == 1538)
+                .unwrap()
+                .clone();
+            resident.farm_path = farm_path(&world, village, resident.route);
+            let last_work = resident.farm_path.iter().rposition(|p| p.work).unwrap();
+            let end = resident.farm_path.len() - 1;
+            resident.phase = Phase::ToFarmExit;
+            resident.resume = Some(Resume {
+                phase: Phase::Working,
+                waypoint: resident.waypoint,
+                elapsed: 0.75,
+                farm_waypoint: last_work + 30,
+            });
+            assert_eq!(
+                farm_needs_entrance(&resident.farm_path, last_work + 30),
+                end
+            );
+            resident.farm_waypoint = end;
+            resident.body = Body::new(resident.farm_path[end].position);
+            resident.snapshot.position = resident.body.position;
+            resident.snapshot.hunger = 100.0;
+            resident.snapshot.carrying = cargo.clone();
+            advance_farm_detour(&world, &mut resident, &life.villages[6], 0.05, &[]);
+            assert_eq!(resident.phase, Phase::ToFood);
+            assert_eq!(resident.resume.as_ref().unwrap().farm_waypoint, end);
+            assert_eq!(resident.snapshot.carrying, cargo);
+            // The saved task is now the physically completed entrance gate.
+            resident.phase = Phase::ToFarmResume;
+            advance_farm_detour(&world, &mut resident, &life.villages[6], 0.05, &[]);
+            assert_eq!(resident.phase, Phase::Working);
+            assert_eq!(resident.elapsed, 0.75);
+            assert_eq!(resident.farm_waypoint, end);
+            assert_eq!(resident.snapshot.carrying, cargo);
+        }
+    }
+
+    #[test]
     fn every_village_keeps_working_after_repeated_meals_and_rest() {
         let world = World::generate(42, WorldGeneration::GeographyV3);
         let mut life = VillageLife::new(&world);
@@ -4199,7 +4317,7 @@ mod tests {
     }
 
     #[test]
-    fn fallen_farmer_walks_to_the_entrance_then_resumes_the_saved_task_with_cargo() {
+    fn fallen_farmer_walks_to_the_entrance_and_keeps_completed_return_with_cargo() {
         let world = World::generate(42, WorldGeneration::GeographyV3);
         let mut life = VillageLife::new(&world);
         let village = &world.settlements().unwrap().villages[3];
@@ -4264,9 +4382,9 @@ mod tests {
             if resident.phase == Phase::Working && resident.resume.is_none() {
                 assert!(visited_entrance);
                 assert_eq!(resident.farm_path, path);
-                assert_eq!(resident.farm_waypoint, task);
+                assert_eq!(resident.farm_waypoint, path.len() - 1);
                 assert!((resident.elapsed - 0.7).abs() < 0.001);
-                assert!(farm_point_reached(resident, &path[task]));
+                assert!(farm_point_reached(resident, path.last().unwrap()));
                 assert!(resident.snapshot.hunger < HUNGRY && resident.snapshot.energy > 75.0);
                 resumed = true;
                 break;
@@ -4287,81 +4405,100 @@ mod tests {
         let village = &world.settlements().unwrap().villages[6];
         let route = &village.resident_routes[1];
         let path = farm_path(&world, village, 1);
-        let task = path.len() - 10;
         assert!(path.len() > 300);
-        assert_eq!(farm_needs_entrance(&path, task), path.len() - 1);
-        for legacy_retreat in [false, true] {
-            let mut life = original.clone();
-            let resident = &mut life.residents[index];
-            resident.phase = if legacy_retreat {
-                Phase::ToFarmExit
+        let last_work = path.iter().rposition(|point| point.work).unwrap();
+        for task in [last_work, path.len() - 10] {
+            let resumed_task = if task > last_work {
+                path.len() - 1
             } else {
-                Phase::Working
+                task
             };
-            resident.waypoint = route.path.len() - 1;
-            resident.farm_waypoint = if legacy_retreat { task - 1 } else { task };
-            resident.body = Body::new(path[resident.farm_waypoint].position);
-            resident.snapshot.position = resident.body.position;
-            resident.snapshot.hunger = 75.0;
-            resident.snapshot.energy = 20.0;
-            resident.farm_path = path.clone();
-            resident.elapsed = 0.7;
-            if legacy_retreat {
-                resident.resume = Some(Resume {
-                    phase: Phase::Working,
-                    waypoint: resident.waypoint,
-                    elapsed: 0.7,
-                    farm_waypoint: task,
-                });
-                resident.elapsed = 0.0;
-            }
-            let cargo = ResourceCargo {
-                kind: ResourceKind::Food,
-                amount: 5.0,
-            };
-            resident.snapshot.carrying = Some(cargo.clone());
-            assert!(life.validate(&world));
-            life = serde_json::from_slice(&serde_json::to_vec(&life).unwrap()).unwrap();
-            assert!(life.validate(&world));
-            let resident = life.residents[index].clone();
-            life.residents = vec![resident];
-            let mut forward_exit = false;
-            let mut backward_resume = false;
-            let mut resumed = false;
-            for _ in 0..3_000 {
-                let previous = life.residents[0].body.position;
-                life.tick(&world, 0.05);
-                let resident = &life.residents[0];
-                assert!(horizontal_distance(previous, resident.body.position) <= 0.15);
-                assert_eq!(resident.snapshot.carrying, Some(cargo.clone()));
-                forward_exit |=
-                    resident.phase == Phase::ToFarmExit && resident.farm_waypoint > task;
-                backward_resume |=
-                    resident.phase == Phase::ToFarmResume && resident.farm_waypoint > task;
-                if matches!(resident.phase, Phase::ToFarmExit | Phase::ToFarmResume) {
-                    let mut validation = original.clone();
-                    validation.residents[index] = resident.clone();
-                    assert!(
-                        validation.validate(&world),
-                        "Invalid forward exit/backward resumption: {:?}",
-                        resident
-                    );
+            assert_eq!(farm_needs_entrance(&path, task), path.len() - 1);
+            for legacy_retreat in [false, true] {
+                let mut life = original.clone();
+                let resident = &mut life.residents[index];
+                resident.phase = if legacy_retreat {
+                    Phase::ToFarmExit
+                } else {
+                    Phase::Working
+                };
+                resident.waypoint = route.path.len() - 1;
+                resident.farm_waypoint = if legacy_retreat { task - 1 } else { task };
+                resident.body = Body::new(path[resident.farm_waypoint].position);
+                resident.snapshot.position = resident.body.position;
+                resident.snapshot.hunger = 75.0;
+                // Exercise unfinished crop work with a meal; the completed
+                // return case covers both a meal and a rest on this long tour.
+                resident.snapshot.energy = if task == last_work { 100.0 } else { 20.0 };
+                resident.farm_path = path.clone();
+                resident.elapsed = 0.7;
+                if legacy_retreat {
+                    resident.resume = Some(Resume {
+                        phase: Phase::Working,
+                        waypoint: resident.waypoint,
+                        elapsed: 0.7,
+                        farm_waypoint: task,
+                    });
+                    resident.elapsed = 0.0;
                 }
-                if forward_exit
-                    && backward_resume
-                    && resident.phase == Phase::Working
-                    && resident.resume.is_none()
-                {
-                    assert_eq!(resident.farm_waypoint, task);
-                    assert_eq!(resident.farm_path, path);
-                    assert!((resident.elapsed - 0.7).abs() < 0.001);
-                    assert!(farm_point_reached(resident, &path[task]));
-                    assert!(resident.snapshot.hunger < HUNGRY && resident.snapshot.energy > 75.0);
-                    resumed = true;
-                    break;
+                let cargo = ResourceCargo {
+                    kind: ResourceKind::Food,
+                    amount: 5.0,
+                };
+                resident.snapshot.carrying = Some(cargo.clone());
+                assert!(life.validate(&world));
+                life = serde_json::from_slice(&serde_json::to_vec(&life).unwrap()).unwrap();
+                assert!(life.validate(&world));
+                let resident = life.residents[index].clone();
+                life.residents = vec![resident];
+                let mut forward_exit = false;
+                let mut visited_resume = false;
+                let mut resumed = false;
+                for _ in 0..6_000 {
+                    let previous = life.residents[0].body.position;
+                    life.tick(&world, 0.05);
+                    let resident = &life.residents[0];
+                    assert!(horizontal_distance(previous, resident.body.position) <= 0.15);
+                    assert_eq!(resident.snapshot.carrying, Some(cargo.clone()));
+                    forward_exit |=
+                        resident.phase == Phase::ToFarmExit && resident.farm_waypoint > task;
+                    visited_resume |= resident.phase == Phase::ToFarmResume
+                        && resident.snapshot.hunger < HUNGRY
+                        && resident.snapshot.energy > 75.0;
+                    if matches!(resident.phase, Phase::ToFarmExit | Phase::ToFarmResume) {
+                        let mut validation = original.clone();
+                        validation.residents[index] = resident.clone();
+                        assert!(
+                            validation.validate(&world),
+                            "Invalid forward exit/resumption: {:?}",
+                            resident
+                        );
+                    }
+                    if forward_exit
+                        && visited_resume
+                        && resident.phase == Phase::Working
+                        && resident.resume.is_none()
+                    {
+                        assert_eq!(resident.farm_waypoint, resumed_task);
+                        assert_eq!(resident.farm_path, path);
+                        assert!((resident.elapsed - 0.7).abs() < 0.001);
+                        assert!(farm_point_reached(resident, &path[resumed_task]));
+                        if task > last_work {
+                            assert!(
+                                resident.snapshot.hunger < HUNGRY
+                                    && resident.snapshot.energy > 75.0
+                            );
+                        }
+                        resumed = true;
+                        break;
+                    }
                 }
+                assert!(
+                    resumed,
+                    "task={task}, legacy={legacy_retreat}: {:?}",
+                    life.residents()
+                );
             }
-            assert!(resumed, "legacy={legacy_retreat}: {:?}", life.residents());
         }
     }
 }

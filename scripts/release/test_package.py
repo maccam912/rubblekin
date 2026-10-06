@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 import plistlib
+import re
+import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -24,6 +27,9 @@ class PackagingTests(unittest.TestCase):
         for name in ("rubblekin", "rubblekin.exe", "rubblekin-launcher", "rubblekin-launcher.exe"):
             (self.binaries / name).write_bytes(b"fake executable")
         self.output = self.root / "dist"
+        # Metadata fixtures aren't ELF files. A real ELF regression below uses
+        # the actual compiler/strip tools and executes the packaged programs.
+        self.strip = self.enterContext(patch("package.subprocess.run"))
 
     def all_packages(self):
         for target in package.TARGETS:
@@ -64,6 +70,28 @@ class PackagingTests(unittest.TestCase):
         package.package(self.binaries, self.output, package.TARGETS[0], COMMIT, sign=False)
         with self.assertRaises(FileNotFoundError):
             package.assemble_manifest(self.output, COMMIT)
+
+    def test_strip_failure_blocks_linux_package(self):
+        self.strip.side_effect = subprocess.CalledProcessError(1, "strip")
+        with self.assertRaises(subprocess.CalledProcessError):
+            package.package(self.binaries, self.output, package.TARGETS[0], COMMIT)
+        self.assertFalse((self.output / f"{package.TARGETS[0]}.json").exists())
+        self.assertEqual((self.binaries / "rubblekin").read_bytes(), b"fake executable")
+
+    def test_executable_limit_is_checked_before_archiving(self):
+        target = "x86_64-pc-windows-msvc"
+        size = (self.binaries / "rubblekin.exe").stat().st_size
+        with patch("package.DESKTOP_MAX_SIZE", size):
+            package.stage_product(self.binaries, self.root / "stage", target, COMMIT)
+        with patch("package.DESKTOP_MAX_SIZE", size - 1), self.assertRaisesRegex(ValueError, "launcher limit"):
+            package.package(self.binaries, self.output, target, COMMIT)
+        self.assertFalse((self.output / package.archive_name(target)).exists())
+
+    def test_download_limit_blocks_metadata_even_for_small_executables(self):
+        target = "x86_64-pc-windows-msvc"
+        with patch("package.DESKTOP_MAX_SIZE", 100), self.assertRaisesRegex(ValueError, "download limit"):
+            package.package(self.binaries, self.output, target, COMMIT)
+        self.assertFalse((self.output / f"{target}.json").exists())
 
     def test_manifest_rejects_mixed_commits_and_archive_corruption(self):
         self.all_packages()
@@ -250,6 +278,47 @@ class PackagingTests(unittest.TestCase):
             self.skipTest("creating symlinks is not permitted")
         with self.assertRaisesRegex(ValueError, "symlink"):
             package.write_zip(self.binaries, self.root / "archive.zip")
+
+
+@unittest.skipUnless(sys.platform == "linux", "requires native Linux ELF tools")
+class LinuxBinaryPackagingTests(unittest.TestCase):
+    def test_strips_only_staged_debug_data_and_keeps_symbol_identity_and_startup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binaries = root / "binaries"
+            binaries.mkdir()
+            source = root / "client.c"
+            source.write_text('#include <stdio.h>\nint main(void) { puts("Rubblekin"); return 0; }\n')
+            client = binaries / "rubblekin"
+            subprocess.run(["cc", "-g", "-Wl,--build-id=sha1", str(source), "-o", str(client)], check=True)
+            # Reproduce an ELF too large for the launcher because of debug-only
+            # content, using a small bound so this regression stays inexpensive.
+            padding = root / "debug-padding"
+            padding.write_bytes(bytes(64 * 1024))
+            subprocess.run(["objcopy", "--add-section", f".debug_rubblekin={padding}", str(client)], check=True)
+            shutil.copyfile(client, binaries / "rubblekin-launcher")
+            original_hashes = {path: package.digest(path) for path in binaries.iterdir()}
+            original_notes = subprocess.check_output(["readelf", "-n", str(client)], text=True)
+            build_id = re.search(r"Build ID: ([0-9a-f]+)", original_notes)[1]
+            self.assertGreater(client.stat().st_size, 64 * 1024)
+            output = root / "dist"
+            with patch("package.DESKTOP_MAX_SIZE", 64 * 1024):
+                package.package(binaries, output, package.TARGETS[0], COMMIT)
+            for launcher in (False, True):
+                extracted = root / ("launcher" if launcher else "client")
+                executable = extracted / package.executable_path(package.TARGETS[0], launcher)
+                with zipfile.ZipFile(output / package.archive_name(package.TARGETS[0], launcher)) as archive:
+                    self.assertLess(archive.getinfo(executable.name).file_size, 64 * 1024)
+                    archive.extractall(extracted)
+                executable.chmod(0o755)
+                sections = subprocess.check_output(["readelf", "-SW", str(executable)], text=True)
+                self.assertNotIn(".debug_", sections)
+                self.assertIn(".eh_frame", sections)
+                notes = subprocess.check_output(["readelf", "-n", str(executable)], text=True)
+                self.assertEqual(re.search(r"Build ID: ([0-9a-f]+)", notes)[1], build_id)
+                self.assertEqual(subprocess.check_output([str(executable)], text=True), "Rubblekin\n")
+            for path, expected_hash in original_hashes.items():
+                self.assertEqual(package.digest(path), expected_hash)
 
 
 if __name__ == "__main__":
