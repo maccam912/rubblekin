@@ -1,8 +1,9 @@
 //! A small, modal command console. The server owns permissions and command results.
 use std::collections::VecDeque;
 
+#[cfg(not(target_os = "android"))]
+use bevy::clipboard::{Clipboard, ClipboardRead};
 use bevy::{
-    clipboard::{Clipboard, ClipboardRead},
     input::{keyboard::Key, mouse::AccumulatedMouseScroll},
     prelude::*,
     window::PrimaryWindow,
@@ -30,6 +31,7 @@ pub(crate) struct AdminConsole {
     history: VecDeque<String>,
     history_index: Option<usize>,
     history_draft: String,
+    #[cfg(not(target_os = "android"))]
     pending_paste: Option<ClipboardRead>,
     follow_output: u8,
 }
@@ -46,6 +48,7 @@ impl Default for AdminConsole {
             history: VecDeque::new(),
             history_index: None,
             history_draft: String::new(),
+            #[cfg(not(target_os = "android"))]
             pending_paste: None,
             follow_output: 0,
         };
@@ -155,9 +158,13 @@ impl AdminConsole {
     fn close(&mut self) {
         self.open = false;
         self.just_closed = true;
-        self.pending_paste = None;
+        #[cfg(not(target_os = "android"))]
+        {
+            self.pending_paste = None;
+        }
     }
 
+    #[cfg(not(target_os = "android"))]
     fn poll_paste(&mut self) {
         if let Some(paste) = self
             .pending_paste
@@ -306,7 +313,7 @@ pub(crate) fn read(
     map: Option<Res<crate::world_map::WorldMap>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut keyboard: MessageReader<MenuKey>,
-    mut clipboard: Option<ResMut<Clipboard>>,
+    #[cfg(not(target_os = "android"))] mut clipboard: Option<ResMut<Clipboard>>,
     mut connection: Option<ResMut<Connection>>,
     mut touch: Option<ResMut<TouchControls>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -356,6 +363,7 @@ pub(crate) fn read(
     if !console.open {
         return;
     }
+    #[cfg(not(target_os = "android"))]
     console.poll_paste();
     let native_enter = events
         .iter()
@@ -368,6 +376,7 @@ pub(crate) fn read(
         let shortcut = key.modifiers.control_key() || key.modifiers.super_key();
         if shortcut {
             match event.key_code {
+                #[cfg(not(target_os = "android"))]
                 KeyCode::KeyV => {
                     if let Some(clipboard) = clipboard.as_mut() {
                         console.pending_paste = Some(clipboard.fetch_text());
@@ -665,6 +674,7 @@ mod tests {
         assert_eq!(app.world().resource::<AdminConsole>().input, "teleport ");
     }
 
+    #[cfg(not(target_os = "android"))]
     #[test]
     fn ready_paste_is_applied_before_enter_and_repeat_enter_does_not_run_again() {
         let (mut app, window) = console_app(true, SessionMode::Player);
