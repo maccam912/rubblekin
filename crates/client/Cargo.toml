@@ -5,7 +5,7 @@ edition.workspace = true
 
 [lib]
 path = "src/lib.rs"
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib"]
 
 [[bin]]
 name = "rubblekin"

@@ -58,10 +58,12 @@ def main():
         environment.get("CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS", "")
         + " -C link-arg=-Wl,-z,max-page-size=16384"
     ).strip()
+    # Android requests its shared library explicitly; desktop builds use the Rust library.
     run([
         "cargo", "ndk", "--platform", "26", "--target", "arm64-v8a",
         "--output-dir", "android/app/src/main/jniLibs",
-        "build", "--locked", "--profile", args.profile, "--lib", "-p", "rubblekin_client",
+        "rustc", "--locked", "--profile", args.profile, "--lib", "--crate-type", "cdylib",
+        "-p", "rubblekin_client",
     ], env=environment)
 
     # First-parent main releases have increasing version codes. Sideloading an
