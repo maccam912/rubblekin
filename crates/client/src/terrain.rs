@@ -1047,6 +1047,8 @@ fn add_regional_building_proxy(
             | BuildingKind::Lookout
             | BuildingKind::TrailRuin
             | BuildingKind::Waystone
+            | BuildingKind::TrailPavilion
+            | BuildingKind::QuarryYard
     ) {
         return false;
     }
@@ -1185,21 +1187,28 @@ fn add_regional_building_proxy(
                 );
             }
         }
-        BuildingKind::TrailRuin | BuildingKind::Waystone => {
-            part(
-                [0.0; 3],
-                [w, 1.0, d],
-                if kind == BuildingKind::TrailRuin {
-                    Block::Dirt
-                } else {
-                    Block::Stone
-                },
-            );
+        BuildingKind::TrailRuin
+        | BuildingKind::Waystone
+        | BuildingKind::TrailPavilion
+        | BuildingKind::QuarryYard => {
+            let exact_floor =
+                matches!(kind, BuildingKind::TrailPavilion | BuildingKind::QuarryYard);
+            if !exact_floor {
+                part(
+                    [0.0; 3],
+                    [w, 1.0, d],
+                    if kind == BuildingKind::TrailRuin {
+                        Block::Dirt
+                    } else {
+                        Block::Stone
+                    },
+                );
+            }
             // Sparse roofless walls and the waystone use their actual vertical
             // solid runs, so open arches remain open while detail is pending.
             for x in 0..w as i32 {
                 for z in 0..d as i32 {
-                    let mut y = 1;
+                    let mut y = if exact_floor { 0 } else { 1 };
                     let height = village_assets::dimensions(kind)[1];
                     while y < height {
                         let block = village_assets::block_at(kind, x, y, z).unwrap();
@@ -1366,6 +1375,7 @@ fn tree_leaf_color(world: &World, kind: TreeKind) -> [f32; 4] {
         || world.generation() == WorldGeneration::GeographyV3
         || world.generation() == WorldGeneration::GeographyV4
         || world.generation() == WorldGeneration::GeographyV5
+        || world.generation() == WorldGeneration::GeographyV6
     {
         kind.leaf_color()
     } else {
@@ -1993,6 +2003,7 @@ fn add_meadow_details(
         || world.generation() == WorldGeneration::GeographyV3
         || world.generation() == WorldGeneration::GeographyV4
         || world.generation() == WorldGeneration::GeographyV5
+        || world.generation() == WorldGeneration::GeographyV6
     {
         match biome {
             Some(Biome::Shrubland) => (0.01, 0.0, [0.60, 0.58, 0.33, 1.0], 0.85),
@@ -2011,6 +2022,12 @@ fn add_meadow_details(
         (y + 1) as f32 * CELL_SIZE,
         (z as f32 + 0.5) * CELL_SIZE,
     );
+    if world.generation() == WorldGeneration::GeographyV6
+        && let Some(kind) = crate::ground_details::detail(biome, chance)
+    {
+        crate::ground_details::add(mesh, base, kind);
+        return;
+    }
     let flowering = chance < flower_density;
     let stem = if flowering {
         [0.26, 0.38, 0.21, 1.0]
@@ -2222,6 +2239,42 @@ fn hash(x: i32, y: i32, z: i32, seed: u32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn v6_ground_details_disappear_with_removed_support_or_blocked_space() {
+        let mut world = World::generate(42, WorldGeneration::GeographyV6);
+        let (x, z) = (0..100)
+            .flat_map(|x| (0..100).map(move |z| (x, z)))
+            .find(|&(x, z)| hash(x, 713, z, world.seed) < 0.003)
+            .unwrap();
+        let y = world.height_at(x, z);
+        let support = BlockPos::new(x, y, z);
+        let above = BlockPos::new(x, y + 1, z);
+        world.set_block(support, Block::Grass).unwrap();
+        world.set_block(above, Block::Air).unwrap();
+        let geometry = |world: &World| {
+            let cache = CellCache::new(world, x.div_euclid(CHUNK_SIZE), z.div_euclid(CHUNK_SIZE));
+            let mut mesh = Geometry::default();
+            add_meadow_details(&mut mesh, world, &cache, x, z, Some(Biome::Forest));
+            mesh
+        };
+        let before = world.edits();
+        assert_eq!(
+            geometry(&world).positions.len(),
+            72,
+            "one three-cuboid mushroom replaces the tuft"
+        );
+        assert_eq!(
+            world.edits(),
+            before,
+            "ornaments have no world or collision state"
+        );
+        world.set_block(above, Block::Wood).unwrap();
+        assert!(geometry(&world).positions.is_empty());
+        world.set_block(above, Block::Air).unwrap();
+        world.set_block(support, Block::Air).unwrap();
+        assert!(geometry(&world).positions.is_empty());
+    }
     use super::*;
     use rubblekin_core::world::MAX_Y;
 
@@ -3504,6 +3557,8 @@ mod tests {
             BuildingKind::Lookout,
             BuildingKind::TrailRuin,
             BuildingKind::Waystone,
+            BuildingKind::TrailPavilion,
+            BuildingKind::QuarryYard,
         ] {
             for rotation in 0..4 {
                 let building = BuildingPlot {
@@ -3545,10 +3600,45 @@ mod tests {
                         .iter()
                         .map(|p| p[1])
                         .fold(f32::NEG_INFINITY, f32::max);
-                    assert!(
-                        top >= 10.0 + h as f32 * CELL_SIZE * 0.75,
-                        "landmark silhouette lost its height"
-                    );
+                    if matches!(kind, BuildingKind::TrailPavilion | BuildingKind::QuarryYard) {
+                        // The quarry's front has a low covered bench; its tall
+                        // cut face is at the back. A clipped front half must
+                        // match the source there, not an arbitrary full-height
+                        // fraction that assumes a symmetric roof.
+                        let mut expected = 10.0;
+                        for x in building.origin.x..building.origin.x + w {
+                            for z in building.origin.z..building.origin.z + d {
+                                if (x + 1) as f32 * CELL_SIZE <= bounds[0]
+                                    || x as f32 * CELL_SIZE >= bounds[2]
+                                    || (z + 1) as f32 * CELL_SIZE <= bounds[1]
+                                    || z as f32 * CELL_SIZE >= bounds[3]
+                                {
+                                    continue;
+                                }
+                                let [local_x, local_z] = building.local_cell(x, z).unwrap();
+                                for y in 0..h {
+                                    if village_assets::block_at(kind, local_x, y, local_z)
+                                        .unwrap()
+                                        .is_solid()
+                                    {
+                                        expected = f32::max(
+                                            expected,
+                                            (building.origin.y + y + 1) as f32 * CELL_SIZE,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        assert_eq!(
+                            top, expected,
+                            "{kind:?} rotation{rotation} source silhouette changed"
+                        );
+                    } else {
+                        assert!(
+                            top >= 10.0 + h as f32 * CELL_SIZE * 0.75,
+                            "{kind:?} rotation{rotation} landmark silhouette lost its height"
+                        );
+                    }
                 }
             }
         }

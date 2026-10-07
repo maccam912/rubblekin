@@ -322,6 +322,218 @@ fn local_work_times_cancels_and_persists_only_completed_useful_activity() {
     server.stop().unwrap();
 }
 
+fn ripe_harvest_fixture(
+    config: &ServerConfig,
+) -> (World, rubblekin_core::economy::WorkSite, [f32; 3]) {
+    use rubblekin_core::economy::{WorkKind, WorkSite};
+    // Start from a real, validated fresh save. Resting residents isolate the
+    // socket/persistence test; actual NPC competition has a separate test.
+    spawn(config.clone()).unwrap().stop().unwrap();
+    let world = World::generate(config.seed, config.generation);
+    let village = &world.settlements().unwrap().villages[0];
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    value["villages"]["villages"][0]["snapshot"]["crop_growth"] = 1.0.into();
+    value["villages"]["villages"][0]["planted"] = true.into();
+    for resident in value["villages"]["residents"].as_array_mut().unwrap() {
+        resident["snapshot"]["energy"] = 0.0.into();
+        resident["snapshot"]["hunger"] = 0.0.into();
+    }
+    fs::write(&config.save_path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let soil = village.fields[0].plant_positions().next().unwrap();
+    let position = [
+        soil.x as f32 * CELL_SIZE + 0.25,
+        (soil.y + 1) as f32 * CELL_SIZE,
+        soil.z as f32 * CELL_SIZE + 0.25,
+    ];
+    let site = WorkSite {
+        village_id: village.id,
+        kind: WorkKind::HarvestField,
+        index: 0,
+    };
+    (world, site, position)
+}
+
+#[test]
+fn harvest_cargo_is_durable_and_reaches_stores_only_through_a_physical_market_sale() {
+    use rubblekin_core::{
+        economy::{MarketAction, WorkAction},
+        settlement::ResourceKind,
+    };
+    const PROFILE: &str = "00000000000000000000000000000057";
+    let save = TestSave::new();
+    let config = ServerConfig {
+        generation: WorldGeneration::GeographyV6,
+        ..save.config(true)
+    };
+    let (world, site, position) = ripe_harvest_fixture(&config);
+    let village = &world.settlements().unwrap().villages[0];
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    let (mut observer, _) = Client::connect_mode(server.addr, "Observer", SessionMode::Observer);
+    observer.send(ClientMessage::Work {
+        request_id: 1,
+        action: WorkAction::Start { site },
+    });
+    let denial = observer.until(|message| matches!(message, ServerMessage::Notice { .. }));
+    assert!(matches!(denial, ServerMessage::Notice { text } if text.contains("read-only")));
+    drop(observer);
+    assert!(matches!(
+        client.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState {
+            accepted: false,
+            ..
+        }
+    ));
+    client.teleport(position);
+    let started = client.work(2, WorkAction::Start { site });
+    assert!(
+        matches!(&started, ServerMessage::WorkState { accepted:true, ledger, .. } if ledger.cargo_total()==0),
+        "{started:?}"
+    );
+    let started_at = Instant::now();
+    let complete = client.until_for(
+        |message| {
+            matches!(message, ServerMessage::WorkState { request_id:0, work, ledger, .. }
+        if work.active.is_none() && ledger.cargo[0]==12)
+        },
+        Duration::from_secs(15),
+    );
+    assert!(started_at.elapsed() >= Duration::from_millis(5700));
+    assert!(
+        matches!(complete, ServerMessage::WorkState { ledger, .. } if ledger.coins==0 && ledger.revision==1)
+    );
+    let harvested: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(harvested["profiles"][PROFILE]["ledger"]["cargo"][0], 12);
+    assert_eq!(
+        harvested["villages"]["villages"][0]["snapshot"]["crop_growth"],
+        0.0
+    );
+    let food_before_sale = harvested["villages"]["villages"][0]["snapshot"]["food"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        matches!(client.work(2, WorkAction::Start { site }), ServerMessage::WorkState { accepted:false, ledger, .. } if ledger.cargo[0]==12)
+    );
+    let remote = client.market(
+        3,
+        Some(village.id),
+        1,
+        MarketAction::Sell {
+            kind: ResourceKind::Food,
+            quantity: 5,
+            unit_price: 1,
+        },
+    );
+    assert!(
+        matches!(remote, ServerMessage::MarketState { accepted:false, ledger, .. } if ledger.cargo[0]==12)
+    );
+    client.teleport(village.market);
+    let view = client.market(4, Some(village.id), 1, MarketAction::View);
+    let ServerMessage::MarketState {
+        market: Some(view), ..
+    } = view
+    else {
+        panic!("Expected market quote")
+    };
+    let unit_price = view.goods[0].sell_price;
+    let sold = client.market(
+        5,
+        Some(village.id),
+        1,
+        MarketAction::Sell {
+            kind: ResourceKind::Food,
+            quantity: 5,
+            unit_price,
+        },
+    );
+    assert!(
+        matches!(sold, ServerMessage::MarketState { accepted:true, ledger, .. } if ledger.cargo[0]==7 && ledger.coins==5*unit_price && ledger.revision==2)
+    );
+    let sold: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(
+        sold["villages"]["villages"][0]["snapshot"]["food"]
+            .as_f64()
+            .unwrap(),
+        food_before_sale + 5.0
+    );
+    drop(client);
+    server.stop().unwrap();
+    let server = spawn(config).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    let resumed =
+        client.until(|message| matches!(message, ServerMessage::WorkState { request_id: 0, .. }));
+    assert!(
+        matches!(resumed, ServerMessage::WorkState { work, ledger, .. } if work.active.is_none() && ledger.cargo[0]==7 && ledger.coins==5*unit_price && ledger.revision==2)
+    );
+    drop(client);
+    server.stop().unwrap();
+}
+
+#[test]
+fn failed_harvest_save_confirms_no_cargo_and_preserves_the_ripe_crop_on_restart() {
+    use rubblekin_core::economy::WorkAction;
+    const PROFILE: &str = "00000000000000000000000000000058";
+    let save = TestSave::new();
+    let config = ServerConfig {
+        generation: WorldGeneration::GeographyV6,
+        ..save.config(true)
+    };
+    let (_, site, position) = ripe_harvest_fixture(&config);
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    client.teleport(position);
+    let started = client.work(1, WorkAction::Start { site });
+    assert!(
+        matches!(started, ServerMessage::WorkState { accepted: true, .. }),
+        "{started:?}"
+    );
+    client.until_for(
+        |message| {
+            matches!(message, ServerMessage::WorkState { work, .. }
+        if work.active.as_ref().is_some_and(|active| active.elapsed_seconds>=5.25))
+        },
+        Duration::from_secs(15),
+    );
+    let before = fs::read(&config.save_path).unwrap();
+    let temporary = save
+        .0
+        .join(format!(".world.json.{}.tmp", std::process::id()));
+    fs::create_dir(&temporary).unwrap();
+    loop {
+        let mut line = String::new();
+        match client.reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => assert!(
+                !matches!(serde_json::from_str::<ServerMessage>(&line).unwrap(), ServerMessage::WorkState { ledger, .. } if ledger.cargo_total()>0)
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
+            Err(error) => panic!("Expected save-failure disconnect: {error}"),
+        }
+    }
+    assert!(server.stop().is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), before);
+    fs::remove_dir(&temporary).unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    let state =
+        client.until(|message| matches!(message, ServerMessage::WorkState { request_id: 0, .. }));
+    assert!(
+        matches!(state, ServerMessage::WorkState { work, ledger, .. } if work.active.is_none() && ledger.cargo_total()==0 && ledger.revision==0)
+    );
+    let restored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(
+        restored["villages"]["villages"][0]["snapshot"]["crop_growth"],
+        1.0
+    );
+    assert_eq!(restored["villages"]["villages"][0]["planted"], true);
+    drop(client);
+    server.stop().unwrap();
+}
+
 #[test]
 fn local_work_save_failure_does_not_confirm_wages_and_restart_keeps_old_progress() {
     use rubblekin_core::economy::{WorkAction, WorkKind, WorkSite};
@@ -1185,7 +1397,8 @@ fn assert_geographic_world_restart(world_generation: WorldGeneration) {
         WorldGeneration::ValleyV1
         | WorldGeneration::GeographyV3
         | WorldGeneration::GeographyV4
-        | WorldGeneration::GeographyV5 => {
+        | WorldGeneration::GeographyV5
+        | WorldGeneration::GeographyV6 => {
             unreachable!()
         }
     };

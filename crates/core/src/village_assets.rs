@@ -26,13 +26,20 @@ pub enum BuildingKind {
     Lookout,
     TrailRuin,
     Waystone,
+    TrailPavilion,
+    QuarryYard,
 }
 
 impl BuildingKind {
     pub const fn is_landmark(self) -> bool {
         matches!(
             self,
-            Self::Windmill | Self::Lookout | Self::TrailRuin | Self::Waystone
+            Self::Windmill
+                | Self::Lookout
+                | Self::TrailRuin
+                | Self::Waystone
+                | Self::TrailPavilion
+                | Self::QuarryYard
         )
     }
 }
@@ -50,6 +57,8 @@ pub const fn dimensions(kind: BuildingKind) -> [i32; 3] {
         BuildingKind::Lookout => [18, 22, 24],
         BuildingKind::TrailRuin => [24, 12, 24],
         BuildingKind::Waystone => [10, 12, 10],
+        BuildingKind::TrailPavilion => [24, 16, 20],
+        BuildingKind::QuarryYard => [28, 14, 24],
     }
 }
 
@@ -75,6 +84,8 @@ pub fn block_at(kind: BuildingKind, x: i32, y: i32, z: i32) -> Option<Block> {
         BuildingKind::Lookout => regional::lookout(x, y, z),
         BuildingKind::TrailRuin => scenic::ruin(x, y, z),
         BuildingKind::Waystone => scenic::waystone(x, y, z),
+        BuildingKind::TrailPavilion => scenic::pavilion(x, y, z),
+        BuildingKind::QuarryYard => scenic::quarry(x, y, z),
     })
 }
 

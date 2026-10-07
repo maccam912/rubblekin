@@ -1,7 +1,10 @@
-//! Two short, physical village activities. Unfinished work belongs only to its
+//! Short, physical village activities. Unfinished work belongs only to its
 //! connection; completed effects and wages join the existing durable ledger.
 use rubblekin_core::{
-    economy::{PlayerEconomy, WORK_REACH, WorkKind, WorkOffer, WorkProgress, WorkSite},
+    economy::{
+        CARGO_CAPACITY, PlayerEconomy, WORK_REACH, WorkKind, WorkOffer, WorkProgress, WorkReward,
+        WorkSite, resource_index,
+    },
     physics::EYE_HEIGHT,
     village_assets::BuildingKind,
     world::{Block, BlockPos, CELL_SIZE, World},
@@ -38,7 +41,7 @@ fn site_target(
         })
         .ok_or("That work site no longer exists.")?;
     let anchor = match site.kind {
-        WorkKind::TendField => {
+        WorkKind::TendField | WorkKind::HarvestField => {
             let field = village
                 .fields
                 .get(site.index as usize)
@@ -85,7 +88,7 @@ fn site_target(
     };
     let target = [
         anchor.x as f32 * CELL_SIZE + 0.25,
-        if site.kind == WorkKind::TendField {
+        if site.kind != WorkKind::WorkshopMaintenance {
             (anchor.y + 1) as f32 * CELL_SIZE
         } else {
             (anchor.y - 1) as f32 * CELL_SIZE
@@ -95,6 +98,7 @@ fn site_target(
     let activity = match site.kind {
         WorkKind::TendField => "Tend field",
         WorkKind::WorkshopMaintenance => "Workshop maintenance",
+        WorkKind::HarvestField => "Harvest surplus crops",
     };
     Ok((anchor, target, format!("{} · {activity}", village.name)))
 }
@@ -107,7 +111,9 @@ fn access(
     position: [f32; 3],
 ) -> Result<(), String> {
     let intact = match site.kind {
-        WorkKind::TendField => matches!(world.block(anchor), Block::Dirt | Block::Grass),
+        WorkKind::TendField | WorkKind::HarvestField => {
+            matches!(world.block(anchor), Block::Dirt | Block::Grass)
+        }
         WorkKind::WorkshopMaintenance => {
             world.block(anchor) == Block::Stone
                 && world.block(BlockPos::new(anchor.x, anchor.y - 1, anchor.z)) == Block::Wood
@@ -115,7 +121,7 @@ fn access(
     };
     if !intact {
         return Err(match site.kind {
-            WorkKind::TendField => "This plot needs intact planting soil.",
+            WorkKind::TendField | WorkKind::HarvestField => "This plot needs intact planting soil.",
             WorkKind::WorkshopMaintenance => "The workshop needs its intact workbench.",
         }
         .into());
@@ -144,18 +150,17 @@ pub(crate) fn offer(
     position: [f32; 3],
 ) -> Result<(WorkOffer, BlockPos), String> {
     let (anchor, target, label) = site_target(world, site, position)?;
+    let reward = life.local_work_reward(world, site.village_id, site.kind)?;
     let unavailable_reason = access(world, site, anchor, target, position)
         .and_then(|()| life.local_work_available(site.village_id, site.kind))
+        .and_then(|()| check_reward(&PlayerEconomy::default(), reward))
         .err();
     Ok((
         WorkOffer {
             site,
             position: target,
             label,
-            reward: match site.kind {
-                WorkKind::TendField => 2,
-                WorkKind::WorkshopMaintenance => 4,
-            },
+            reward,
             duration_seconds: WORK_SECONDS,
             unavailable_reason,
         },
@@ -167,6 +172,7 @@ pub(crate) fn nearest_offer(
     world: &World,
     life: &VillageLife,
     position: [f32; 3],
+    ledger: &PlayerEconomy,
 ) -> Option<WorkOffer> {
     let plan = world.settlements()?;
     plan.villages
@@ -178,7 +184,14 @@ pub(crate) fn nearest_offer(
                 .enumerate()
                 .map(|(index, _)| WorkSite {
                     village_id: village.id,
-                    kind: WorkKind::TendField,
+                    kind: if life
+                        .market_stocks(village.id)
+                        .is_some_and(|snapshot| snapshot.crop_growth >= 1.0)
+                    {
+                        WorkKind::HarvestField
+                    } else {
+                        WorkKind::TendField
+                    },
                     index: index as u32,
                 })
                 .chain(
@@ -197,7 +210,12 @@ pub(crate) fn nearest_offer(
         .filter_map(|site| {
             offer(world, life, site, position)
                 .ok()
-                .map(|(offer, _)| offer)
+                .map(|(mut offer, _)| {
+                    if offer.unavailable_reason.is_none() {
+                        offer.unavailable_reason = check_reward(ledger, offer.reward).err();
+                    }
+                    offer
+                })
         })
         .min_by(|a, b| {
             a.unavailable_reason
@@ -243,9 +261,11 @@ pub(crate) fn advance(
     if distance_squared(active.start_position, position) > MOVE_LIMIT.powi(2) {
         return Err("Work cancelled because you moved away.".into());
     }
-    let offer = &active.progress.offer;
+    let offer = &mut active.progress.offer;
     access(world, offer.site, active.anchor, offer.position, position)?;
     life.local_work_available(offer.site.village_id, offer.site.kind)?;
+    offer.reward = life.local_work_reward(world, offer.site.village_id, offer.site.kind)?;
+    check_reward(&PlayerEconomy::default(), offer.reward)?;
     active.progress.elapsed_seconds = ((now - active.started_at).max(0.0) as f32).min(WORK_SECONDS);
     Ok(now - active.started_at >= f64::from(WORK_SECONDS))
 }
@@ -257,20 +277,44 @@ pub(crate) fn complete(
     active: &ActiveWork,
 ) -> Result<String, String> {
     let offer = &active.progress.offer;
-    if ledger.coins > MAX_COINS - offer.reward || ledger.revision >= u64::MAX - 1 {
+    let reward = life.local_work_reward(world, offer.site.village_id, offer.site.kind)?;
+    check_reward(ledger, reward)?;
+    let completed = life.complete_local_work(world, offer.site.village_id, offer.site.kind)?;
+    debug_assert_eq!(reward, completed);
+    ledger.revision += 1;
+    Ok(match reward {
+        WorkReward::Coins(coins) => {
+            ledger.coins += coins;
+            format!("Work complete. Earned {coins} coins!")
+        }
+        WorkReward::Cargo { kind, amount } => {
+            ledger.cargo[resource_index(kind)] += amount;
+            format!(
+                "Harvested {amount} {}. Carry it to a market to sell.",
+                kind.name().to_lowercase()
+            )
+        }
+    })
+}
+
+pub(crate) fn check_reward(ledger: &PlayerEconomy, reward: WorkReward) -> Result<(), String> {
+    if ledger.revision >= u64::MAX - 1 {
         return Err("Your progress has reached its saved limit.".into());
     }
-    life.complete_local_work(world, offer.site.village_id, offer.site.kind)?;
-    ledger.coins += offer.reward;
-    ledger.revision += 1;
-    Ok(format!(
-        "{} complete. Earned {} coins!",
-        match offer.site.kind {
-            WorkKind::TendField => "Field work",
-            WorkKind::WorkshopMaintenance => "Workshop maintenance",
-        },
-        offer.reward
-    ))
+    match reward {
+        WorkReward::Coins(coins) if coins > MAX_COINS.saturating_sub(ledger.coins) => {
+            Err("Your coin purse is full.".into())
+        }
+        WorkReward::Cargo { amount: 0, .. } => {
+            Err("Not enough intact crops remain for one unit of food.".into())
+        }
+        WorkReward::Cargo { amount, .. }
+            if amount > CARGO_CAPACITY.saturating_sub(ledger.cargo_total()) =>
+        {
+            Err(format!("Make room for {amount} units of harvest cargo."))
+        }
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -319,6 +363,156 @@ mod tests {
             })
             .unwrap();
         (site, position)
+    }
+
+    fn ripe_life(world: &World) -> VillageLife {
+        let mut value = serde_json::to_value(VillageLife::new(world)).unwrap();
+        value["villages"][0]["snapshot"]["crop_growth"] = 1.0.into();
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn harvesting_takes_six_seconds_consumes_one_crop_and_keeps_food_out_of_stores() {
+        let world = world();
+        let mut life = ripe_life(world);
+        let (mut site, position) = field();
+        site.kind = WorkKind::HarvestField;
+        let food = life.market_stocks(site.village_id).unwrap().food;
+        let mut first = start(world, &life, site, position, 0.0).unwrap();
+        let mut competitor = start(world, &life, site, position, 0.0).unwrap();
+        assert_eq!(
+            nearest_offer(world, &life, position, &PlayerEconomy::default())
+                .unwrap()
+                .site
+                .kind,
+            WorkKind::HarvestField
+        );
+        assert!(!advance(world, &life, &mut first, position, 5.999).unwrap());
+        assert!(advance(world, &life, &mut first, position, 6.0).unwrap());
+        let mut ledger = PlayerEconomy::default();
+        complete(world, &mut life, &mut ledger, &first).unwrap();
+        assert_eq!(ledger.cargo, [12, 0, 0, 0, 0]);
+        assert_eq!((ledger.coins, ledger.revision), (0, 1));
+        assert_eq!(life.market_stocks(site.village_id).unwrap().food, food);
+        assert_eq!(
+            life.market_stocks(site.village_id).unwrap().crop_growth,
+            0.0
+        );
+        let after = serde_json::to_value(&life).unwrap();
+        assert!(!after["villages"][0]["planted"].as_bool().unwrap());
+        assert_eq!(after["villages"][0]["harvests"], 1);
+        assert!(advance(world, &life, &mut competitor, position, 6.0).is_err());
+        let mut other_ledger = PlayerEconomy::default();
+        assert!(complete(world, &mut life, &mut other_ledger, &competitor).is_err());
+        assert_eq!(other_ledger, PlayerEconomy::default());
+        assert_eq!(serde_json::to_value(&life).unwrap(), after);
+        assert!(life.validate(world));
+    }
+
+    #[test]
+    fn harvest_rechecks_reserves_and_cargo_including_sealed_parcels_before_mutation() {
+        use rubblekin_core::{economy::DeliveryContract, settlement::ResourceKind};
+        let world = world();
+        let (mut site, position) = field();
+        site.kind = WorkKind::HarvestField;
+        assert!(start(world, &VillageLife::new(world), site, position, 0.0).is_err());
+        let mut life = ripe_life(world);
+        let active = start(world, &life, site, position, 0.0).unwrap();
+        let mut ledger = PlayerEconomy {
+            cargo: [7, 0, 0, 0, 0],
+            delivery: Some(DeliveryContract {
+                origin: 0,
+                destination: 1,
+                kind: ResourceKind::Stone,
+                amount: 6,
+                reward: 12,
+            }),
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&life).unwrap();
+        assert!(
+            complete(world, &mut life, &mut ledger, &active)
+                .unwrap_err()
+                .contains("room")
+        );
+        assert_eq!(ledger.cargo[0], 7);
+        assert_eq!(ledger.revision, 0);
+        assert_eq!(serde_json::to_value(&life).unwrap(), before);
+        assert!(
+            nearest_offer(world, &life, position, &ledger)
+                .unwrap()
+                .unavailable_reason
+                .is_some()
+        );
+        ledger.cargo[0] = 6; // 6 ordinary +6 sealed +12 harvest exactly fits.
+        let stock = life.market_stocks(site.village_id).unwrap();
+        life.change_market_stock(
+            site.village_id,
+            ResourceKind::Food,
+            stock.food_reserve + 11.0 - stock.food,
+        )
+        .unwrap();
+        let before = serde_json::to_value(&life).unwrap();
+        assert!(
+            complete(world, &mut life, &mut ledger, &active)
+                .unwrap_err()
+                .contains("reserves")
+        );
+        assert_eq!(serde_json::to_value(&life).unwrap(), before);
+        life.change_market_stock(site.village_id, ResourceKind::Food, 1.0)
+            .unwrap();
+        complete(world, &mut life, &mut ledger, &active).unwrap();
+        assert_eq!(ledger.cargo_total(), CARGO_CAPACITY);
+        assert_eq!(ledger.cargo[0], 18);
+        assert_eq!(ledger.delivery.as_ref().unwrap().amount, 6);
+    }
+
+    #[test]
+    fn harvest_reward_tracks_remaining_real_soil_and_refuses_less_than_one_unit() {
+        let world = world();
+        let (mut site, position) = field();
+        site.kind = WorkKind::HarvestField;
+        let mut life = ripe_life(world);
+        let mut active = start(world, &life, site, position, 0.0).unwrap();
+        let soils: Vec<_> = world.settlements().unwrap().villages[0]
+            .fields
+            .iter()
+            .flat_map(|field| field.plant_positions())
+            .collect();
+        let mut damaged = world.clone();
+        let mut kept = 0;
+        for (index, soil) in soils.iter().enumerate() {
+            if index.is_multiple_of(2) || *soil == active.anchor {
+                kept += 1;
+            } else {
+                damaged.set_block(*soil, Block::Air).unwrap();
+            }
+        }
+        let amount = (12.0 * kept as f32 / soils.len() as f32).floor() as u32;
+        assert!((1..12).contains(&amount));
+        assert!(advance(&damaged, &life, &mut active, position, 6.0).unwrap());
+        assert_eq!(
+            active.progress.offer.reward,
+            WorkReward::Cargo {
+                kind: rubblekin_core::settlement::ResourceKind::Food,
+                amount
+            }
+        );
+        let mut ledger = PlayerEconomy::default();
+        complete(&damaged, &mut life, &mut ledger, &active).unwrap();
+        assert_eq!(ledger.cargo[0], amount);
+        for soil in soils {
+            if soil != active.anchor {
+                damaged.set_block(soil, Block::Air).unwrap();
+            }
+        }
+        let life = ripe_life(&damaged);
+        assert!(
+            start(&damaged, &life, site, position, 0.0)
+                .err()
+                .unwrap()
+                .contains("one unit")
+        );
     }
 
     #[test]

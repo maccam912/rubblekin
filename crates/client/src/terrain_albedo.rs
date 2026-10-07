@@ -176,6 +176,7 @@ fn paint_trees_with_progress(
             | WorldGeneration::GeographyV3
             | WorldGeneration::GeographyV4
             | WorldGeneration::GeographyV5
+            | WorldGeneration::GeographyV6
     );
     for gz in first..=last {
         if (gz - first) % 64 == 0 {
@@ -369,10 +370,13 @@ fn paint_settlements(world: &World, grid: MapGrid, data: &mut [u8]) {
             ],
             [width as f32 * CELL_SIZE, depth as f32 * CELL_SIZE],
             match building.kind {
-                BuildingKind::TimberCabin | BuildingKind::Windmill => [128, 101, 72, 255],
-                BuildingKind::MasonryCottage | BuildingKind::TrailRuin | BuildingKind::Waystone => {
-                    [139, 142, 133, 255]
-                }
+                BuildingKind::TimberCabin
+                | BuildingKind::Windmill
+                | BuildingKind::TrailPavilion => [128, 101, 72, 255],
+                BuildingKind::MasonryCottage
+                | BuildingKind::TrailRuin
+                | BuildingKind::Waystone
+                | BuildingKind::QuarryYard => [139, 142, 133, 255],
                 _ => ROOF_COLOR,
             },
         );
@@ -717,12 +721,16 @@ mod tests {
             WorldGeneration::GeographyV2,
             WorldGeneration::GeographyV1,
             WorldGeneration::GeographyV5,
+            WorldGeneration::GeographyV6,
         ] {
             let world = World::generate(42, generation);
             let geo = world.geography().unwrap();
             let mut data = black_map(TEST_GRID);
             paint_trees(&world, TEST_GRID, &mut data);
-            let kinds = if generation == WorldGeneration::GeographyV5 {
+            let kinds = if matches!(
+                generation,
+                WorldGeneration::GeographyV5 | WorldGeneration::GeographyV6
+            ) {
                 vec![
                     TreeKind::Broadleaf,
                     TreeKind::Conifer,

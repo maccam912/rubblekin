@@ -70,7 +70,7 @@ impl Default for ServerConfig {
             bind_addr: "127.0.0.1:7878".into(),
             save_path: "saves/world.json".into(),
             seed: 42,
-            generation: WorldGeneration::GeographyV5,
+            generation: WorldGeneration::GeographyV6,
             allow_admin: false,
         }
     }
@@ -1131,7 +1131,7 @@ fn send_work_state(
         .map_or_else(PlayerEconomy::default, |saved| saved.ledger.clone());
     let work = WorkState {
         offer: connection.player.as_ref().and_then(|player| {
-            local_work::nearest_offer(&sim.world, &sim.villages, player.body.position)
+            local_work::nearest_offer(&sim.world, &sim.villages, player.body.position, &ledger)
         }),
         active: connection
             .active_work
@@ -1202,13 +1202,16 @@ fn handle_work(
                 if connection.active_work.is_some() {
                     return Err("Finish or cancel your current work first.".into());
                 }
-                connection.active_work = Some(local_work::start(
+                let active = local_work::start(
                     &sim.world,
                     &sim.villages,
                     site,
                     player.body.position,
                     sim.world_time,
-                )?);
+                )?;
+                let ledger = &sim.profiles[connection.profile_id.as_ref().unwrap()].ledger;
+                local_work::check_reward(ledger, active.progress.offer.reward)?;
+                connection.active_work = Some(active);
                 Ok("Stay at the work site for six seconds.".into())
             }
         }

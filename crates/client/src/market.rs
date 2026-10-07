@@ -10,11 +10,13 @@ use bevy::{
 };
 use rubblekin_core::{
     economy::{
-        CARGO_CAPACITY, MarketAction, MarketView, PlayerEconomy, RESOURCES, WorkAction, WorkKind,
-        WorkState, can_reach_market, resource_index,
+        CARGO_CAPACITY, MarketAction, MarketView, PlayerEconomy, RESOURCES, WORK_REACH, WorkAction,
+        WorkKind, WorkOffer, WorkProgress, WorkReward, WorkState, can_reach_market, resource_index,
     },
     protocol::ClientMessage,
     settlement::ResourceKind,
+    village_assets::BuildingKind,
+    world::CELL_SIZE,
 };
 
 use crate::{
@@ -29,7 +31,10 @@ pub(crate) struct MarketPanel {
     pub ledger: Option<PlayerEconomy>,
     market: Option<MarketView>,
     work: WorkState,
-    work_pending: Option<u64>,
+    work_pending: Option<(u64, WorkAction)>,
+    work_version: u64,
+    work_seen_version: u64,
+    work_received_at: f64,
     work_reply_id: u64,
     notice: String,
     quantity: u32,
@@ -50,6 +55,9 @@ impl Default for MarketPanel {
             market: None,
             work: WorkState::default(),
             work_pending: None,
+            work_version: 0,
+            work_seen_version: 0,
+            work_received_at: f64::NEG_INFINITY,
             work_reply_id: 0,
             notice: String::new(),
             quantity: 1,
@@ -118,7 +126,8 @@ impl MarketPanel {
         }
         self.work_reply_id = self.work_reply_id.max(request_id);
         self.work = work;
-        if self.work_pending == Some(request_id) {
+        self.work_version = self.work_version.wrapping_add(1);
+        if self.work_pending.is_some_and(|(id, _)| id == request_id) {
             self.work_pending = None;
             self.notice = if !accepted && notice.is_empty() {
                 "That work is no longer available. Review the latest worksite details.".into()
@@ -135,7 +144,7 @@ impl MarketPanel {
             return None;
         }
         match action {
-            Action::StartWork if self.work.active.is_none() => self
+            Action::StartWork if self.work.active.is_none() && self.pending.is_none() => self
                 .work
                 .offer
                 .as_ref()
@@ -152,8 +161,67 @@ impl MarketPanel {
         }
         let request_id = self.next_request;
         self.next_request = self.next_request.checked_add(1)?;
-        self.work_pending = Some(request_id);
+        self.work_pending = Some((request_id, action));
         Some(ClientMessage::Work { request_id, action })
+    }
+
+    /// Visual motion never begins from a pending Start. An explicit Cancel stops
+    /// that motion immediately while the panel still awaits the canonical result.
+    pub(crate) fn active_work(&self) -> Option<&WorkProgress> {
+        if self
+            .work_pending
+            .is_some_and(|(_, action)| action == WorkAction::Cancel)
+        {
+            return None;
+        }
+        self.work.active.as_ref()
+    }
+
+    fn observe_work_reply(&mut self, now: f64) {
+        if self.work_seen_version != self.work_version {
+            self.work_seen_version = self.work_version;
+            self.work_received_at = now;
+        }
+    }
+
+    pub(crate) fn nearby_work(&self, session: &Session, now: f64) -> Option<&WorkOffer> {
+        if self.open
+            || self.input_blocked
+            || session.inspector
+            || session.observer.is_some()
+            || self.work.active.is_some()
+            || self.pending.is_some()
+            || self
+                .work_pending
+                .is_some_and(|(_, action)| action != WorkAction::View)
+            || !(0.0..=1.5).contains(&(now - self.work_received_at))
+        {
+            return None;
+        }
+        self.work.offer.as_ref().filter(|offer| {
+            offer.unavailable_reason.is_none()
+                && within_work_reach(session.body.position, offer.position)
+        })
+    }
+
+    fn poll_nearby_work(
+        &mut self,
+        session: &Session,
+        world: &VoxelWorld,
+        now: f64,
+    ) -> Option<ClientMessage> {
+        if session.inspector
+            || self.pending.is_some()
+            || self.work_pending.is_some()
+            || self.work.active.is_some()
+            || now - self.last_refresh < 1.
+            || !near_worksite_geometry(world, session.body.position)
+        {
+            return None;
+        }
+        let message = self.work_request(WorkAction::View)?;
+        self.last_refresh = now;
+        Some(message)
     }
 
     fn request(
@@ -351,6 +419,47 @@ pub(crate) fn nearby_market(session: &Session, world: &VoxelWorld) -> Option<u32
         .map(|village| village.id)
 }
 
+fn within_work_reach(position: [f32; 3], target: [f32; 3]) -> bool {
+    position
+        .iter()
+        .chain(target.iter())
+        .all(|value| value.is_finite())
+        && Vec2::new(position[0] - target[0], position[2] - target[2]).length_squared()
+            <= WORK_REACH.powi(2)
+        && (position[1] - target[1]).abs() <= 1.5
+}
+
+/// This only bounds background queries. The server chooses the intact planting
+/// cell or workbench and remains responsible for availability and clear access.
+fn near_worksite_geometry(world: &VoxelWorld, position: [f32; 3]) -> bool {
+    let near = |origin: rubblekin_core::world::BlockPos, width: i32, depth: i32| {
+        let min = Vec2::new(origin.x as f32, origin.z as f32) * CELL_SIZE;
+        let max = min + Vec2::new(width as f32, depth as f32) * CELL_SIZE;
+        let point = Vec2::new(position[0], position[2]);
+        let closest = point.clamp(min, max);
+        within_work_reach(
+            position,
+            [closest.x, (origin.y + 1) as f32 * CELL_SIZE, closest.y],
+        )
+    };
+    world.0.settlements().is_some_and(|plan| {
+        plan.villages.iter().any(|village| {
+            village
+                .fields
+                .iter()
+                .any(|field| near(field.origin, field.width, field.depth))
+                || village
+                    .buildings
+                    .iter()
+                    .filter(|building| building.kind == BuildingKind::Workshop)
+                    .any(|building| {
+                        let [width, _, depth] = building.dimensions();
+                        near(building.origin, width, depth)
+                    })
+        })
+    })
+}
+
 fn village_name(world: &VoxelWorld, id: u32) -> String {
     world
         .0
@@ -518,6 +627,7 @@ pub(crate) fn read(
     let (keys, wheel, time) = input;
     let (pause, console, map, pilot) = modals;
     let (mut fingers, touches) = touch_input;
+    panel.observe_work_reply(time.elapsed_secs_f64());
     let was_open = panel.open;
     panel.just_closed = false;
     panel.input_blocked = was_open;
@@ -529,6 +639,8 @@ pub(crate) fn read(
     }
     let events: Vec<_> = fingers.read().copied().collect();
     if session.observer.is_some() || connection.error.is_some() {
+        panel.work = WorkState::default();
+        panel.work_pending = None;
         if was_open {
             panel.close();
         }
@@ -562,6 +674,10 @@ pub(crate) fn read(
                 scroll.0 = Vec2::ZERO;
             }
         } else {
+            if let Some(message) = panel.poll_nearby_work(&session, &world, time.elapsed_secs_f64())
+            {
+                connection.send(message);
+            }
             return;
         }
     }
@@ -683,6 +799,7 @@ pub(crate) fn read(
         }
     }
     if panel.pending.is_none()
+        && panel.work_pending.is_none()
         && (time.elapsed_secs_f64() - panel.last_refresh >= 1.
             || panel
                 .market
@@ -708,14 +825,26 @@ fn wallet(panel: &MarketPanel) -> String {
     )
 }
 
+fn reward_text(reward: WorkReward) -> String {
+    match reward {
+        WorkReward::Coins(coins) => format!("{coins} coins"),
+        WorkReward::Cargo { kind, amount } => format!("{amount} {}", kind.name()),
+    }
+}
+
 fn work_text(panel: &MarketPanel, session: &Session) -> String {
     if let Some(active) = &panel.work.active {
         return format!(
-            "WORKING · {}\n{:.1} / {:.0} seconds · {} coins on completion\nStay here to finish. Moving away cancels the work.",
+            "WORKING · {}\n{:.1} / {:.0} seconds · {} on completion\n{}Stay here to finish. Moving away cancels the work.",
             active.offer.label,
             active.elapsed_seconds,
             active.offer.duration_seconds,
-            active.offer.reward
+            reward_text(active.offer.reward),
+            if matches!(active.offer.reward, WorkReward::Cargo { .. }) {
+                "Sell the harvested cargo at a village market to earn coins.\n"
+            } else {
+                ""
+            }
         );
     }
     let Some(offer) = &panel.work.offer else {
@@ -728,15 +857,18 @@ fn work_text(panel: &MarketPanel, session: &Session) -> String {
     .length();
     let task = match offer.site.kind {
         WorkKind::TendField => "Plant and tend the village's real crops.",
+        WorkKind::HarvestField => {
+            "Gather ripe Food into your cargo. Sell it at a village market to earn coins; village food reserves stay protected."
+        }
         WorkKind::WorkshopMaintenance => {
             "Use 1 Timber and 1 Stone from village supplies above its reserves."
         }
     };
     format!(
-        "LOCAL WORK · {} · {:.0} m\n{} coins · {:.0} seconds · {}\n{}",
+        "LOCAL WORK · {} · {:.0} m\n{} · {:.0} seconds · {}\n{}",
         offer.label,
         distance,
-        offer.reward,
+        reward_text(offer.reward),
         offer.duration_seconds,
         task,
         offer
@@ -784,6 +916,7 @@ pub(crate) fn hud_text(
     session: &Session,
     world: &VoxelWorld,
     touch: bool,
+    now: f64,
 ) -> String {
     if session.observer.is_some() {
         return String::new();
@@ -813,11 +946,30 @@ pub(crate) fn hud_text(
     } else if let Some(id) = nearby_market(session, world) {
         text.push_str(&format!(" · {} market", village_name(world, id)));
     }
-    text.push_str(if touch {
-        " · Cargo"
+    if let Some(offer) = panel.nearby_work(session, now) {
+        let activity = match offer.site.kind {
+            WorkKind::TendField => "Tend field",
+            WorkKind::HarvestField => "Harvest field",
+            WorkKind::WorkshopMaintenance => "Workshop maintenance",
+        };
+        text.push_str(&format!(
+            "\n{}: {} · {}{}",
+            if touch { "Work" } else { "B" },
+            activity,
+            reward_text(offer.reward),
+            if matches!(offer.reward, WorkReward::Cargo { .. }) {
+                " · Sell at a market"
+            } else {
+                ""
+            }
+        ));
     } else {
-        " · B: cargo & work"
-    });
+        text.push_str(if touch {
+            " · Cargo"
+        } else {
+            " · B: cargo & work"
+        });
+    }
     text
 }
 
@@ -1027,7 +1179,7 @@ mod tests {
             },
             position: [0., 0., 0.],
             label: "Willowmead · Tend field".into(),
-            reward: 2,
+            reward: WorkReward::Coins(2),
             duration_seconds: 6.,
             unavailable_reason: None,
         }
@@ -1050,6 +1202,10 @@ mod tests {
             panic!()
         };
         assert!(panel.work.active.is_none());
+        assert!(
+            panel.active_work().is_none(),
+            "A pending start has no animation"
+        );
         assert!(panel.work_action(Action::StartWork).is_none());
         assert!(panel.work_request(WorkAction::Cancel).is_none());
         assert_eq!(panel.ledger.as_ref(), Some(&ledger));
@@ -1075,6 +1231,10 @@ mod tests {
         assert!(cancel > start);
         panel.close();
         assert!(panel.work.active.is_some(), "Cancel is not predicted");
+        assert!(
+            panel.active_work().is_none(),
+            "An explicit cancel stops motion immediately"
+        );
         panel.work_reply(
             cancel,
             work.clone(),
@@ -1104,12 +1264,89 @@ mod tests {
     }
 
     #[test]
+    fn harvest_rewards_describe_real_cargo_and_wait_for_the_final_ledger() {
+        let (mut app, _, _, _peer) = app();
+        app.world_mut().resource_mut::<Session>().inspector = false;
+        let mut offer = work_offer();
+        offer.site.kind = WorkKind::HarvestField;
+        offer.label = "Willowmead · Harvest field".into();
+        offer.position = app.world().resource::<Session>().body.position;
+        offer.reward = WorkReward::Cargo {
+            kind: ResourceKind::Food,
+            amount: 12,
+        };
+        let mut panel = MarketPanel::default();
+        panel.work_reply(
+            0,
+            WorkState {
+                offer: Some(offer.clone()),
+                active: None,
+            },
+            PlayerEconomy::default(),
+            String::new(),
+            true,
+        );
+        panel.observe_work_reply(0.);
+        let session = app.world().resource::<Session>();
+        let text = work_text(&panel, session);
+        assert!(text.contains("12 Food") && text.contains("Sell it at a village market"));
+        assert!(!text.contains("12 coins"));
+        assert!(
+            hud_text(
+                &panel,
+                session,
+                app.world().resource::<VoxelWorld>(),
+                true,
+                0.
+            )
+            .contains("Work: Harvest field · 12 Food · Sell at a market")
+        );
+        assert_eq!(panel.ledger.as_ref().unwrap().cargo_total(), 0);
+        // Remote soil changes can reduce the server's actual, still prospective yield.
+        offer.reward = WorkReward::Cargo {
+            kind: ResourceKind::Food,
+            amount: 6,
+        };
+        panel.work_reply(
+            0,
+            WorkState {
+                offer: Some(offer.clone()),
+                active: Some(WorkProgress {
+                    offer,
+                    elapsed_seconds: 3.,
+                }),
+            },
+            PlayerEconomy::default(),
+            String::new(),
+            true,
+        );
+        let text = work_text(&panel, session);
+        assert!(text.contains("6 Food on completion") && text.contains("Sell the harvested cargo"));
+        assert_eq!(panel.ledger.as_ref().unwrap().cargo_total(), 0);
+        let mut final_ledger = PlayerEconomy {
+            revision: 1,
+            ..default()
+        };
+        final_ledger.cargo[resource_index(ResourceKind::Food)] = 6;
+        panel.work_reply(
+            0,
+            WorkState::default(),
+            final_ledger,
+            "Harvested 6 Food. Sell it at a market.".into(),
+            true,
+        );
+        assert_eq!(panel.ledger.as_ref().unwrap().cargo_total(), 6);
+        assert_eq!(panel.ledger.as_ref().unwrap().coins, 0);
+        assert!(panel.active_work().is_none());
+    }
+
+    #[test]
     fn work_availability_uses_the_server_reason_without_implying_payment() {
         let (mut app, _, _, _peer) = app();
         let mut offer = work_offer();
         offer.site.kind = WorkKind::WorkshopMaintenance;
         offer.label = "Willowmead · Workshop maintenance".into();
-        offer.reward = 4;
+        offer.reward = WorkReward::Coins(4);
         offer.unavailable_reason = Some("Village supplies are reserved.".into());
         app.world_mut().resource_mut::<MarketPanel>().work.offer = Some(offer.clone());
         let panel = app.world().resource::<MarketPanel>();
@@ -1557,7 +1794,10 @@ mod tests {
         );
         app.world_mut().run_schedule(Update); // Same Enter frame cannot enqueue a duplicate.
         assert_eq!(
-            app.world().resource::<MarketPanel>().work_pending,
+            app.world()
+                .resource::<MarketPanel>()
+                .work_pending
+                .map(|(id, _)| id),
             Some(request_id)
         );
         assert!(app.world().resource::<MarketPanel>().work.active.is_none());
@@ -1601,6 +1841,177 @@ mod tests {
             }
         ));
         assert!(app.world().resource::<MarketPanel>().work.active.is_some());
+    }
+
+    #[test]
+    fn nearby_work_discovery_polls_real_sites_and_does_not_compete_with_opening_cargo() {
+        use rubblekin_core::world::{World, WorldGeneration};
+        use std::io::BufRead;
+        let (mut app, _, _, peer) = app();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let mut reader = std::io::BufReader::new(peer);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let world = VoxelWorld(World::generate(42, WorldGeneration::GeographyV5));
+        let village = &world.0.settlements().unwrap().villages[0];
+        let soil = village.fields[0].plant_positions().next().unwrap();
+        let position = [
+            (soil.x as f32 + 0.5) * CELL_SIZE,
+            (soil.y + 1) as f32 * CELL_SIZE,
+            (soil.z as f32 + 0.5) * CELL_SIZE,
+        ];
+        assert!(near_worksite_geometry(&world, position));
+        assert!(!near_worksite_geometry(&world, [16000., 1000., 16000.]));
+        let mut offer = work_offer();
+        offer.position = position;
+        offer.site.village_id = village.id;
+        app.insert_resource(world);
+        app.world_mut().resource_mut::<MarketPanel>().clear();
+        app.world_mut().resource_mut::<Session>().body.position = position;
+        app.world_mut().resource_mut::<Session>().inspector = true;
+        app.update();
+        assert!(app.world().resource::<MarketPanel>().work_pending.is_none());
+        app.world_mut().resource_mut::<Session>().inspector = false;
+        app.world_mut()
+            .resource_mut::<crate::world_map::WorldMap>()
+            .open = true;
+        app.update();
+        assert!(app.world().resource::<MarketPanel>().work_pending.is_none());
+        app.world_mut()
+            .resource_mut::<crate::world_map::WorldMap>()
+            .open = false;
+        app.update();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let ClientMessage::Work {
+            request_id: first,
+            action: WorkAction::View,
+        } = serde_json::from_str(&line).unwrap()
+        else {
+            panic!("{line}")
+        };
+        let work = WorkState {
+            offer: Some(offer.clone()),
+            active: None,
+        };
+        app.world_mut().resource_mut::<MarketPanel>().work_reply(
+            first,
+            work.clone(),
+            PlayerEconomy::default(),
+            String::new(),
+            true,
+        );
+        app.update();
+        let panel = app.world().resource::<MarketPanel>();
+        let session = app.world().resource::<Session>();
+        assert!(panel.nearby_work(session, 0.).is_some());
+        assert!(
+            hud_text(
+                panel,
+                session,
+                app.world().resource::<VoxelWorld>(),
+                false,
+                0.
+            )
+            .contains("B: Tend field · 2 coins")
+        );
+        assert!(
+            hud_text(
+                panel,
+                session,
+                app.world().resource::<VoxelWorld>(),
+                true,
+                0.
+            )
+            .contains("Work: Tend field · 2 coins")
+        );
+        assert!(
+            panel.nearby_work(session, 1.6).is_none(),
+            "Eligibility expires without a fresh reply"
+        );
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(500));
+        app.update();
+        assert!(app.world().resource::<MarketPanel>().work_pending.is_none());
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_millis(600));
+        app.update();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let ClientMessage::Work {
+            request_id: second,
+            action: WorkAction::View,
+        } = serde_json::from_str(&line).unwrap()
+        else {
+            panic!("{line}")
+        };
+        assert!(second > first);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyB);
+        app.world_mut().run_schedule(Update);
+        assert!(app.world().resource::<MarketPanel>().open);
+        assert!(
+            app.world().resource::<MarketPanel>().pending.is_none(),
+            "Wait for the pending discovery reply before a Market View"
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.world_mut().resource_mut::<MarketPanel>().work_reply(
+            second,
+            work,
+            PlayerEconomy::default(),
+            String::new(),
+            true,
+        );
+        app.world_mut().run_schedule(Update);
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<ClientMessage>(&line).unwrap(),
+            ClientMessage::Market {
+                action: MarketAction::View,
+                ..
+            }
+        ));
+        let panel = app.world().resource::<MarketPanel>();
+        assert!(panel.work_pending.is_none());
+        assert!(
+            panel
+                .nearby_work(app.world().resource::<Session>(), 1.1)
+                .is_none(),
+            "Open panels own their own hints"
+        );
+        app.world_mut().resource_mut::<MarketPanel>().open = false;
+        app.world_mut().resource_mut::<MarketPanel>().input_blocked = false;
+        app.world_mut().resource_mut::<Session>().body.position[0] += WORK_REACH + 1.;
+        assert!(
+            app.world()
+                .resource::<MarketPanel>()
+                .nearby_work(app.world().resource::<Session>(), 1.1)
+                .is_none()
+        );
+        app.world_mut().resource_mut::<Session>().body.position = position;
+        app.world_mut()
+            .resource_mut::<MarketPanel>()
+            .work
+            .offer
+            .as_mut()
+            .unwrap()
+            .unavailable_reason = Some("The path is blocked.".into());
+        assert!(
+            app.world()
+                .resource::<MarketPanel>()
+                .nearby_work(app.world().resource::<Session>(), 1.1)
+                .is_none()
+        );
+        app.world_mut().resource_mut::<Connection>().error = Some("Disconnected".into());
+        app.world_mut().run_schedule(Update);
+        assert!(app.world().resource::<MarketPanel>().work.offer.is_none());
     }
 
     #[test]

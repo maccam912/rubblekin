@@ -31,13 +31,14 @@ pub enum WorldGeneration {
     GeographyV3,
     GeographyV4,
     GeographyV5,
+    GeographyV6,
 }
 
 impl WorldGeneration {
     pub const fn has_settlements(self) -> bool {
         matches!(
             self,
-            Self::GeographyV3 | Self::GeographyV4 | Self::GeographyV5
+            Self::GeographyV3 | Self::GeographyV4 | Self::GeographyV5 | Self::GeographyV6
         )
     }
 }
@@ -316,7 +317,11 @@ impl World {
             // New scenery must not rescore timber catchments and move towns.
             // A private V4 view keeps original settlement decisions and caches
             // separate from the V5 trees used by the finished world.
-            let planning_world = (generation == WorldGeneration::GeographyV5).then(|| Self {
+            let planning_world = (matches!(
+                generation,
+                WorldGeneration::GeographyV5 | WorldGeneration::GeographyV6
+            ))
+            .then(|| Self {
                 generation: WorldGeneration::GeographyV4,
                 geographic_columns: Arc::new(RwLock::new(HashMap::new())),
                 ..world.clone()
@@ -324,12 +329,20 @@ impl World {
             let mut plan = SettlementPlan::generate(planning_world.as_ref().unwrap_or(&world));
             if matches!(
                 generation,
-                WorldGeneration::GeographyV4 | WorldGeneration::GeographyV5
+                WorldGeneration::GeographyV4
+                    | WorldGeneration::GeographyV5
+                    | WorldGeneration::GeographyV6
             ) {
                 plan.add_regional_buildings(&world);
             }
-            if generation == WorldGeneration::GeographyV5 {
+            if matches!(
+                generation,
+                WorldGeneration::GeographyV5 | WorldGeneration::GeographyV6
+            ) {
                 plan.add_roadside_landmarks(&world);
+            }
+            if generation == WorldGeneration::GeographyV6 {
+                plan.add_roadside_workyards(&world);
             }
             world.settlements = Some(Arc::new(plan));
         }
@@ -885,7 +898,10 @@ impl World {
         let dz = z - tree_z;
         if !cleared
             && dx * dx + dz * dz
-                <= if self.generation == WorldGeneration::GeographyV5 {
+                <= if matches!(
+                    self.generation,
+                    WorldGeneration::GeographyV5 | WorldGeneration::GeographyV6
+                ) {
                     30
                 } else {
                     24
@@ -937,7 +953,10 @@ impl World {
             plan.clears_tree(
                 tree_mx,
                 tree_mz,
-                if self.generation == WorldGeneration::GeographyV5 {
+                if matches!(
+                    self.generation,
+                    WorldGeneration::GeographyV5 | WorldGeneration::GeographyV6
+                ) {
                     3.0
                 } else {
                     2.5
@@ -953,6 +972,7 @@ impl World {
                 | WorldGeneration::GeographyV3
                 | WorldGeneration::GeographyV4
                 | WorldGeneration::GeographyV5
+                | WorldGeneration::GeographyV6
         );
         let (density, kind) = match sample.biome {
             Biome::Forest => (75, TreeKind::Broadleaf),
@@ -983,7 +1003,10 @@ impl World {
         if !gentle_slope {
             return None;
         }
-        let kind = if self.generation == WorldGeneration::GeographyV5 {
+        let kind = if matches!(
+            self.generation,
+            WorldGeneration::GeographyV5 | WorldGeneration::GeographyV6
+        ) {
             match (sample.biome, (tree_hash >> 24) % 3) {
                 (Biome::Forest, 0) => TreeKind::Aspen,
                 (Biome::PineForest, 0) => TreeKind::Cedar,
@@ -1249,54 +1272,58 @@ mod tests {
 
     #[test]
     fn v5_tree_species_share_exact_editable_crowns_and_keep_tree_anchors() {
-        let world = World::generate(42, WorldGeneration::GeographyV5);
-        let previous = World::generate(42, WorldGeneration::GeographyV4);
-        let mut found = [false; 6];
-        for gx in (-1_100..1_100).step_by(7) {
-            for gz in (-1_100..1_100).step_by(7) {
-                let Some(tree) = world.tree_at(gx, gz) else {
-                    continue;
-                };
-                let index = tree.kind as usize;
-                if found[index] {
-                    continue;
-                }
-                let old = previous
-                    .tree_at(gx, gz)
-                    .expect("V5 reserves more space, never moves tree anchors");
-                assert_eq!(tree.base, old.base);
-                assert!(tree.crown_radius <= 5);
-                for dx in -6..=6 {
-                    for dz in -6..=6 {
-                        let leaves = tree.leaf_bounds(dx, dz);
-                        if let Some((low, high)) = leaves {
-                            assert!(dx.abs() <= tree.crown_radius && dz.abs() <= tree.crown_radius);
-                            for y in low..=high {
-                                let block = world.block(BlockPos::new(
-                                    tree.base.x + dx,
-                                    y,
-                                    tree.base.z + dz,
-                                ));
+        for generation in [WorldGeneration::GeographyV5, WorldGeneration::GeographyV6] {
+            let world = World::generate(42, generation);
+            let previous = World::generate(42, WorldGeneration::GeographyV4);
+            let mut found = [false; 6];
+            for gx in (-1_100..1_100).step_by(7) {
+                for gz in (-1_100..1_100).step_by(7) {
+                    let Some(tree) = world.tree_at(gx, gz) else {
+                        continue;
+                    };
+                    let index = tree.kind as usize;
+                    if found[index] {
+                        continue;
+                    }
+                    let old = previous
+                        .tree_at(gx, gz)
+                        .expect("V5 reserves more space, never moves tree anchors");
+                    assert_eq!(tree.base, old.base);
+                    assert!(tree.crown_radius <= 5);
+                    for dx in -6..=6 {
+                        for dz in -6..=6 {
+                            let leaves = tree.leaf_bounds(dx, dz);
+                            if let Some((low, high)) = leaves {
                                 assert!(
-                                    block == Block::Leaves
-                                        || (dx == 0
-                                            && dz == 0
-                                            && y <= tree.crown_y()
-                                            && block == Block::Wood),
-                                    "{:?} crown differs at {dx},{y},{dz}: {block:?}",
-                                    tree.kind
+                                    dx.abs() <= tree.crown_radius && dz.abs() <= tree.crown_radius
                                 );
+                                for y in low..=high {
+                                    let block = world.block(BlockPos::new(
+                                        tree.base.x + dx,
+                                        y,
+                                        tree.base.z + dz,
+                                    ));
+                                    assert!(
+                                        block == Block::Leaves
+                                            || (dx == 0
+                                                && dz == 0
+                                                && y <= tree.crown_y()
+                                                && block == Block::Wood),
+                                        "{:?} crown differs at {dx},{y},{dz}: {block:?}",
+                                        tree.kind
+                                    );
+                                }
                             }
                         }
                     }
+                    found[index] = true;
                 }
-                found[index] = true;
             }
+            assert!(
+                found.into_iter().all(|yes| yes),
+                "seed42 misses a tree species: {found:?}"
+            );
         }
-        assert!(
-            found.into_iter().all(|yes| yes),
-            "seed42 misses a tree species: {found:?}"
-        );
     }
 
     #[test]

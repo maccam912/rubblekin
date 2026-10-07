@@ -653,6 +653,7 @@ pub fn setup(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn refresh(
     window: Single<&Window, With<PrimaryWindow>>,
+    time: Res<Time>,
     controls: Res<TouchControls>,
     session: Res<Session>,
     world: Res<crate::VoxelWorld>,
@@ -712,6 +713,14 @@ pub fn refresh(
                 for child in children.iter() {
                     if let Ok((mut text, mut font)) = labels.get_mut(child) {
                         if button.0 == Action::Market
+                            && market.as_ref().is_some_and(|panel| {
+                                panel
+                                    .nearby_work(&session, time.elapsed_secs_f64())
+                                    .is_some()
+                            })
+                        {
+                            text.0 = "Work".into();
+                        } else if button.0 == Action::Market
                             && crate::market::nearby_market(&session, &world).is_some()
                         {
                             text.0 = "Market".into();

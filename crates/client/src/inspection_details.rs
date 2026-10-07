@@ -222,6 +222,8 @@ fn building_name(kind: BuildingKind) -> &'static str {
         BuildingKind::Lookout => "Lookout",
         BuildingKind::TrailRuin => "Trail ruin",
         BuildingKind::Waystone => "Waystone",
+        BuildingKind::TrailPavilion => "Trail shelter",
+        BuildingKind::QuarryYard => "Quarry workyard",
     }
 }
 
@@ -249,6 +251,12 @@ fn building_description(kind: BuildingKind) -> &'static str {
         }
         BuildingKind::Waystone => {
             "A banded stone marker stands beside the trail, with room to stop and look around."
+        }
+        BuildingKind::TrailPavilion => {
+            "An open timber roof shelters a resting place beside the trail."
+        }
+        BuildingKind::QuarryYard => {
+            "A stone cutting terrace and workyard stand near a natural stone deposit."
         }
     }
 }
@@ -295,7 +303,7 @@ fn farm_text(world: &GameWorld, session: &Session, id: u32, index: usize) -> Str
         value.push_str("\n\nSome plant soil was removed or replaced.");
     }
     if intact > 0 && session.observer.is_none() {
-        value.push_str("\n\nStand beside the field and open B or Cargo to find crop-tending work.");
+        value.push_str("\n\nStand beside the field and open B or Cargo to tend crops or harvest surplus food for market sale.");
     }
     value
 }
@@ -367,7 +375,7 @@ mod tests {
     #[test]
     fn roadside_places_and_regional_trees_describe_actual_cells_and_removed_targets() {
         let (_, mut session) = session();
-        let mut world = GameWorld::generate(42, WorldGeneration::GeographyV5);
+        let mut world = GameWorld::generate(42, WorldGeneration::GeographyV6);
         let buildings: Vec<_> = world
             .settlements()
             .unwrap()
@@ -377,6 +385,10 @@ mod tests {
             .collect();
         assert!(buildings.iter().any(|b| b.kind == BuildingKind::TrailRuin));
         assert!(buildings.iter().any(|b| b.kind == BuildingKind::Waystone));
+        assert!(buildings.iter().any(|b| matches!(
+            b.kind,
+            BuildingKind::TrailPavilion | BuildingKind::QuarryYard
+        )));
         for building in &buildings {
             session.inspected = Some(InspectTarget::Block(building.origin));
             let details = text(&world, &session);

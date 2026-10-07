@@ -3,6 +3,14 @@ use super::*;
 
 impl SettlementPlan {
     pub(crate) fn add_roadside_landmarks(&mut self, world: &World) {
+        self.add_trail_sites(world, false);
+    }
+
+    pub(crate) fn add_roadside_workyards(&mut self, world: &World) {
+        self.add_trail_sites(world, true);
+    }
+
+    fn add_trail_sites(&mut self, world: &World, new_places: bool) {
         let g = world
             .geography()
             .expect("roadside landmarks require geography");
@@ -13,8 +21,13 @@ impl SettlementPlan {
                 .map(|p| distance2(p[0][0], p[0][2], p[1][0], p[1][2]).sqrt())
                 .sum();
             let mut accepted = 0;
-            for fraction in [0.35, 0.65, 0.5, 0.25, 0.75] {
-                if accepted == 2 {
+            let fractions = if new_places {
+                [0.2, 0.8, 0.45, 0.55, 0.9]
+            } else {
+                [0.35, 0.65, 0.5, 0.25, 0.75]
+            };
+            for fraction in fractions {
+                if accepted == if new_places { 1 } else { 2 } {
                     break;
                 }
                 let mut travelled = 0.0;
@@ -35,12 +48,23 @@ impl SettlementPlan {
                 let dx = segment[1][0] - segment[0][0];
                 let dz = segment[1][2] - segment[0][2];
                 let run = dx.hypot(dz).max(0.01);
-                let kind = if (trail_index + accepted + world.seed as usize).is_multiple_of(2) {
+                let kind = if new_places {
+                    if (trail_index + world.seed as usize).is_multiple_of(2) {
+                        BuildingKind::TrailPavilion
+                    } else {
+                        BuildingKind::QuarryYard
+                    }
+                } else if (trail_index + accepted + world.seed as usize).is_multiple_of(2) {
                     BuildingKind::TrailRuin
                 } else {
                     BuildingKind::Waystone
                 };
-                for side in [20.0, -20.0, 28.0, -28.0] {
+                let sides = if new_places {
+                    [24.0, -24.0, 32.0, -32.0]
+                } else {
+                    [20.0, -20.0, 28.0, -28.0]
+                };
+                for side in sides {
                     let center = [anchor[0] - dz / run * side, anchor[2] + dx / run * side];
                     if self.villages.iter().any(|v| {
                         distance2(center[0], center[1], v.center[0], v.center[2])
@@ -54,10 +78,24 @@ impl SettlementPlan {
                     }) {
                         continue;
                     }
+                    if kind == BuildingKind::QuarryYard
+                        && !self.resources.iter().any(|deposit| {
+                            deposit.kind == ResourceKind::Stone
+                                && distance2(
+                                    center[0],
+                                    center[1],
+                                    deposit.center[0],
+                                    deposit.center[2],
+                                ) < 450.0_f32.powi(2)
+                        })
+                    {
+                        continue;
+                    }
                     if self.trails.iter().any(|t| {
-                        t.points
-                            .windows(2)
-                            .any(|p| segment_distance(center[0], center[1], p[0], p[1]).0 < 12.0)
+                        t.points.windows(2).any(|p| {
+                            segment_distance(center[0], center[1], p[0], p[1]).0
+                                < if new_places { 16.0 } else { 12.0 }
+                        })
                     }) {
                         continue;
                     }
@@ -157,20 +195,84 @@ mod tests {
 
     #[test]
     fn roadside_sites_are_bounded_clear_and_walkable_without_changing_transit() {
+        verify_roadside(
+            WorldGeneration::GeographyV5,
+            WorldGeneration::GeographyV4,
+            2,
+        );
+    }
+
+    #[test]
+    fn v6_pavilions_and_quarries_are_walkable_without_moving_v5_places() {
+        verify_roadside(
+            WorldGeneration::GeographyV6,
+            WorldGeneration::GeographyV5,
+            3,
+        );
+    }
+
+    fn verify_roadside(
+        generation: WorldGeneration,
+        old_generation: WorldGeneration,
+        max_per_trail: usize,
+    ) {
         for seed in [42, 7, 99] {
-            let world = World::generate(seed, WorldGeneration::GeographyV5);
-            let previous = World::generate(seed, WorldGeneration::GeographyV4);
+            let world = World::generate(seed, generation);
+            let previous = World::generate(seed, old_generation);
             let plan = world.settlements().unwrap();
             let old = previous.settlements().unwrap();
             assert!(
                 plan.villages == old.villages,
-                "seed{seed}: V5 moved or rescored existing villages"
+                "seed{seed}: {generation:?} moved or rescored existing villages"
             );
             assert!(
                 plan.trails == old.trails,
-                "seed{seed}: V5 changed transit trails"
+                "seed{seed}: {generation:?} changed transit trails"
             );
-            assert!((4..=plan.trails.len() * 2).contains(&plan.roadside_landmarks.len()));
+            assert!(
+                (4..=plan.trails.len() * max_per_trail).contains(&plan.roadside_landmarks.len())
+            );
+            assert_eq!(plan.resources, old.resources);
+            assert_eq!(
+                &plan.roadside_landmarks[..old.roadside_landmarks.len()],
+                old.roadside_landmarks
+            );
+            if generation == WorldGeneration::GeographyV6 {
+                let new_sites = &plan.roadside_landmarks[old.roadside_landmarks.len()..];
+                assert!(
+                    new_sites
+                        .iter()
+                        .any(|s| s.building.kind == BuildingKind::TrailPavilion),
+                    "seed{seed}: no pavilion"
+                );
+                assert!(
+                    new_sites
+                        .iter()
+                        .any(|s| s.building.kind == BuildingKind::QuarryYard),
+                    "seed{seed}: no quarry"
+                );
+                eprintln!(
+                    "seed{seed}: {} V5 sites + {} new V6 sites",
+                    old.roadside_landmarks.len(),
+                    new_sites.len()
+                );
+                for site in &old.roadside_landmarks {
+                    let b = &site.building;
+                    let [w, h, d] = b.dimensions();
+                    for x in b.origin.x..b.origin.x + w {
+                        for z in b.origin.z..b.origin.z + d {
+                            for y in b.origin.y..b.origin.y + h {
+                                let pos = BlockPos::new(x, y, z);
+                                assert_eq!(
+                                    world.block(pos),
+                                    previous.block(pos),
+                                    "seed{seed}: altered V5 site at {pos:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             crate::airships::AirshipNetwork::try_new(&world).unwrap();
             for site in &plan.roadside_landmarks {
                 let b = &site.building;
@@ -242,9 +344,25 @@ mod tests {
                     ]
                 };
                 walk(&world, &mut body, local(w * 0.5 + 0.5, 3.0));
-                if b.kind == BuildingKind::TrailRuin {
+                if matches!(
+                    b.kind,
+                    BuildingKind::TrailRuin | BuildingKind::TrailPavilion
+                ) {
                     walk(&world, &mut body, local(w * 0.5 + 0.5, d - 2.5));
                     walk(&world, &mut body, local(w * 0.5 + 0.5, 3.0));
+                }
+                if b.kind == BuildingKind::QuarryYard {
+                    assert!(plan.resources.iter().any(|deposit| deposit.kind
+                        == ResourceKind::Stone
+                        && distance2(center[0], center[1], deposit.center[0], deposit.center[2])
+                            < 450.0_f32.powi(2)));
+                    for z in [14.5, 16.5, 18.5, 20.5, 22.5, 20.5, 18.5, 16.5, 14.5, 3.0] {
+                        let mut target = local(w * 0.5 + 0.5, z);
+                        if z >= 16.0 {
+                            target[1] += (1.0 + ((z - 16.0) / 2.0).floor()) * CELL_SIZE;
+                        }
+                        walk(&world, &mut body, target);
+                    }
                 }
                 walk(&world, &mut body, entry);
                 for &p in site.approach.points.iter().rev() {
@@ -256,14 +374,15 @@ mod tests {
 
     #[test]
     fn roadside_landmarks_are_reproduced_before_saved_edits() {
-        let mut world = World::generate(42, WorldGeneration::GeographyV5);
-        let position = world.settlements().unwrap().roadside_landmarks[0]
-            .building
-            .origin;
-        world.set_block(position, Block::Air).unwrap();
-        let restored =
-            World::from_generation_edits(42, WorldGeneration::GeographyV5, &world.edits()).unwrap();
-        assert_eq!(restored.settlements(), world.settlements());
-        assert_eq!(restored.block(position), Block::Air);
+        for generation in [WorldGeneration::GeographyV5, WorldGeneration::GeographyV6] {
+            let mut world = World::generate(42, generation);
+            let position = world.settlements().unwrap().roadside_landmarks[0]
+                .building
+                .origin;
+            world.set_block(position, Block::Air).unwrap();
+            let restored = World::from_generation_edits(42, generation, &world.edits()).unwrap();
+            assert_eq!(restored.settlements(), world.settlements());
+            assert_eq!(restored.block(position), Block::Air);
+        }
     }
 }

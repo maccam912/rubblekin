@@ -101,6 +101,13 @@ pub enum MarketAction {
 pub enum WorkKind {
     TendField,
     WorkshopMaintenance,
+    HarvestField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkReward {
+    Coins(u64),
+    Cargo { kind: ResourceKind, amount: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,7 +122,7 @@ pub struct WorkOffer {
     pub site: WorkSite,
     pub position: [f32; 3],
     pub label: String,
-    pub reward: u64,
+    pub reward: WorkReward,
     pub duration_seconds: f32,
     pub unavailable_reason: Option<String>,
 }

@@ -5,6 +5,7 @@ use rubblekin_core::{
         AIRSHIP_DWELL_SECONDS, AIRSHIP_TURN_SECONDS, AirshipNetwork, AirshipRide,
         MAX_AIRSHIP_SEATS, deck_position, initial_deck_position, ride_position,
     },
+    economy::{WorkKind, WorkReward},
     physics::{
         Body, MoveInput, character_position_is_clear, move_character_with_airships,
         move_character_with_obstacles, resolve_character_overlaps,
@@ -277,9 +278,8 @@ impl VillageLife {
     pub(crate) fn local_work_available(
         &self,
         village_id: u32,
-        kind: rubblekin_core::economy::WorkKind,
+        kind: WorkKind,
     ) -> Result<(), String> {
-        use rubblekin_core::economy::WorkKind;
         let economy = self
             .villages
             .iter()
@@ -287,7 +287,15 @@ impl VillageLife {
             .ok_or("That village is unavailable.")?;
         match kind {
             WorkKind::TendField if economy.planted && economy.snapshot.crop_growth >= 1.0 => {
-                Err("These crops are ready for the farmers to harvest.".into())
+                Err("These crops are ready to harvest.".into())
+            }
+            WorkKind::HarvestField if !economy.planted || economy.snapshot.crop_growth < 1.0 => {
+                Err("These crops are not ready to harvest.".into())
+            }
+            WorkKind::HarvestField
+                if economy.snapshot.food < economy.snapshot.food_reserve + 12.0 =>
+            {
+                Err("The village needs this harvest for its food reserves.".into())
             }
             WorkKind::WorkshopMaintenance
                 if economy.snapshot.timber < 9.0 || economy.snapshot.stone < 9.0 =>
@@ -298,14 +306,43 @@ impl VillageLife {
         }
     }
 
+    pub(crate) fn local_work_reward(
+        &self,
+        world: &World,
+        village_id: u32,
+        kind: WorkKind,
+    ) -> Result<WorkReward, String> {
+        Ok(match kind {
+            WorkKind::TendField => WorkReward::Coins(2),
+            WorkKind::WorkshopMaintenance => WorkReward::Coins(4),
+            WorkKind::HarvestField => {
+                let village = world
+                    .settlements()
+                    .and_then(|plan| {
+                        plan.villages
+                            .iter()
+                            .find(|village| village.id == village_id)
+                    })
+                    .ok_or("That village is unavailable.")?;
+                WorkReward::Cargo {
+                    kind: ResourceKind::Food,
+                    amount: (12.0 * cultivated_fraction(world, village)).floor() as u32,
+                }
+            }
+        })
+    }
+
     pub(crate) fn complete_local_work(
         &mut self,
         world: &World,
         village_id: u32,
-        kind: rubblekin_core::economy::WorkKind,
-    ) -> Result<(), String> {
-        use rubblekin_core::economy::WorkKind;
+        kind: WorkKind,
+    ) -> Result<WorkReward, String> {
         self.local_work_available(village_id, kind)?;
+        let reward = self.local_work_reward(world, village_id, kind)?;
+        if matches!(reward, WorkReward::Cargo { amount: 0, .. }) {
+            return Err("Not enough intact crops remain for one unit of food.".into());
+        }
         let village = world
             .settlements()
             .and_then(|plan| {
@@ -338,8 +375,12 @@ impl VillageLife {
                 economy.snapshot.timber -= 1.0;
                 economy.snapshot.stone -= 1.0;
             }
+            WorkKind::HarvestField => {
+                take_ripe_crop(economy, cultivated_fraction(world, village))
+                    .ok_or("These crops are no longer ready to harvest.")?;
+            }
         }
-        Ok(())
+        Ok(reward)
     }
 
     pub(crate) fn change_market_stock(
@@ -2452,15 +2493,11 @@ fn advance_farmer(
                 economy.planted = true;
                 economy.snapshot.crop_growth = 0.01;
             } else if economy.snapshot.crop_growth >= 1.0 {
-                economy.cultivated_fraction = cultivated_fraction(world, village);
-                if economy.cultivated_fraction > 0.0 {
+                if let Some(amount) = take_ripe_crop(economy, cultivated_fraction(world, village)) {
                     resident.snapshot.carrying = Some(ResourceCargo {
                         kind: ResourceKind::Food,
-                        amount: 12.0 * economy.cultivated_fraction,
+                        amount,
                     });
-                    economy.snapshot.crop_growth = 0.0;
-                    economy.planted = false;
-                    economy.harvests = economy.harvests.saturating_add(1);
                 }
             } else {
                 // Actual tending slightly advances the planted crop; growth
@@ -2554,6 +2591,19 @@ fn cultivated_fraction(world: &World, village: &Village) -> f32 {
     } else {
         cultivated as f32 / planted as f32
     }
+}
+
+/// NPC and player harvests consume the same village crop exactly once. Stores
+/// receive no food until the harvester physically brings its cargo to them.
+fn take_ripe_crop(economy: &mut Economy, cultivated: f32) -> Option<f32> {
+    if !economy.planted || economy.snapshot.crop_growth < 1.0 || cultivated <= 0.0 {
+        return None;
+    }
+    economy.cultivated_fraction = cultivated;
+    economy.snapshot.crop_growth = 0.0;
+    economy.planted = false;
+    economy.harvests = economy.harvests.saturating_add(1);
+    Some(12.0 * cultivated)
 }
 fn stock(snapshot: &VillageSnapshot, kind: ResourceKind) -> f32 {
     match kind {
@@ -3941,6 +3991,71 @@ mod tests {
             &[]
         ));
         assert!(farmer.transit.is_none());
+    }
+
+    #[test]
+    fn npc_and_player_harvests_compete_for_the_same_crop_in_either_order() {
+        use crate::local_work;
+        use rubblekin_core::economy::{PlayerEconomy, WorkSite};
+        let world = World::generate(42, WorldGeneration::GeographyV5);
+        let village = &world.settlements().unwrap().villages[0];
+        let mut life = VillageLife::new(&world);
+        life.villages[0].snapshot.crop_growth = 1.0;
+        let farmer = &mut life.residents[0];
+        assert_eq!(farmer.snapshot.role, ResidentRole::Farmer);
+        farmer.farm_path = farm_path(&world, village, farmer.route);
+        farmer.farm_waypoint = farmer
+            .farm_path
+            .iter()
+            .position(|point| point.work)
+            .unwrap();
+        let position = farmer.farm_path[farmer.farm_waypoint].position;
+        farmer.body = Body::new(position);
+        farmer.snapshot.position = position;
+        farmer.phase = Phase::Working;
+        farmer.elapsed = 2.0;
+        let site = WorkSite {
+            village_id: village.id,
+            kind: WorkKind::HarvestField,
+            index: 0,
+        };
+        let active = local_work::start(&world, &life, site, position, 0.0).unwrap();
+        let mut player_first = life.clone();
+        let food = life.villages[0].snapshot.food;
+
+        advance_farmer(
+            &world,
+            village,
+            &mut life.residents[0],
+            &mut life.villages[0],
+            0.05,
+            1.0,
+            &[],
+        );
+        assert_eq!(
+            life.residents[0].snapshot.carrying.as_ref().unwrap().amount,
+            12.0
+        );
+        let mut ledger = PlayerEconomy::default();
+        assert!(local_work::complete(&world, &mut life, &mut ledger, &active).is_err());
+        assert_eq!(ledger.cargo_total(), 0);
+        assert_eq!(life.villages[0].harvests, 1);
+        assert_eq!(life.villages[0].snapshot.food, food);
+
+        local_work::complete(&world, &mut player_first, &mut ledger, &active).unwrap();
+        advance_farmer(
+            &world,
+            village,
+            &mut player_first.residents[0],
+            &mut player_first.villages[0],
+            0.05,
+            1.0,
+            &[],
+        );
+        assert!(player_first.residents[0].snapshot.carrying.is_none());
+        assert_eq!(ledger.cargo[0], 12);
+        assert_eq!(player_first.villages[0].harvests, 1);
+        assert_eq!(player_first.villages[0].snapshot.food, food);
     }
 
     #[test]

@@ -361,15 +361,7 @@ pub(crate) fn setup(
                                     BackgroundColor(Color::srgb(0.23, 0.15, 0.28)),
                                     BorderColor::all(Color::srgb(0.83, 0.65, 0.92)),
                                 ))
-                                .with_child(label(
-                                    if site.building.kind == BuildingKind::TrailRuin {
-                                        "R"
-                                    } else {
-                                        "S"
-                                    },
-                                    &font,
-                                    11.,
-                                ));
+                                .with_child(label(roadside_symbol(site.building.kind), &font, 11.));
                         }
                         for (index, town) in towns.iter().enumerate() {
                             canvas
@@ -853,11 +845,7 @@ pub(crate) fn refresh(
             {
                 let p = site.building.entrance();
                 let distance = (p[0] - you[0]).hypot(p[2] - you[2]);
-                let name = if site.building.kind == BuildingKind::TrailRuin {
-                    "trail ruin"
-                } else {
-                    "waystone"
-                };
+                let name = roadside_name(site.building.kind);
                 text.0
                     .push_str(&format!("\nNearest {name}: {:.1} km", distance / 1000.));
             }
@@ -883,7 +871,19 @@ pub(crate) fn refresh(
             } else {
                 format!("{meters:.0} m across")
             };
-            text.0 = if !roadside.is_empty() && compact {
+            let extended = roadside.iter().any(|site| {
+                matches!(
+                    site.building.kind,
+                    BuildingKind::TrailPavilion | BuildingKind::QuarryYard
+                )
+            });
+            text.0 = if extended && compact {
+                format!("{span} · Cyan: you · Gold: towns · R/S/P/Q: places · Drag/pinch")
+            } else if extended {
+                format!(
+                    "{span} · R ruin · S waystone · P shelter · Q quarry | Cyan: you · Gold: towns | Drag/scroll: pan/zoom · C/R: center/world"
+                )
+            } else if !roadside.is_empty() && compact {
                 format!(
                     "{span} · Cyan: you · Gold: towns · Violet R/S: ruins/waystones · Drag/pinch"
                 )
@@ -899,6 +899,26 @@ pub(crate) fn refresh(
                 )
             };
         }
+    }
+}
+
+fn roadside_symbol(kind: BuildingKind) -> &'static str {
+    match kind {
+        BuildingKind::TrailRuin => "R",
+        BuildingKind::Waystone => "S",
+        BuildingKind::TrailPavilion => "P",
+        BuildingKind::QuarryYard => "Q",
+        _ => "?",
+    }
+}
+
+fn roadside_name(kind: BuildingKind) -> &'static str {
+    match kind {
+        BuildingKind::TrailRuin => "trail ruin",
+        BuildingKind::Waystone => "waystone",
+        BuildingKind::TrailPavilion => "trail shelter",
+        BuildingKind::QuarryYard => "quarry workyard",
+        _ => "place",
     }
 }
 

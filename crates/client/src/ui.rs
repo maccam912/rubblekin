@@ -317,7 +317,7 @@ fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) 
                     Text::new(if observing {
                         "Left stick: fly · swipe the world: look\nRise / Fall: vertical flight · Sprint: boost\n+ / −: camera speed\nMenu: graphics, return to spawn, next village, servers\nInspect: aimed character, block, or plot · swipe panel to scroll\nRead-only observer: no avatar or editing"
                     } else {
-                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose a building block\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nCargo: coins, goods and delivery work · trade at market entrances\nMenu: graphics, controls, and leave world"
+                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose a building block\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nCargo / Work: coins, goods, deliveries and local jobs · trade at market entrances\nMenu: graphics, controls, and leave world"
                     }),
                     TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink()),
                     Node { flex_shrink: 0., ..default() },
@@ -447,13 +447,21 @@ pub fn update_ui(
     }
     *refresh = 0.0;
     let touch_enabled = touch.as_ref().is_some_and(|touch| touch.enabled);
-    let menu_open = pause.as_ref().is_some_and(|pause| pause.open)
-        || console.as_ref().is_some_and(|console| console.open)
-        || map.as_ref().is_some_and(|map| map.open)
-        || market.as_ref().is_some_and(|market| market.open)
+    let menu_open = pause
+        .as_ref()
+        .is_some_and(|pause| pause.open || pause.input_blocked)
+        || console
+            .as_ref()
+            .is_some_and(|console| console.open || console.input_blocked)
+        || map
+            .as_ref()
+            .is_some_and(|map| map.open || map.input_blocked)
+        || market
+            .as_ref()
+            .is_some_and(|market| market.open || market.input_blocked)
         || conversation
             .as_ref()
-            .is_some_and(|conversation| conversation.open());
+            .is_some_and(|conversation| conversation.open() || conversation.input_blocked);
     let minutes = (session.world_time / 60.0) as u64;
     for mut text in &mut texts.p0() {
         set_text(
@@ -488,7 +496,13 @@ pub fn update_ui(
     }
     let mut notice = notice_text(&session, &world, time.elapsed_secs_f64(), touch_enabled);
     if let Some(market) = &market {
-        let cargo = crate::market::hud_text(market, &session, &world, touch_enabled);
+        let cargo = crate::market::hud_text(
+            market,
+            &session,
+            &world,
+            touch_enabled,
+            time.elapsed_secs_f64(),
+        );
         if !cargo.is_empty() {
             if !notice.is_empty() {
                 notice.push('\n');

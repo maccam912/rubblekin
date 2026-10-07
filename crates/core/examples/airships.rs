@@ -13,16 +13,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "--help") {
         println!(
-            "airships [SEED] [v3|v4|v5]\nReads simulation times in seconds from stdin; prints one JSON line per time.\nUses unedited GeographyV5 by default. Does not connect, move players, or modify saves."
+            "airships [SEED] [v3|v4|v5|v6]\nReads simulation times in seconds from stdin; prints one JSON line per time.\nUses unedited GeographyV6 by default. Does not connect, move players, or modify saves."
         );
         return Ok(());
     }
     if args.len() > 2 {
-        return Err("Usage: airships [SEED] [v3|v4|v5]".into());
+        return Err("Usage: airships [SEED] [v3|v4|v5|v6]".into());
     }
     let seed = args.first().map_or(Ok(42), |arg| arg.parse::<u32>())?;
     let generation = match args.get(1).map(String::as_str) {
-        None | Some("v5") => WorldGeneration::GeographyV5,
+        Some("v5") => WorldGeneration::GeographyV5,
+        None | Some("v6") => WorldGeneration::GeographyV6,
         Some("v4") => WorldGeneration::GeographyV4,
         Some("v3") => WorldGeneration::GeographyV3,
         _ => return Err("Generation must be v3, v4 or v5".into()),

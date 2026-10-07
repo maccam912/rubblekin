@@ -124,6 +124,16 @@ fn main() {
             "Waystone",
             "A roadside marker and a place to rest",
         ),
+        (
+            BuildingKind::TrailPavilion,
+            "Trail pavilion",
+            "Open timber shelter, benches and a cold hearth",
+        ),
+        (
+            BuildingKind::QuarryYard,
+            "Quarry yard",
+            "Cut-stone terraces, a covered bench and block stacks",
+        ),
     ]
     .into_iter()
     .map(|(kind, title, detail)| (Asset::Building(kind), title, detail))
