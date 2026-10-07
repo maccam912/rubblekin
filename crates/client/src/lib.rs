@@ -3,6 +3,7 @@ mod airship_mesh;
 #[cfg(test)]
 mod airship_motion_tests;
 mod airships;
+mod capture;
 mod crash_reporting;
 mod crops;
 mod follow_camera;
@@ -31,12 +32,10 @@ mod avatar_tests;
 mod inspection_tests;
 
 use bevy::{
-    app::AppExit,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     light::{DirectionalLightShadowMap, NotShadowCaster},
     prelude::*,
-    render::view::screenshot::{Screenshot, save_to_disk},
     window::{CursorGrabMode, CursorOptions},
 };
 use follow_camera::CameraFollow;
@@ -197,13 +196,6 @@ struct Limb {
     phase: f32,
     arm: bool,
 }
-#[derive(Resource)]
-struct Capture {
-    path: Option<String>,
-    taken: bool,
-    exit_after: Option<f32>,
-}
-
 #[derive(Default)]
 struct Options {
     connect: Option<String>,
@@ -261,7 +253,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture the scene after 8 seconds\n  --exit-after SECONDS  Exit automatically for visual testing\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nG talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nG talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -369,11 +361,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .init_resource::<world_map::WorldMap>()
         .init_resource::<admin_console::AdminConsole>()
         .init_resource::<airships::PilotConversation>()
-        .insert_resource(Capture {
-            path: screenshot,
-            taken: false,
-            exit_after: options.exit_after,
-        })
+        .insert_resource(capture::Capture::new(screenshot, options.exit_after))
         .init_resource::<Avatars>()
         .insert_resource(touch::TouchControls::new(
             cfg!(target_os = "android") || options.touch,
@@ -448,7 +436,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 graphics::save_changed,
                 join::layout,
                 join::refresh,
-                capture_frame,
+                capture::capture_frame,
             )
                 .chain(),
         )
@@ -1571,51 +1559,5 @@ fn update_avatars(
         } else {
             0.0
         });
-    }
-}
-
-fn capture_frame(
-    mut commands: Commands,
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut capture: ResMut<Capture>,
-    session: Option<Res<Session>>,
-    console: Option<Res<admin_console::AdminConsole>>,
-    mut exit: MessageWriter<AppExit>,
-) {
-    if keys.just_pressed(KeyCode::F12) && !console.is_some_and(|console| console.input_blocked) {
-        let _ = std::fs::create_dir_all("artifacts");
-        commands
-            .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(format!(
-                "artifacts/screenshot-{}.png",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            )));
-    }
-    if !capture.taken && time.elapsed_secs() > 8.0 {
-        if let Some(path) = &capture.path {
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(path.clone()));
-            if let Some(session) = session {
-                info!(
-                    "Visual capture: {:.1} FPS; {} explorers; {} terrain edits; NPC {}",
-                    session.fps,
-                    session.players.len(),
-                    session.edits,
-                    session.npc.action.label()
-                );
-            }
-        }
-        capture.taken = true;
-    }
-    if capture
-        .exit_after
-        .is_some_and(|after| time.elapsed_secs() > after)
-    {
-        exit.write(AppExit::Success);
     }
 }

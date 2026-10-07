@@ -426,7 +426,7 @@ pub(super) fn read(
     wheel: Res<AccumulatedMouseScroll>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut native: MessageReader<MenuKey>,
-    mut fingers: MessageReader<TouchInput>,
+    touch_input: (MessageReader<TouchInput>, Option<Res<Touches>>),
     actions: Query<(&Action, &Interaction), Changed<Interaction>>,
     targets: Query<(
         Entity,
@@ -440,6 +440,7 @@ pub(super) fn read(
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<DialogRoot>>,
 ) {
+    let (mut fingers, touches) = touch_input;
     let (pause, console, map) = modals;
     let was_open = conversation.open();
     conversation.just_closed = false;
@@ -455,6 +456,7 @@ pub(super) fn read(
         || map.is_some_and(|map| map.open || map.input_blocked)
         || !windows.iter().any(|window| window.focused)
     {
+        conversation.scroll_finger = None;
         fingers.clear();
         return;
     }
@@ -488,8 +490,11 @@ pub(super) fn read(
         chosen = Some(Action::NextPilot);
     }
     let mut scroll_delta = -wheel.delta.y * 28.0;
+    let mut native_touch = conversation.scroll_finger.is_some()
+        || touches.is_some_and(|touches| touches.iter().next().is_some());
     for finger in fingers.read() {
         if let Ok(window) = windows.get(finger.window) {
+            native_touch = true;
             match finger.phase {
                 TouchPhase::Started => {
                     let point = finger.position * window.scale_factor();
@@ -533,7 +538,7 @@ pub(super) fn read(
         let max = (computed.content_size.y - computed.size.y) * computed.inverse_scale_factor;
         scroll.0.y = (scroll.0.y + scroll_delta).clamp(0.0, max.max(0.0));
     }
-    if !cfg!(target_os = "android") && chosen.is_none() {
+    if !cfg!(target_os = "android") && !native_touch && chosen.is_none() {
         chosen = actions
             .iter()
             .find(|(_, i)| **i == Interaction::Pressed)
@@ -1028,6 +1033,102 @@ mod tests {
         let mut rejoined = AirshipClock::new(500.0, 90.0);
         rejoined.advance(90.0);
         assert_eq!(rejoined.time, 500.0);
+    }
+
+    #[test]
+    fn pilot_touch_scroll_ignores_stale_mouse_buttons_and_releases_ownership() {
+        use std::{io::Write, net::TcpListener};
+        let (_, session) = fixture();
+        let ship_id = session.airships.ships(0.)[0].id;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let connecting = std::thread::spawn(move || {
+            Connection::connect(&address, "Touch test".into(), SessionMode::Player)
+                .unwrap()
+                .0
+        });
+        let (mut peer, _) = listener.accept().unwrap();
+        let mut welcome =
+            serde_json::to_vec(&crate::join::tests::welcome(SessionMode::Player)).unwrap();
+        welcome.push(b'\n');
+        peer.write_all(&welcome).unwrap();
+        let mut app = App::new();
+        app.add_plugins(bevy::input::InputPlugin)
+            .insert_resource(connecting.join().unwrap())
+            .insert_resource(session)
+            .insert_resource(PilotConversation {
+                ship_id: Some(ship_id),
+                ..default()
+            })
+            .init_resource::<TouchControls>()
+            .init_resource::<Time>()
+            .add_message::<MenuKey>()
+            .add_systems(Update, read);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let close = app
+            .world_mut()
+            .spawn((
+                Action::Close,
+                Interaction::None,
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::splat(80.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(100., 100.),
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        app.update();
+        let send = |app: &mut App, phase| {
+            app.world_mut().write_message(TouchInput {
+                id: 3,
+                phase,
+                position: Vec2::new(300., 100.),
+                window,
+                force: None,
+            });
+        };
+        app.world_mut()
+            .entity_mut(close)
+            .insert(Interaction::Pressed);
+        send(&mut app, TouchPhase::Started);
+        app.update();
+        assert!(app.world().resource::<PilotConversation>().open());
+        assert!(
+            app.world()
+                .resource::<PilotConversation>()
+                .scroll_finger
+                .is_some()
+        );
+        app.world_mut()
+            .entity_mut(close)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert!(app.world().resource::<PilotConversation>().open());
+        app.world_mut()
+            .entity_mut(close)
+            .insert(Interaction::Pressed);
+        send(&mut app, TouchPhase::Ended);
+        app.update();
+        assert!(app.world().resource::<PilotConversation>().open());
+        assert!(
+            app.world()
+                .resource::<PilotConversation>()
+                .scroll_finger
+                .is_none()
+        );
+        app.world_mut()
+            .entity_mut(close)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert!(
+            !app.world().resource::<PilotConversation>().open(),
+            "later mouse presses remain usable"
+        );
     }
 
     #[test]

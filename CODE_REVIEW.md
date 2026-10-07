@@ -109,6 +109,8 @@ The durability guarantee is good. Its placement means slow storage or a large sa
 
 Add narrow automated invariants for gaps such as C01, keep the current physical route/needs tests, and require native visual inspection when changing LOD or materials. Platform-specific lifecycle, GPU loss, and performance still require their target devices; a macOS workspace test run cannot close them.
 
+Follow-up 2026-10-06: [VISUAL_CHECKS.md](VISUAL_CHECKS.md) now fixes the seed, settings, isolated working directory and Pinevale → Willowbank route. The read-only fleet example provides exact generated port coordinates and scheduled ship poses. Automatic captures now wait for an installed scene plus eight seconds, report actual file success/failure, and avoid duplicate-frame requests. Native startup, sampled travel/arrival, menus and save/reopen checks have been exercised; a continuous filmed approach at both detail ranges and target-device acceptance remain open.
+
 ### C07 — Smaller cleanup is worthwhile when touching the area
 
 **Lower priority recommendations.** These improve navigation and consistency but should not delay the recorded visual fixes.

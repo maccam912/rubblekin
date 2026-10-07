@@ -438,7 +438,7 @@ pub fn interact(
     mut focus: ResMut<InputFocus>,
     mut fields: Query<(Entity, &Field, &Interaction, &mut EditableText)>,
     actions: Query<(&Action, &Interaction), Changed<Interaction>>,
-    mut fingers: MessageReader<TouchInput>,
+    touch_input: (MessageReader<TouchInput>, Option<Res<Touches>>),
     targets: Query<(
         Entity,
         &ComputedNode,
@@ -452,6 +452,7 @@ pub fn interact(
     clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
 ) {
+    let (mut fingers, touches) = touch_input;
     if session.is_some() {
         keyboard.clear();
         ime.clear();
@@ -462,16 +463,18 @@ pub fn interact(
     // after reading those committed values (including paste followed by Enter).
     let requested = menu.next_action.take();
     let mut touched_action = None;
+    let mut native_touch = touches.is_some_and(|touches| touches.iter().next().is_some());
     // Resolve original Started events directly: brief Android taps must work
     // independently of the UI cursor/Interaction timing at low frame rates.
     // Rendered node geometry and inherited clipping remain the hit boundaries.
-    for finger in fingers
-        .read()
-        .filter(|event| event.phase == TouchPhase::Started)
-    {
+    for finger in fingers.read() {
         let Ok(window) = windows.get(finger.window) else {
             continue;
         };
+        native_touch = true;
+        if finger.phase != TouchPhase::Started {
+            continue;
+        }
         if finger.position.y < 0. || finger.position.y > visible_height(window) {
             continue;
         }
@@ -510,6 +513,7 @@ pub fn interact(
             || keys.just_pressed(KeyCode::Escape)
             || matches!(touched_action, Some(Action::Cancel))
             || (!cfg!(target_os = "android")
+                && !native_touch
                 && actions.iter().any(|(action, interaction)| {
                     matches!(action, Action::Cancel) && *interaction == Interaction::Pressed
                 }))
@@ -519,7 +523,7 @@ pub fn interact(
         return;
     }
     for (entity, _, interaction, _) in &fields {
-        if !cfg!(target_os = "android") && *interaction == Interaction::Pressed {
+        if !cfg!(target_os = "android") && !native_touch && *interaction == Interaction::Pressed {
             focus.set(entity, FocusCause::Navigated);
         }
     }
@@ -606,9 +610,9 @@ pub fn interact(
     }
     let action = touched_action
         .or_else(|| {
-            // Android menus use the event path exclusively, so a synthesized mouse
-            // Interaction cannot toggle a mode or submit the form a second time.
-            (!cfg!(target_os = "android"))
+            // Raw touch owns its position through release. Bevy can synthesize
+            // a press at a stale desktop mouse cursor instead of that position.
+            (!cfg!(target_os = "android") && !native_touch)
                 .then(|| {
                     actions
                         .iter()
@@ -1993,6 +1997,150 @@ pub(crate) mod tests {
         }
         app.update();
         assert!(app.world().resource::<InputFocus>().get().is_none());
+    }
+
+    #[test]
+    fn native_touch_rejects_stale_mouse_focus_actions_and_cancel() {
+        let mut app = App::new();
+        app.add_plugins(bevy::input::InputPlugin)
+            .insert_resource(crate::touch::TouchControls::new(true))
+            .insert_resource(JoinScreen::new(
+                "example.org:7878".into(),
+                "Tester".into(),
+                ServerConfig::default(),
+                GraphicsQuality::Balanced,
+                SessionMode::Player,
+            ))
+            .init_resource::<InputFocus>()
+            .add_message::<MenuKey>()
+            .add_message::<Ime>()
+            .add_systems(Update, interact);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let mut field = |kind, text: &str, x| {
+            app.world_mut()
+                .spawn((
+                    kind,
+                    Interaction::None,
+                    EditableText::new(text),
+                    Node::default(),
+                    ComputedNode {
+                        size: Vec2::new(160., 44.),
+                        ..default()
+                    },
+                    UiGlobalTransform::from_xy(x, 100.),
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id()
+        };
+        let address = field(Field::Address, "example.org:7878", 100.);
+        let name = field(Field::Name, "Tester", 300.);
+        let button = app
+            .world_mut()
+            .spawn((
+                Action::Mode(SessionMode::Observer),
+                Interaction::None,
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(160., 44.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(100., 200.),
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        app.update();
+        let send = |app: &mut App, phase, position| {
+            app.world_mut().write_message(TouchInput {
+                id: 1,
+                phase,
+                position,
+                window,
+                force: None,
+            });
+        };
+        app.world_mut()
+            .entity_mut(address)
+            .insert(Interaction::Pressed);
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        send(&mut app, TouchPhase::Started, Vec2::new(300., 100.));
+        app.update();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(name));
+        assert_eq!(
+            app.world().resource::<JoinScreen>().mode,
+            SessionMode::Player
+        );
+        // The field Interaction can stay Pressed throughout a held touch.
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(name));
+        assert_eq!(
+            app.world().resource::<JoinScreen>().mode,
+            SessionMode::Player
+        );
+        send(&mut app, TouchPhase::Ended, Vec2::new(300., 100.));
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(name));
+        assert_eq!(
+            app.world().resource::<JoinScreen>().mode,
+            SessionMode::Player
+        );
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert_eq!(
+            app.world().resource::<JoinScreen>().mode,
+            SessionMode::Observer,
+            "a later mouse action remains usable"
+        );
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        app.world_mut().resource_mut::<JoinScreen>().pending = Some(PendingJoin {
+            worker: std::thread::spawn(|| Err("test worker finished".into())),
+            stage: Arc::new(Mutex::new(JoinStage::OpeningLocalWorld)),
+            cancelled: cancelled.clone(),
+            started: Instant::now(),
+        });
+        app.world_mut()
+            .entity_mut(button)
+            .insert((Action::Cancel, Interaction::Pressed));
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            send(&mut app, phase, Vec2::new(500., 300.));
+        }
+        app.update();
+        assert!(
+            !cancelled.load(Ordering::Relaxed),
+            "a blank touch must not activate stale Cancel"
+        );
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            send(&mut app, phase, Vec2::new(100., 200.));
+        }
+        app.update();
+        assert!(
+            cancelled.load(Ordering::Relaxed),
+            "a real short Cancel tap still works"
+        );
+        assert!(
+            app.world_mut()
+                .resource_mut::<JoinScreen>()
+                .pending
+                .take()
+                .unwrap()
+                .worker
+                .join()
+                .unwrap()
+                .is_err()
+        );
     }
 
     #[test]
