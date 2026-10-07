@@ -4,7 +4,7 @@ use rubblekin_core::{
     protocol::{ResidentAction, ResidentRole},
     settlement::{FieldPlot, Village},
     village_assets::BuildingKind,
-    world::{Block, BlockPos, CELL_SIZE},
+    world::{Block, BlockPos, CELL_SIZE, TreeKind},
 };
 
 pub(crate) fn text(world: &GameWorld, session: &Session) -> String {
@@ -127,6 +127,39 @@ fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> Strin
         return format!("{details}\n\nThe inspected block was removed.");
     }
     let mut value = details.clone();
+    if matches!(block, Block::Wood | Block::Leaves)
+        && let Some(tree) = world.tree_at(position.x.div_euclid(24), position.z.div_euclid(24))
+    {
+        let dx = position.x - tree.base.x;
+        let dz = position.z - tree.base.z;
+        let trunk = block == Block::Wood
+            && dx == 0
+            && dz == 0
+            && (tree.base.y..tree.base.y + tree.trunk_height).contains(&position.y);
+        let crown = block == Block::Leaves
+            && tree
+                .leaf_bounds(dx, dz)
+                .is_some_and(|(low, high)| (low..=high).contains(&position.y));
+        if trunk || crown {
+            value = format!("{}\n\n{}", tree_name(tree.kind), details);
+        }
+    }
+    if let Some(building) = world.settlements().and_then(|plan| {
+        plan.roadside_landmarks.iter().find_map(|site| {
+            let building = &site.building;
+            let [_, height, _] = building.dimensions();
+            (building.local_cell(position.x, position.z).is_some()
+                && (building.origin.y..building.origin.y + height).contains(&position.y))
+            .then_some(building)
+        })
+    }) {
+        return format!(
+            "{}\nBeside the village trail\n\n{}\n\n{}",
+            building_name(building.kind),
+            building_description(building.kind),
+            details,
+        );
+    }
     if let Some((village, building)) = world.settlements().and_then(|plan| {
         plan.villages.iter().find_map(|village| {
             village.buildings.iter().find_map(|building| {
@@ -148,6 +181,9 @@ fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> Strin
         if building.kind == BuildingKind::Market && session.observer.is_none() {
             value.push_str("\n\nStand at the entrance, then press B or tap Cargo to trade or take delivery work.");
         }
+        if building.kind == BuildingKind::Workshop && session.observer.is_none() {
+            value.push_str("\n\nWalk inside to the stone workbench, then press B or tap Cargo to help with workshop maintenance.");
+        }
         if matches!(
             building.kind,
             BuildingKind::Storehouse | BuildingKind::Market
@@ -162,6 +198,17 @@ fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> Strin
     value
 }
 
+fn tree_name(kind: TreeKind) -> &'static str {
+    match kind {
+        TreeKind::Broadleaf => "Broadleaf tree",
+        TreeKind::Conifer => "Pine tree",
+        TreeKind::Scrub => "Scrub bush",
+        TreeKind::Aspen => "Aspen · narrow crown",
+        TreeKind::Cedar => "Cedar · layered crown",
+        TreeKind::Canopy => "Rainforest tree · spreading canopy",
+    }
+}
+
 fn building_name(kind: BuildingKind) -> &'static str {
     match kind {
         BuildingKind::Cottage => "Cottage",
@@ -173,6 +220,8 @@ fn building_name(kind: BuildingKind) -> &'static str {
         BuildingKind::UplandHouse => "Upland house",
         BuildingKind::Windmill => "Windmill",
         BuildingKind::Lookout => "Lookout",
+        BuildingKind::TrailRuin => "Trail ruin",
+        BuildingKind::Waystone => "Waystone",
     }
 }
 
@@ -195,6 +244,12 @@ fn building_description(kind: BuildingKind) -> &'static str {
             "A tall village landmark with four fixed sails and a ground-floor room."
         }
         BuildingKind::Lookout => "Stairs lead to a raised, covered viewing deck.",
+        BuildingKind::TrailRuin => {
+            "Weathered stone walls enclose an open courtyard. A short spur returns to the trail."
+        }
+        BuildingKind::Waystone => {
+            "A banded stone marker stands beside the trail, with room to stop and look around."
+        }
     }
 }
 
@@ -238,6 +293,9 @@ fn farm_text(world: &GameWorld, session: &Session, id: u32, index: usize) -> Str
         value.push_str("\n\nThis plot has no intact plant soil.");
     } else if intact < total {
         value.push_str("\n\nSome plant soil was removed or replaced.");
+    }
+    if intact > 0 && session.observer.is_none() {
+        value.push_str("\n\nStand beside the field and open B or Cargo to find crop-tending work.");
     }
     value
 }
@@ -304,6 +362,53 @@ mod tests {
             SessionMode::Observer,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn roadside_places_and_regional_trees_describe_actual_cells_and_removed_targets() {
+        let (_, mut session) = session();
+        let mut world = GameWorld::generate(42, WorldGeneration::GeographyV5);
+        let buildings: Vec<_> = world
+            .settlements()
+            .unwrap()
+            .roadside_landmarks
+            .iter()
+            .map(|site| site.building.clone())
+            .collect();
+        assert!(buildings.iter().any(|b| b.kind == BuildingKind::TrailRuin));
+        assert!(buildings.iter().any(|b| b.kind == BuildingKind::Waystone));
+        for building in &buildings {
+            session.inspected = Some(InspectTarget::Block(building.origin));
+            let details = text(&world, &session);
+            assert!(
+                details.starts_with(building_name(building.kind)),
+                "{details}"
+            );
+            assert!(details.contains("Beside the village trail"));
+            world.set_block(building.origin, Block::Air).unwrap();
+            let removed = text(&world, &session);
+            assert!(removed.contains("was removed"));
+            assert!(!removed.contains("Beside the village trail"));
+        }
+        let tree = (-1300..1300)
+            .step_by(7)
+            .find_map(|z| {
+                (-1300..1300).step_by(7).find_map(|x| {
+                    world.tree_at(x, z).filter(|tree| {
+                        matches!(
+                            tree.kind,
+                            TreeKind::Aspen | TreeKind::Cedar | TreeKind::Canopy
+                        )
+                    })
+                })
+            })
+            .expect("seed 42 has regional woodland");
+        let trunk = BlockPos::new(tree.base.x, tree.base.y + 1, tree.base.z);
+        assert_eq!(world.block(trunk), Block::Wood);
+        session.inspected = Some(InspectTarget::Block(trunk));
+        assert!(text(&world, &session).starts_with(tree_name(tree.kind)));
+        world.set_block(trunk, Block::Stone).unwrap();
+        assert!(!text(&world, &session).contains(tree_name(tree.kind)));
     }
 
     #[test]

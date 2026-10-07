@@ -971,58 +971,61 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
         center.0 as f32 * CHUNK_METERS,
         center.1 as f32 * CHUNK_METERS,
     );
-    for village in &plan.villages {
-        for building in &village.buildings {
-            let [width, height, depth] = building.dimensions();
-            let base = Vec3::new(
-                building.origin.x as f32,
-                building.origin.y as f32,
-                building.origin.z as f32,
-            ) * CELL_SIZE;
-            let size = Vec3::new(width as f32, height as f32, depth as f32) * CELL_SIZE;
-            let building_center = Vec2::new(base.x + size.x * 0.5, base.z + size.z * 0.5);
-            match clip {
-                ProxyClip::Outside(_)
-                    if building_center.distance_squared(camera) > LOD_BUILDING_DISTANCE.powi(2) =>
-                {
-                    continue;
-                }
-                ProxyClip::Inside([x0, z0, x1, z1])
-                    if base.x + size.x <= x0
-                        || base.x >= x1
-                        || base.z + size.z <= z0
-                        || base.z >= z1 =>
-                {
-                    // Most buildings do not touch this chunk. Reject them
-                    // before constructing all five clipped proxy cuboids.
-                    continue;
-                }
-                _ => {}
-            }
-            if add_regional_building_proxy(building, geometry, clip) {
+    for building in plan
+        .villages
+        .iter()
+        .flat_map(|v| &v.buildings)
+        .chain(plan.roadside_landmarks.iter().map(|site| &site.building))
+    {
+        let [width, height, depth] = building.dimensions();
+        let base = Vec3::new(
+            building.origin.x as f32,
+            building.origin.y as f32,
+            building.origin.z as f32,
+        ) * CELL_SIZE;
+        let size = Vec3::new(width as f32, height as f32, depth as f32) * CELL_SIZE;
+        let building_center = Vec2::new(base.x + size.x * 0.5, base.z + size.z * 0.5);
+        match clip {
+            ProxyClip::Outside(_)
+                if building_center.distance_squared(camera) > LOD_BUILDING_DISTANCE.powi(2) =>
+            {
                 continue;
             }
-            let walls = (size.y * 0.58).min(3.5);
+            ProxyClip::Inside([x0, z0, x1, z1])
+                if base.x + size.x <= x0
+                    || base.x >= x1
+                    || base.z + size.z <= z0
+                    || base.z >= z1 =>
+            {
+                // Most buildings do not touch this chunk. Reject them
+                // before constructing all five clipped proxy cuboids.
+                continue;
+            }
+            _ => {}
+        }
+        if add_regional_building_proxy(building, geometry, clip) {
+            continue;
+        }
+        let walls = (size.y * 0.58).min(3.5);
+        proxy_cuboid(
+            geometry,
+            base + Vec3::new(size.x * 0.5, walls * 0.5, size.z * 0.5),
+            Vec3::new(size.x, walls, size.z),
+            Block::Sand.color(),
+            clip,
+        );
+        // Stepped roof silhouettes agree with the fine assets' warm palette.
+        let tiers = 4;
+        for tier in 0..tiers {
+            let y = walls + (size.y - walls) * (tier as f32 + 0.5) / tiers as f32;
+            let roof_width = size.x * (1.0 - tier as f32 * 0.18);
             proxy_cuboid(
                 geometry,
-                base + Vec3::new(size.x * 0.5, walls * 0.5, size.z * 0.5),
-                Vec3::new(size.x, walls, size.z),
-                Block::Sand.color(),
+                base + Vec3::new(size.x * 0.5, y, size.z * 0.5),
+                Vec3::new(roof_width, (size.y - walls) / tiers as f32, size.z),
+                Block::Brick.color(),
                 clip,
             );
-            // Stepped roof silhouettes agree with the fine assets' warm palette.
-            let tiers = 4;
-            for tier in 0..tiers {
-                let y = walls + (size.y - walls) * (tier as f32 + 0.5) / tiers as f32;
-                let roof_width = size.x * (1.0 - tier as f32 * 0.18);
-                proxy_cuboid(
-                    geometry,
-                    base + Vec3::new(size.x * 0.5, y, size.z * 0.5),
-                    Vec3::new(roof_width, (size.y - walls) / tiers as f32, size.z),
-                    Block::Brick.color(),
-                    clip,
-                );
-            }
         }
     }
 }
@@ -1042,6 +1045,8 @@ fn add_regional_building_proxy(
             | BuildingKind::UplandHouse
             | BuildingKind::Windmill
             | BuildingKind::Lookout
+            | BuildingKind::TrailRuin
+            | BuildingKind::Waystone
     ) {
         return false;
     }
@@ -1180,6 +1185,39 @@ fn add_regional_building_proxy(
                 );
             }
         }
+        BuildingKind::TrailRuin | BuildingKind::Waystone => {
+            part(
+                [0.0; 3],
+                [w, 1.0, d],
+                if kind == BuildingKind::TrailRuin {
+                    Block::Dirt
+                } else {
+                    Block::Stone
+                },
+            );
+            // Sparse roofless walls and the waystone use their actual vertical
+            // solid runs, so open arches remain open while detail is pending.
+            for x in 0..w as i32 {
+                for z in 0..d as i32 {
+                    let mut y = 1;
+                    let height = village_assets::dimensions(kind)[1];
+                    while y < height {
+                        let block = village_assets::block_at(kind, x, y, z).unwrap();
+                        let start = y;
+                        while y < height && village_assets::block_at(kind, x, y, z) == Some(block) {
+                            y += 1;
+                        }
+                        if block.is_solid() {
+                            part(
+                                [x as f32, start as f32, z as f32],
+                                [1.0, (y - start) as f32, 1.0],
+                                block,
+                            );
+                        }
+                    }
+                }
+            }
+        }
         _ => unreachable!(),
     }
     true
@@ -1274,7 +1312,7 @@ fn add_chunk_tree_proxies(
     let x0 = key.0 as f32 * CHUNK_METERS;
     let z0 = key.1 as f32 * CHUNK_METERS;
     let bounds = [x0, z0, x0 + CHUNK_METERS, z0 + CHUNK_METERS];
-    let margin = 4.5 * CELL_SIZE;
+    let margin = 5.5 * CELL_SIZE;
     let first_x = ((x0 - margin) / TREE_GRID_METERS).floor() as i32;
     let last_x = ((bounds[2] + margin) / TREE_GRID_METERS).floor() as i32;
     let first_z = ((z0 - margin) / TREE_GRID_METERS).floor() as i32;
@@ -1327,6 +1365,7 @@ fn tree_leaf_color(world: &World, kind: TreeKind) -> [f32; 4] {
     if world.generation() == WorldGeneration::GeographyV2
         || world.generation() == WorldGeneration::GeographyV3
         || world.generation() == WorldGeneration::GeographyV4
+        || world.generation() == WorldGeneration::GeographyV5
     {
         kind.leaf_color()
     } else {
@@ -1953,6 +1992,7 @@ fn add_meadow_details(
         == WorldGeneration::GeographyV2
         || world.generation() == WorldGeneration::GeographyV3
         || world.generation() == WorldGeneration::GeographyV4
+        || world.generation() == WorldGeneration::GeographyV5
     {
         match biome {
             Some(Biome::Shrubland) => (0.01, 0.0, [0.60, 0.58, 0.33, 1.0], 0.85),
@@ -3114,12 +3154,23 @@ mod tests {
 
     #[test]
     fn tree_proxies_preserve_shared_dimensions_and_clip_against_near_voxels() {
-        for kind in [TreeKind::Broadleaf, TreeKind::Conifer, TreeKind::Scrub] {
+        for kind in [
+            TreeKind::Broadleaf,
+            TreeKind::Conifer,
+            TreeKind::Scrub,
+            TreeKind::Aspen,
+            TreeKind::Cedar,
+            TreeKind::Canopy,
+        ] {
             let tree = GeneratedTree {
                 base: BlockPos::new(10, 1000, 12),
                 trunk_height: 16,
                 kind,
-                crown_radius: if kind == TreeKind::Scrub { 2 } else { 4 },
+                crown_radius: match kind {
+                    TreeKind::Scrub | TreeKind::Aspen => 2,
+                    TreeKind::Cedar | TreeKind::Canopy => 5,
+                    _ => 4,
+                },
             };
             let ground = 71.5;
             let mut complete = Geometry::default();
@@ -3451,6 +3502,8 @@ mod tests {
             BuildingKind::UplandHouse,
             BuildingKind::Windmill,
             BuildingKind::Lookout,
+            BuildingKind::TrailRuin,
+            BuildingKind::Waystone,
         ] {
             for rotation in 0..4 {
                 let building = BuildingPlot {

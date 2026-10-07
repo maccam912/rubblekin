@@ -10,8 +10,8 @@ use bevy::{
 };
 use rubblekin_core::{
     economy::{
-        CARGO_CAPACITY, MarketAction, MarketView, PlayerEconomy, RESOURCES, can_reach_market,
-        resource_index,
+        CARGO_CAPACITY, MarketAction, MarketView, PlayerEconomy, RESOURCES, WorkAction, WorkKind,
+        WorkState, can_reach_market, resource_index,
     },
     protocol::ClientMessage,
     settlement::ResourceKind,
@@ -28,6 +28,9 @@ pub(crate) struct MarketPanel {
     pub just_closed: bool,
     pub ledger: Option<PlayerEconomy>,
     market: Option<MarketView>,
+    work: WorkState,
+    work_pending: Option<u64>,
+    work_reply_id: u64,
     notice: String,
     quantity: u32,
     pending: Option<(u64, Option<u32>, bool)>,
@@ -45,6 +48,9 @@ impl Default for MarketPanel {
             just_closed: false,
             ledger: None,
             market: None,
+            work: WorkState::default(),
+            work_pending: None,
+            work_reply_id: 0,
             notice: String::new(),
             quantity: 1,
             pending: None,
@@ -88,6 +94,66 @@ impl MarketPanel {
                 self.notice = notice;
             }
         }
+    }
+
+    pub fn work_reply(
+        &mut self,
+        request_id: u64,
+        work: WorkState,
+        ledger: PlayerEconomy,
+        notice: String,
+        accepted: bool,
+    ) {
+        if self
+            .ledger
+            .as_ref()
+            .is_none_or(|old| ledger.revision >= old.revision)
+        {
+            self.ledger = Some(ledger);
+        }
+        // Requested responses cannot revive work after a newer cancellation.
+        // Unsolicited progress/completion shares the same ordered TCP stream.
+        if request_id != 0 && request_id <= self.work_reply_id {
+            return;
+        }
+        self.work_reply_id = self.work_reply_id.max(request_id);
+        self.work = work;
+        if self.work_pending == Some(request_id) {
+            self.work_pending = None;
+            self.notice = if !accepted && notice.is_empty() {
+                "That work is no longer available. Review the latest worksite details.".into()
+            } else {
+                notice
+            };
+        } else if !notice.is_empty() {
+            self.notice = notice;
+        }
+    }
+
+    fn work_action(&self, action: Action) -> Option<WorkAction> {
+        if self.work_pending.is_some() {
+            return None;
+        }
+        match action {
+            Action::StartWork if self.work.active.is_none() => self
+                .work
+                .offer
+                .as_ref()
+                .filter(|offer| offer.unavailable_reason.is_none())
+                .map(|offer| WorkAction::Start { site: offer.site }),
+            Action::CancelWork if self.work.active.is_some() => Some(WorkAction::Cancel),
+            _ => None,
+        }
+    }
+
+    fn work_request(&mut self, action: WorkAction) -> Option<ClientMessage> {
+        if self.work_pending.is_some() {
+            return None;
+        }
+        let request_id = self.next_request;
+        self.next_request = self.next_request.checked_add(1)?;
+        self.work_pending = Some(request_id);
+        Some(ClientMessage::Work { request_id, action })
     }
 
     fn request(
@@ -182,11 +248,15 @@ impl MarketPanel {
 pub(crate) struct MarketRoot;
 #[derive(Component)]
 struct Panel;
+#[derive(Component)]
+pub(crate) struct MarketScroll;
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Action {
     Close,
     Quantity(u32),
     Refresh,
+    StartWork,
+    CancelWork,
     Buy(ResourceKind),
     Sell(ResourceKind),
     Accept,
@@ -198,6 +268,7 @@ pub(crate) enum Label {
     Title,
     Wallet,
     Place,
+    Work,
     Goods(ResourceKind),
     Job,
     Notice,
@@ -292,47 +363,65 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
-    commands.spawn((GameEntity, MarketRoot, GlobalZIndex(92), ScrollPosition::default(),
+    commands.spawn((GameEntity, MarketRoot, GlobalZIndex(92),
         Node { display: Display::None, width: percent(100), height: percent(100), padding: UiRect::all(px(12)),
-            align_items: AlignItems::Center, flex_direction: FlexDirection::Column,
-            overflow: Overflow::scroll_y(), ..default() },
+            align_items: AlignItems::Center, justify_content: JustifyContent::Center,
+            flex_direction: FlexDirection::Column, overflow: Overflow::clip(), ..default() },
         BackgroundColor(Color::srgba(0.02, 0.05, 0.05, 0.60))))
         .with_children(|root| {
-            root.spawn((Panel, Node { width: px(720), max_width: percent(100), padding: UiRect::all(px(18)),
-                flex_direction: FlexDirection::Column, row_gap: px(10), flex_shrink: 0.,
+            root.spawn((Panel, Node { width: px(720), max_width: percent(100), height: percent(100),
+                max_height: px(760), min_height: px(0), padding: UiRect::all(px(18)),
+                flex_direction: FlexDirection::Column, row_gap: px(10),
                 border_radius: BorderRadius::all(px(9)), ..default() },
                 BackgroundColor(Color::srgb(0.08, 0.15, 0.14))))
                 .with_children(|panel| {
                     panel.spawn((Label::Title, Text::new("Cargo & work"), TextFont::from_font_size(24.).with_font(font.clone()),
-                        TextColor(Color::srgb(0.95, 0.83, 0.56))));
-                    panel.spawn((Label::Wallet, Text::new("Loading your cargo…"), TextFont::from_font_size(18.).with_font(font.clone()), TextColor(Color::srgb(0.9, 0.94, 0.86))));
-                    panel.spawn((Label::Place, Text::new(""), TextFont::from_font_size(16.).with_font(font.clone()), TextColor(Color::srgb(0.78, 0.85, 0.79))));
-                    panel.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), ..default() }).with_children(|row| {
+                        TextColor(Color::srgb(0.95, 0.83, 0.56)), Node { flex_shrink: 0., ..default() }));
+                    panel.spawn((Label::Wallet, Text::new("Loading your cargo…"), TextFont::from_font_size(18.).with_font(font.clone()),
+                        TextColor(Color::srgb(0.9, 0.94, 0.86)), Node { flex_shrink: 0., ..default() }));
+                    panel.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
                         for action in [Action::Close, Action::Quantity(1), Action::Quantity(5), Action::Refresh] {
                             row.spawn(button(action)).with_child(label(action, &font));
                         }
                     });
-                    for kind in RESOURCES {
-                        panel.spawn(Node { flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center,
-                            column_gap: px(8), row_gap: px(6), padding: UiRect::vertical(px(4)), ..default() })
-                            .with_children(|row| {
-                                row.spawn((Label::Goods(kind), Text::new(kind.name()), TextFont::from_font_size(16.).with_font(font.clone()),
-                                    TextColor(Color::srgb(0.90, 0.94, 0.86)), Node { min_width: px(220), flex_grow: 1., ..default() }));
-                                for action in [Action::Buy(kind), Action::Sell(kind)] {
-                                    row.spawn(button(action)).with_child(label(action, &font));
-                                }
-                            });
-                    }
-                    panel.spawn((Label::Job, Text::new(""), TextFont::from_font_size(17.).with_font(font.clone()), TextColor(Color::srgb(0.95, 0.85, 0.62))));
-                    panel.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), ..default() }).with_children(|row| {
-                        for action in [Action::Accept, Action::Deliver, Action::Return] {
-                            row.spawn(button(action)).with_child(label(action, &font));
+                    panel.spawn((MarketScroll, ScrollPosition::default(), Node {
+                        width: percent(100), min_height: px(0), flex_basis: px(0), flex_grow: 1.,
+                        flex_direction: FlexDirection::Column, row_gap: px(10),
+                        overflow: Overflow::scroll_y(), ..default()
+                    })).with_children(|body| {
+                        body.spawn((Label::Work, Text::new(""), TextFont::from_font_size(17.).with_font(font.clone()),
+                            TextColor(Color::srgb(0.86, 0.92, 0.70)), Node { flex_shrink: 0., ..default() }));
+                        body.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
+                            for action in [Action::StartWork, Action::CancelWork] {
+                                row.spawn(button(action)).with_child(label(action, &font));
+                            }
+                        });
+                        body.spawn((Label::Notice, Text::new(""), TextFont::from_font_size(16.).with_font(font.clone()),
+                            TextColor(Color::srgb(0.95, 0.86, 0.68)), Node { flex_shrink: 0., ..default() }));
+                        body.spawn((Label::Place, Text::new(""), TextFont::from_font_size(16.).with_font(font.clone()),
+                            TextColor(Color::srgb(0.78, 0.85, 0.79)), Node { flex_shrink: 0., ..default() }));
+                        for kind in RESOURCES {
+                            body.spawn(Node { flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center,
+                                column_gap: px(8), row_gap: px(6), padding: UiRect::vertical(px(4)), flex_shrink: 0., ..default() })
+                                .with_children(|row| {
+                                    row.spawn((Label::Goods(kind), Text::new(kind.name()), TextFont::from_font_size(16.).with_font(font.clone()),
+                                        TextColor(Color::srgb(0.90, 0.94, 0.86)), Node { min_width: px(220), flex_grow: 1., ..default() }));
+                                    for action in [Action::Buy(kind), Action::Sell(kind)] {
+                                        row.spawn(button(action)).with_child(label(action, &font));
+                                    }
+                                });
                         }
+                        body.spawn((Label::Job, Text::new(""), TextFont::from_font_size(17.).with_font(font.clone()),
+                            TextColor(Color::srgb(0.95, 0.85, 0.62)), Node { flex_shrink: 0., ..default() }));
+                        body.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
+                            for action in [Action::Accept, Action::Deliver, Action::Return] {
+                                row.spawn(button(action)).with_child(label(action, &font));
+                            }
+                        });
                     });
-                    panel.spawn((Label::Notice, Text::new(""), TextFont::from_font_size(16.).with_font(font.clone()), TextColor(Color::srgb(0.95, 0.86, 0.68))));
-                    panel.spawn(button(Action::Close)).with_child(label(Action::Close, &font));
-                    panel.spawn((Text::new("B / Esc: close · Tab / arrows: select · Enter: use · Scroll or swipe for more"),
-                        TextFont::from_font_size(14.).with_font(font), TextColor(Color::srgb(0.66, 0.77, 0.71))));
+                    panel.spawn((Text::new("Scroll / swipe for more · Tab / arrows: select · Enter: use · B / Esc: close"),
+                        TextFont::from_font_size(14.).with_font(font), TextColor(Color::srgb(0.66, 0.77, 0.71)),
+                        Node { flex_shrink: 0., ..default() }));
                 });
         });
 }
@@ -370,6 +459,8 @@ fn all_actions() -> Vec<Action> {
         Action::Quantity(1),
         Action::Quantity(5),
         Action::Refresh,
+        Action::StartWork,
+        Action::CancelWork,
     ]
     .into_iter()
     .chain(
@@ -385,6 +476,7 @@ fn enabled(panel: &MarketPanel, action: Action, nearby: Option<u32>) -> bool {
     match action {
         Action::Close | Action::Quantity(_) => true,
         Action::Refresh => panel.pending.is_none(),
+        Action::StartWork | Action::CancelWork => panel.work_action(action).is_some(),
         _ => panel.action(action, nearby).is_some(),
     }
 }
@@ -421,7 +513,7 @@ pub(crate) fn read(
     )>,
     clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
-    mut roots: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<MarketRoot>>,
+    mut roots: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<MarketScroll>>,
 ) {
     let (keys, wheel, time) = input;
     let (pause, console, map, pilot) = modals;
@@ -528,15 +620,18 @@ pub(crate) fn read(
             panel.focused =
                 Some(available[(index + step).rem_euclid(available.len() as i32) as usize]);
             // Keep keyboard focus visible in short landscape windows.
-            if let Some((_, _, node, transform, _, _)) = targets
+            if !matches!(
+                panel.focused,
+                Some(Action::Close | Action::Quantity(_) | Action::Refresh)
+            ) && let Some((_, _, node, transform, _, _)) = targets
                 .iter()
                 .find(|(_, action, ..)| Some(**action) == panel.focused)
             {
                 for (root, root_transform, _) in &roots {
                     let top = transform.translation.y - node.size.y * 0.5;
                     let bottom = top + node.size.y;
-                    let root_top = root_transform.translation.y - root.size.y * 0.5 + 12.;
-                    let root_bottom = root_top + root.size.y - 24.;
+                    let root_top = root_transform.translation.y - root.size.y * 0.5;
+                    let root_bottom = root_top + root.size.y;
                     scroll_delta += if top < root_top {
                         (top - root_top) * root.inverse_scale_factor
                     } else if bottom > root_bottom {
@@ -566,6 +661,17 @@ pub(crate) fn read(
             }
             Action::Quantity(quantity) => panel.quantity = quantity,
             Action::Refresh => panel.last_refresh = f64::NEG_INFINITY,
+            action @ (Action::StartWork | Action::CancelWork) => {
+                if let Some(action) = panel.work_action(action) {
+                    panel.notice.clear();
+                    if let Some(message) = panel.work_request(action) {
+                        // Its reply includes current work and cargo. Avoid immediately
+                        // polling again and consuming the shared server request limit.
+                        panel.last_refresh = time.elapsed_secs_f64();
+                        connection.send(message);
+                    }
+                }
+            }
             action => {
                 if let Some(action) = panel.action(action, nearby) {
                     panel.notice.clear();
@@ -599,6 +705,44 @@ fn wallet(panel: &MarketPanel) -> String {
                 CARGO_CAPACITY
             )
         },
+    )
+}
+
+fn work_text(panel: &MarketPanel, session: &Session) -> String {
+    if let Some(active) = &panel.work.active {
+        return format!(
+            "WORKING · {}\n{:.1} / {:.0} seconds · {} coins on completion\nStay here to finish. Moving away cancels the work.",
+            active.offer.label,
+            active.elapsed_seconds,
+            active.offer.duration_seconds,
+            active.offer.reward
+        );
+    }
+    let Some(offer) = &panel.work.offer else {
+        return "LOCAL WORK · Visit cultivated fields or a workshop to earn coins.".into();
+    };
+    let distance = Vec2::new(
+        offer.position[0] - session.body.position[0],
+        offer.position[2] - session.body.position[2],
+    )
+    .length();
+    let task = match offer.site.kind {
+        WorkKind::TendField => "Plant and tend the village's real crops.",
+        WorkKind::WorkshopMaintenance => {
+            "Use 1 Timber and 1 Stone from village supplies above its reserves."
+        }
+    };
+    format!(
+        "LOCAL WORK · {} · {:.0} m\n{} coins · {:.0} seconds · {}\n{}",
+        offer.label,
+        distance,
+        offer.reward,
+        offer.duration_seconds,
+        task,
+        offer
+            .unavailable_reason
+            .as_deref()
+            .unwrap_or("Stay at this worksite while working.")
     )
 }
 
@@ -653,6 +797,12 @@ pub(crate) fn hud_text(
         ledger.cargo_total(),
         CARGO_CAPACITY
     );
+    if let Some(active) = &panel.work.active {
+        text.push_str(&format!(
+            " · {} {:.1}/{:.0} s · Stay here",
+            active.offer.label, active.elapsed_seconds, active.offer.duration_seconds
+        ));
+    }
     if let Some(job) = &ledger.delivery {
         text.push_str(&format!(
             " · Deliver {} {} to {}",
@@ -695,6 +845,8 @@ pub(crate) fn refresh(
     for (action, mut node, mut background, mut border) in &mut buttons {
         let available = enabled(&panel, *action, nearby);
         let visible = match action {
+            Action::StartWork => panel.work.active.is_none() && panel.work.offer.is_some(),
+            Action::CancelWork => panel.work.active.is_some(),
             Action::Buy(_) | Action::Sell(_) => market.is_some(),
             Action::Accept => {
                 market.is_some_and(|market| market.delivery_offer.is_some())
@@ -740,13 +892,14 @@ pub(crate) fn refresh(
                 |view| format!("{} market", village_name(&world, view.village_id)),
             ),
             Label::Wallet => wallet(&panel),
+            Label::Work => work_text(&panel, &session),
             Label::Place => {
                 if market.is_some() {
                     "Trade from village stores. Food reserves stay with the village. Prices below are totals for your selected quantity.".into()
                 } else if let Some(plan) = world.0.settlements() {
                     plan.villages.iter().min_by(|a,b| Vec3::from_array(a.market).distance_squared(Vec3::from_array(session.body.position))
                     .total_cmp(&Vec3::from_array(b.market).distance_squared(Vec3::from_array(session.body.position))))
-                    .map_or_else(|| "This world has no village markets.".into(), |village| format!("Visit a market entrance to trade or find work. Nearest: {} · {:.0} m. M opens the world map after closing this panel.", village.name,
+                    .map_or_else(|| "This world has no village markets.".into(), |village| format!("Visit a market entrance to trade or take a delivery. Nearest: {} · {:.0} m. M opens the world map after closing this panel.", village.name,
                         Vec2::new(village.market[0]-session.body.position[0], village.market[2]-session.body.position[2]).length()))
                 } else {
                     "This world has no village markets.".into()
@@ -774,7 +927,9 @@ pub(crate) fn refresh(
             }
             Label::Job => job_text(&panel, &world),
             Label::Notice => {
-                if panel
+                if panel.work_pending.is_some() && panel.notice.is_empty() {
+                    "Waiting for the worksite…".into()
+                } else if panel
                     .pending
                     .is_some_and(|(_, _, mutation)| mutation || panel.market.is_none())
                     && panel.notice.is_empty()
@@ -788,6 +943,8 @@ pub(crate) fn refresh(
                 Action::Close => "Close".into(),
                 Action::Quantity(q) => format!("Quantity {q}"),
                 Action::Refresh => "Refresh".into(),
+                Action::StartWork => "Start work".into(),
+                Action::CancelWork => "Cancel work".into(),
                 Action::Accept => "Accept delivery".into(),
                 Action::Deliver => "Deliver & collect pay".into(),
                 Action::Return => "Return cargo · cancel job".into(),
@@ -815,7 +972,7 @@ pub(crate) fn refresh(
 mod tests {
     use super::*;
     use rubblekin_core::{
-        economy::{DeliveryContract, MarketGood},
+        economy::{DeliveryContract, MarketGood, WorkOffer, WorkProgress, WorkSite},
         protocol::SessionMode,
     };
 
@@ -859,6 +1016,112 @@ mod tests {
             window: Entity::PLACEHOLDER,
             force: None,
         }
+    }
+
+    fn work_offer() -> WorkOffer {
+        WorkOffer {
+            site: WorkSite {
+                village_id: 1,
+                kind: WorkKind::TendField,
+                index: 0,
+            },
+            position: [0., 0., 0.],
+            label: "Willowmead · Tend field".into(),
+            reward: 2,
+            duration_seconds: 6.,
+            unavailable_reason: None,
+        }
+    }
+
+    #[test]
+    fn work_waits_for_canonical_progress_and_cancel_cannot_be_undone_by_old_replies() {
+        let mut panel = panel();
+        let ledger = panel.ledger.clone().unwrap();
+        let work = WorkState {
+            offer: Some(work_offer()),
+            active: None,
+        };
+        panel.work_reply(0, work.clone(), ledger.clone(), String::new(), true);
+        let action = panel.work_action(Action::StartWork).unwrap();
+        let ClientMessage::Work {
+            request_id: start, ..
+        } = panel.work_request(action).unwrap()
+        else {
+            panic!()
+        };
+        assert!(panel.work.active.is_none());
+        assert!(panel.work_action(Action::StartWork).is_none());
+        assert!(panel.work_request(WorkAction::Cancel).is_none());
+        assert_eq!(panel.ledger.as_ref(), Some(&ledger));
+        let mut active = work.clone();
+        active.active = Some(WorkProgress {
+            offer: work_offer(),
+            elapsed_seconds: 0.,
+        });
+        panel.work_reply(start, active.clone(), ledger.clone(), String::new(), true);
+        active.active.as_mut().unwrap().elapsed_seconds = 3.25;
+        panel.work_reply(0, active.clone(), ledger.clone(), String::new(), true);
+        assert_eq!(panel.work.active.as_ref().unwrap().elapsed_seconds, 3.25);
+        // An already-acknowledged start cannot rewind the server's live progress.
+        panel.work_reply(start, work.clone(), ledger.clone(), String::new(), true);
+        assert_eq!(panel.work.active.as_ref().unwrap().elapsed_seconds, 3.25);
+        let action = panel.work_action(Action::CancelWork).unwrap();
+        let ClientMessage::Work {
+            request_id: cancel, ..
+        } = panel.work_request(action).unwrap()
+        else {
+            panic!()
+        };
+        assert!(cancel > start);
+        panel.close();
+        assert!(panel.work.active.is_some(), "Cancel is not predicted");
+        panel.work_reply(
+            cancel,
+            work.clone(),
+            ledger.clone(),
+            "Work cancelled.".into(),
+            true,
+        );
+        panel.work_reply(start, active, ledger.clone(), String::new(), true);
+        assert!(panel.work.active.is_none() && panel.work_pending.is_none());
+        assert!(!panel.open && panel.input_blocked);
+        assert_eq!(panel.notice, "Work cancelled.");
+        assert_eq!(panel.ledger.as_ref(), Some(&ledger));
+        let paid = PlayerEconomy {
+            revision: ledger.revision + 1,
+            coins: ledger.coins + 2,
+            ..ledger.clone()
+        };
+        panel.work_reply(0, work, paid.clone(), "Earned 2 coins!".into(), true);
+        panel.reply(0, ledger, None, String::new(), true);
+        assert_eq!(panel.ledger.as_ref(), Some(&paid));
+        panel.clear();
+        assert!(
+            panel.work.active.is_none()
+                && panel.work.offer.is_none()
+                && panel.work_pending.is_none()
+        );
+    }
+
+    #[test]
+    fn work_availability_uses_the_server_reason_without_implying_payment() {
+        let (mut app, _, _, _peer) = app();
+        let mut offer = work_offer();
+        offer.site.kind = WorkKind::WorkshopMaintenance;
+        offer.label = "Willowmead · Workshop maintenance".into();
+        offer.reward = 4;
+        offer.unavailable_reason = Some("Village supplies are reserved.".into());
+        app.world_mut().resource_mut::<MarketPanel>().work.offer = Some(offer.clone());
+        let panel = app.world().resource::<MarketPanel>();
+        assert!(panel.work_action(Action::StartWork).is_none());
+        let text = work_text(panel, app.world().resource::<Session>());
+        assert!(text.contains("Village supplies are reserved."));
+        assert!(text.contains("1 Timber and 1 Stone from village supplies"));
+        let mut panel = app.world_mut().resource_mut::<MarketPanel>();
+        offer.unavailable_reason = None;
+        panel.work.offer = Some(offer);
+        assert!(panel.work_action(Action::StartWork).is_some());
+        assert_eq!(panel.ledger.as_ref().unwrap().coins, 0);
     }
 
     #[test]
@@ -1057,6 +1320,10 @@ mod tests {
     }
 
     fn app() -> (App, Entity, Entity, std::net::TcpStream) {
+        test_app(false)
+    }
+
+    fn test_app(layout: bool) -> (App, Entity, Entity, std::net::TcpStream) {
         use std::{io::Write, net::TcpListener};
         let welcome = crate::join::tests::welcome(SessionMode::Player);
         let (world, session) = crate::join::session_from_welcome(
@@ -1119,8 +1386,221 @@ mod tests {
                 BorderColor::default(),
             ))
             .id();
+        if layout {
+            use bevy::camera::{ComputedCameraValues, RenderTargetInfo, Viewport};
+            app.add_plugins((
+                MinimalPlugins,
+                bevy::asset::AssetPlugin::default(),
+                bevy::text::TextPlugin,
+                bevy::ui::UiPlugin,
+            ))
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<TextureAtlasLayout>>();
+            app.world_mut().spawn((
+                Camera2d,
+                Camera {
+                    computed: ComputedCameraValues {
+                        target_info: Some(RenderTargetInfo {
+                            physical_size: UVec2::new(840, 400),
+                            scale_factor: 1.,
+                        }),
+                        ..default()
+                    },
+                    viewport: Some(Viewport {
+                        physical_size: UVec2::new(840, 400),
+                        ..default()
+                    }),
+                    ..default()
+                },
+            ));
+            app.world_mut().entity_mut(close).despawn();
+        }
         app.update();
         (app, window, close, peer)
+    }
+
+    #[test]
+    fn compact_layout_keeps_wallet_close_and_scroll_hint_visible_while_body_scrolls() {
+        let (mut app, _, _, _peer) = test_app(true);
+        {
+            let mut panel = app.world_mut().resource_mut::<MarketPanel>();
+            panel.work.offer = Some(work_offer());
+            panel.ledger.as_mut().unwrap().delivery = Some(offer());
+        }
+        for _ in 0..4 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let (card, card_transform) = world
+            .query_filtered::<(&ComputedNode, &UiGlobalTransform), With<Panel>>()
+            .single(world)
+            .unwrap();
+        assert!(card.size.y <= 376. && card.size.y > 300., "{card:?}");
+        let card_top = card_transform.translation.y - card.size.y * 0.5;
+        assert!(card_top >= 12. && card_top + card.size.y <= 388.);
+        let (body, transform) = world
+            .query_filtered::<(&ComputedNode, &UiGlobalTransform), With<MarketScroll>>()
+            .single(world)
+            .unwrap();
+        assert!(body.size.y > 60. && body.content_size.y > body.size.y);
+        let body_bottom = transform.translation.y + body.size.y * 0.5;
+        let wallet = world
+            .query::<(&Label, &ComputedNode, &UiGlobalTransform)>()
+            .iter(world)
+            .find(|(label, ..)| matches!(label, Label::Wallet))
+            .unwrap();
+        assert!(wallet.2.translation.y - wallet.1.size.y * 0.5 >= card_top);
+        let wallet_position = wallet.2.translation;
+        let close = world
+            .query::<(&Action, &ComputedNode, &UiGlobalTransform)>()
+            .iter(world)
+            .find(|(action, ..)| **action == Action::Close)
+            .unwrap();
+        assert!(close.1.size.y >= 44.);
+        assert!(close.2.translation.y + close.1.size.y * 0.5 <= body_bottom);
+        let hint = world
+            .query::<(&Text, &ComputedNode, &UiGlobalTransform)>()
+            .iter(world)
+            .find(|(text, ..)| text.0.starts_with("Scroll / swipe"))
+            .unwrap();
+        assert!(hint.2.translation.y - hint.1.size.y * 0.5 >= body_bottom);
+        assert!(hint.2.translation.y + hint.1.size.y * 0.5 <= 388.);
+        let scroll = world
+            .query_filtered::<Entity, With<MarketScroll>>()
+            .single(world)
+            .unwrap();
+        world.get_mut::<ScrollPosition>(scroll).unwrap().0.y = 100.;
+        app.update();
+        let world = app.world_mut();
+        let moved_wallet = world
+            .query::<(&Label, &UiGlobalTransform)>()
+            .iter(world)
+            .find(|(label, ..)| matches!(label, Label::Wallet))
+            .unwrap();
+        assert_eq!(moved_wallet.1.translation, wallet_position);
+        assert!(world.get::<ScrollPosition>(scroll).unwrap().0.y > 0.);
+    }
+
+    #[test]
+    fn keyboard_work_start_defers_polling_and_touch_swipe_does_not_activate_work() {
+        use std::io::BufRead;
+        let (mut app, window, close, peer) = app();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let mut reader = std::io::BufReader::new(peer);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap(); // Hello from the real connection.
+        app.world_mut().entity_mut(close).insert(Action::StartWork);
+        app.world_mut().resource_mut::<MarketPanel>().work.offer = Some(work_offer());
+        let scroll = app
+            .world_mut()
+            .query_filtered::<Entity, With<MarketScroll>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().entity_mut(scroll).insert((
+            ComputedNode {
+                size: Vec2::new(300., 100.),
+                content_size: Vec2::new(300., 500.),
+                inverse_scale_factor: 1.,
+                ..default()
+            },
+            UiGlobalTransform::from_xy(150., 100.),
+        ));
+        // A swipe that begins over Start changes the actual scroll state, not the task.
+        for (phase, point) in [
+            (TouchPhase::Started, Vec2::splat(100.)),
+            (TouchPhase::Moved, Vec2::new(100., 80.)),
+            (TouchPhase::Ended, Vec2::new(100., 65.)),
+        ] {
+            let mut event = touch(7, phase, point);
+            event.window = window;
+            app.world_mut().write_message(event);
+        }
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(scroll).unwrap().0.y, 35.);
+        assert!(app.world().resource::<MarketPanel>().work_pending.is_none());
+        // Tab from Refresh reaches the available work action; Enter sends one request.
+        app.world_mut().resource_mut::<MarketPanel>().focused = Some(Action::Refresh);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Tab);
+        app.world_mut().run_schedule(Update);
+        assert_eq!(
+            app.world().resource::<MarketPanel>().focused,
+            Some(Action::StartWork)
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        // A refresh is due, but the explicit work action owns this request frame.
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(2));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.world_mut().run_schedule(Update);
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let message: ClientMessage = serde_json::from_str(&line).unwrap();
+        let ClientMessage::Work {
+            request_id,
+            action: WorkAction::Start { site },
+        } = message
+        else {
+            panic!("{message:?}")
+        };
+        assert_eq!(site, work_offer().site);
+        assert!(
+            app.world().resource::<MarketPanel>().pending.is_none(),
+            "Start must not also send an automatic Market View"
+        );
+        app.world_mut().run_schedule(Update); // Same Enter frame cannot enqueue a duplicate.
+        assert_eq!(
+            app.world().resource::<MarketPanel>().work_pending,
+            Some(request_id)
+        );
+        assert!(app.world().resource::<MarketPanel>().work.active.is_none());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        let ledger = app
+            .world()
+            .resource::<MarketPanel>()
+            .ledger
+            .clone()
+            .unwrap();
+        app.world_mut().resource_mut::<MarketPanel>().work_reply(
+            request_id,
+            WorkState {
+                offer: Some(work_offer()),
+                active: Some(WorkProgress {
+                    offer: work_offer(),
+                    elapsed_seconds: 1.5,
+                }),
+            },
+            ledger,
+            String::new(),
+            true,
+        );
+        app.world_mut().entity_mut(close).insert(Action::CancelWork);
+        // A short native tap activates Cancel, leaving work active until its reply.
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            let mut event = touch(8, phase, Vec2::splat(100.));
+            event.window = window;
+            app.world_mut().write_message(event);
+        }
+        app.update();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<ClientMessage>(&line).unwrap(),
+            ClientMessage::Work {
+                action: WorkAction::Cancel,
+                ..
+            }
+        ));
+        assert!(app.world().resource::<MarketPanel>().work.active.is_some());
     }
 
     #[test]

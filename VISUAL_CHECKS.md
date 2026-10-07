@@ -1,6 +1,6 @@
 # Repeatable village and airship checks
 
-Use this small manual route when changing terrain streaming, camera framing, menus or capture. It complements the logic tests; passing those tests alone does not establish visual continuity. The route uses **unedited GeographyV3, seed 42**, a 1440 × 900 desktop window, Balanced, 48 m near detail, 128 m trees and 32 m shadows. Repeat the approach at **512 m near detail**. Record the actual window size, preset and distances if they differ.
+Use this small manual route when changing terrain streaming, camera framing, menus or capture. It complements the logic tests; passing those tests alone does not establish visual continuity. The original continuity route below uses **unedited GeographyV3, seed 42**, a 1440 × 900 desktop window, Balanced, 48 m near detail, 128 m trees and 32 m shadows. Repeat the approach at **512 m near detail**. Record the actual window size, preset and distances if they differ.
 
 ## Isolated starting scene
 
@@ -42,12 +42,27 @@ The helper uses authoritative `f64` simulation seconds, not wall-clock time or t
 
 Record the commit, OS/GPU, generation/seed, exact graphics distances, window size, route/direction, simulation time when known, and whether this was a fresh start or reload. Keep the small set of useful screenshots and the relevant log next to those notes. Record actual observations and incomplete checks separately. Screenshots do not measure frame-time distributions, and this route does not establish Android lifecycle or other-device performance.
 
-## Market and regional building content
+## V5 markets, local work, and world variety
 
-Use a fresh path with `--generation v4 --name ContentTester` for this content route. Keep `player-profiles.json` beside this isolated client data; repeat with the same character name to check saved coins, cargo, contract, and location. Existing V3 saves also have market/delivery actions, but retain their original buildings.
+Use a fresh path with `--generation v5 --name ContentTester` for this content route, in the isolated directory above. Keep `player-profiles.json` beside this client data; repeat with the same character name to check saved coins, cargo, contract, and location. Existing V3/V4 saves gain market/local-work actions while retaining their original terrain, buildings, and trees. A generation flag never upgrades an existing save. The Pinevale → Willowbank route above is explicitly V3; for V5, run `printf '0\n180\n360\n' | "$qa_repo/target/debug/examples/airships" 42 v5` and use its actual town/port names and route endpoints.
 
 At seed 42 Pinemead, the market entrance is `(2823.75,205.5,-1920.25)`. Open B/Cargo nearby, accept a delivery, and verify the six sealed units reduce the origin stock. Walk/ride to the named destination, deliver for 12 coins, then buy/sell an ordinary good. Check insufficient coins, full cargo, and remote actions remain unavailable. Leave/reopen the same save and verify progress and position. Admin coordinate staging checks market transactions but does not establish a full physical delivery journey.
 
-For regional assets, visit Willowmead’s windmill entrance `(-4303.25,197.5,5728.25)`, Willowvale’s lookout `(-1355.75,226.0,-5679.75)`, and Fernwood’s timber houses around `(-12287.75,38.5,-3839.75)`. Verify clear approaches, interiors, stairs up/down, full silhouettes before detailed terrain arrives, and matching map/inspection labels. Windmill sails are stationary. A source-derived asset sheet can be regenerated with `cargo run --locked -p rubblekin_core --example village_asset_catalog -- /tmp/village-assets.svg`.
+For paid local work, walk beside intact planting soil, open B/Cargo, and check the offer’s distance and availability. Complete six seconds of tending for two coins and verify the actual village crop cycle is planted or advanced. Ready crops must reject more tending. Visit the workshop’s stone workbench and complete maintenance for four coins; village stock should spend one Timber and one Stone while retaining eight units of each. Check Cancel, movement away, a blocked/removed work target, and leave/rejoin before completion: unfinished work must award nothing and must not resume. Completed rewards/effects should survive rejoining. Record stock changes with concurrent residents in mind.
 
-Repeat the market in an 840×400 `--touch --low` desktop preview: Cargo/Market should be direct, content must scroll, and Start/Buy/Sell/Delivery/Close should remain large and reachable. This layout preview does not establish physical Android behavior.
+For regional assets, visit Willowmead’s windmill entrance `(-4303.25,197.5,5728.25)`, Willowvale’s lookout `(-1355.75,226.0,-5679.75)`, and Fernwood’s timber houses around `(-12287.75,38.5,-3839.75)`. Verify clear approaches, interiors, stairs up/down, full silhouettes before detailed terrain arrives, and matching map/inspection labels. Windmill sails are stationary. These V4 buildings remain present in V5; they are separate from the new roadside sites below.
+
+For V5 roadside content, seed 42 has 17 sites. Stage beside the trail ruin entrance `(3026.25,205.5,-153.25)` or waystone entrance `(2928.25,222.0,1448.75)`, then walk the short spur out and back. At the ruin, enter through both open arches and cross the roofless courtyard; inspect the stonework and compare its silhouette at near/medium detail. Check the main trail in both directions at each junction for new steps or blocked passage. The map should identify violet R/S markers and inspection should identify the actual structure; removing an inspected block must not leave stale building text. Teleport staging does not establish walking the whole inter-village route.
+
+Compare an aspen near `(2511.75,205.0,-1913.25)`, cedar near `(3522.75,362.5,-6556.75)`, and spreading canopy tree near `(-6198.25,182.0,3952.25)`. These are tree-base coordinates; stage on nearby clear ground. Check each crown in detailed voxels and simplified form, with consistent crown colors in the distant atlas. Confirm nearby landmarks and their approaches are clear of tree crowns. These source-derived coordinates are staging aids, not completed native acceptance.
+
+Regenerate the reviewed source-geometry catalogs independently of a native run:
+
+```sh
+cargo run --locked -p rubblekin_core --example village_asset_catalog -- /tmp/village-assets.svg
+cargo run --locked -p rubblekin_core --example village_asset_catalog -- /tmp/tree-silhouettes.svg --trees
+```
+
+Compare the [eleven building types](artifacts/village-assets.svg) and [six tree silhouettes](artifacts/tree-silhouettes.svg). Catalog renders verify the asset source, not lighting, terrain streaming, or movement in the running client.
+
+Repeat Cargo in an 840×400 `--touch --low` desktop preview. Its title, wallet, Close, quantity and Refresh controls should stay fixed while work, delivery and trade content scrolls. Swipe starting over Start work: a drag must scroll without starting work; a short tap must still start it. Verify Cancel, Buy/Sell and Delivery are reachable, keyboard selection scrolls the focused control into view, and the scroll hint stays visible. This layout preview does not establish physical Android behavior.

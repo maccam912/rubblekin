@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::villages::VillageLife;
 
 pub(crate) const MAX_PROFILES: usize = 1024;
-const MAX_COINS: u64 = 1_000_000_000;
+pub(crate) const MAX_COINS: u64 = 1_000_000_000;
 const MAX_STOCK: f32 = 10_000.0;
 pub(crate) type Profiles = BTreeMap<String, SavedPlayer>;
 

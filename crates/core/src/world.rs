@@ -30,11 +30,15 @@ pub enum WorldGeneration {
     GeographyV2,
     GeographyV3,
     GeographyV4,
+    GeographyV5,
 }
 
 impl WorldGeneration {
     pub const fn has_settlements(self) -> bool {
-        matches!(self, Self::GeographyV3 | Self::GeographyV4)
+        matches!(
+            self,
+            Self::GeographyV3 | Self::GeographyV4 | Self::GeographyV5
+        )
     }
 }
 
@@ -153,13 +157,16 @@ pub enum TreeKind {
     Broadleaf,
     Conifer,
     Scrub,
+    Aspen,
+    Cedar,
+    Canopy,
 }
 
 impl TreeKind {
     pub fn leaf_color(self) -> [f32; 4] {
         match self {
-            Self::Broadleaf => Block::Leaves.color(),
-            Self::Conifer => [0.18, 0.34, 0.25, 1.0],
+            Self::Broadleaf | Self::Aspen | Self::Canopy => Block::Leaves.color(),
+            Self::Conifer | Self::Cedar => [0.18, 0.34, 0.25, 1.0],
             Self::Scrub => [0.46, 0.48, 0.23, 1.0],
         }
     }
@@ -186,6 +193,9 @@ impl GeneratedTree {
             TreeKind::Broadleaf => (-4, 4),
             TreeKind::Conifer => (-8, 2),
             TreeKind::Scrub => (-2, 2),
+            TreeKind::Aspen => (-6, 3),
+            TreeKind::Cedar => (-11, 3),
+            TreeKind::Canopy => (-2, 2),
         };
         let mut low = i32::MAX;
         let mut high = i32::MIN;
@@ -193,6 +203,18 @@ impl GeneratedTree {
             let covered = match self.kind {
                 TreeKind::Broadleaf => horizontal + dy * dy * 2 <= 24,
                 TreeKind::Scrub => horizontal + dy * dy <= 5,
+                TreeKind::Aspen => horizontal * 5 + (dy + 1) * (dy + 1) <= 25,
+                TreeKind::Canopy => horizontal + dy * dy * 5 <= 30,
+                TreeKind::Cedar => {
+                    let radius = match dy {
+                        ..=-8 => 5,
+                        -7..=-5 => 4,
+                        -4..=-2 => 3,
+                        -1..=1 => 2,
+                        _ => 1,
+                    };
+                    horizontal <= radius * radius
+                }
                 TreeKind::Conifer => {
                     let radius = match dy {
                         ..=-5 => 4,
@@ -291,9 +313,23 @@ impl World {
             overrides: HashMap::new(),
         };
         if generation.has_settlements() {
-            let mut plan = SettlementPlan::generate(&world);
-            if generation == WorldGeneration::GeographyV4 {
+            // New scenery must not rescore timber catchments and move towns.
+            // A private V4 view keeps original settlement decisions and caches
+            // separate from the V5 trees used by the finished world.
+            let planning_world = (generation == WorldGeneration::GeographyV5).then(|| Self {
+                generation: WorldGeneration::GeographyV4,
+                geographic_columns: Arc::new(RwLock::new(HashMap::new())),
+                ..world.clone()
+            });
+            let mut plan = SettlementPlan::generate(planning_world.as_ref().unwrap_or(&world));
+            if matches!(
+                generation,
+                WorldGeneration::GeographyV4 | WorldGeneration::GeographyV5
+            ) {
                 plan.add_regional_buildings(&world);
+            }
+            if generation == WorldGeneration::GeographyV5 {
+                plan.add_roadside_landmarks(&world);
             }
             world.settlements = Some(Arc::new(plan));
         }
@@ -848,7 +884,12 @@ impl World {
         let dx = x - tree_x;
         let dz = z - tree_z;
         if !cleared
-            && dx * dx + dz * dz <= 24
+            && dx * dx + dz * dz
+                <= if self.generation == WorldGeneration::GeographyV5 {
+                    30
+                } else {
+                    24
+                }
             && let Some(tree) = self.tree_at(grid_x, grid_z)
         {
             if dx == 0 && dz == 0 {
@@ -892,10 +933,17 @@ impl World {
         }
         let tree_mx = (tree_x as f32 + 0.5) * CELL_SIZE;
         let tree_mz = (tree_z as f32 + 0.5) * CELL_SIZE;
-        if self
-            .settlements()
-            .is_some_and(|plan| plan.clears_tree(tree_mx, tree_mz, 2.5))
-        {
+        if self.settlements().is_some_and(|plan| {
+            plan.clears_tree(
+                tree_mx,
+                tree_mz,
+                if self.generation == WorldGeneration::GeographyV5 {
+                    3.0
+                } else {
+                    2.5
+                },
+            )
+        }) {
             return None;
         }
         let sample = geography.sample(tree_mx, tree_mz);
@@ -904,6 +952,7 @@ impl World {
             WorldGeneration::GeographyV2
                 | WorldGeneration::GeographyV3
                 | WorldGeneration::GeographyV4
+                | WorldGeneration::GeographyV5
         );
         let (density, kind) = match sample.biome {
             Biome::Forest => (75, TreeKind::Broadleaf),
@@ -934,10 +983,23 @@ impl World {
         if !gentle_slope {
             return None;
         }
+        let kind = if self.generation == WorldGeneration::GeographyV5 {
+            match (sample.biome, (tree_hash >> 24) % 3) {
+                (Biome::Forest, 0) => TreeKind::Aspen,
+                (Biome::PineForest, 0) => TreeKind::Cedar,
+                (Biome::Rainforest, 0 | 1) => TreeKind::Canopy,
+                _ => kind,
+            }
+        } else {
+            kind
+        };
         let trunk_height = match kind {
             TreeKind::Broadleaf => 10 + ((tree_hash >> 20) % 7) as i32,
             TreeKind::Conifer => 18 + ((tree_hash >> 20) % 7) as i32,
             TreeKind::Scrub => 3 + ((tree_hash >> 20) % 3) as i32,
+            TreeKind::Aspen => 16 + ((tree_hash >> 20) % 7) as i32,
+            TreeKind::Cedar => 22 + ((tree_hash >> 20) % 7) as i32,
+            TreeKind::Canopy => 17 + ((tree_hash >> 20) % 8) as i32,
         };
         Some(GeneratedTree {
             base: BlockPos::new(
@@ -947,7 +1009,11 @@ impl World {
             ),
             trunk_height,
             kind,
-            crown_radius: if kind == TreeKind::Scrub { 2 } else { 4 },
+            crown_radius: match kind {
+                TreeKind::Scrub | TreeKind::Aspen => 2,
+                TreeKind::Cedar | TreeKind::Canopy => 5,
+                _ => 4,
+            },
         })
     }
 
@@ -1068,6 +1134,117 @@ mod tests {
     use super::*;
 
     #[test]
+    fn geography_v4_buildings_lanes_and_tree_identity_stay_frozen() {
+        use crate::village_assets::{block_at, dimensions};
+        let world = World::generate(42, WorldGeneration::GeographyV4);
+        let mut signature = 0xcbf29ce484222325_u64;
+        let mut add = |n: u32| {
+            for b in n.to_le_bytes() {
+                signature ^= u64::from(b);
+                signature = signature.wrapping_mul(0x100000001b3);
+            }
+        };
+        for village in &world.settlements().unwrap().villages {
+            add(village.id);
+            for b in &village.buildings {
+                for n in [
+                    b.origin.x,
+                    b.origin.y,
+                    b.origin.z,
+                    i32::from(b.rotation),
+                    b.kind as i32,
+                ] {
+                    add(n as u32);
+                }
+                let [w, h, d] = dimensions(b.kind);
+                for x in 0..w {
+                    for y in 0..h {
+                        for z in 0..d {
+                            add(block_at(b.kind, x, y, z).unwrap() as u32);
+                        }
+                    }
+                }
+            }
+            for lane in &village.lanes {
+                for p in &lane.points {
+                    for n in p {
+                        add(n.to_bits());
+                    }
+                }
+            }
+        }
+        for x in -1_360..1_360 {
+            for z in -1_360..1_360 {
+                if let Some(t) = world.tree_at(x, z) {
+                    for n in [
+                        t.base.x,
+                        t.base.y,
+                        t.base.z,
+                        t.trunk_height,
+                        t.crown_radius,
+                        t.kind as i32,
+                    ] {
+                        add(n as u32);
+                    }
+                }
+            }
+        }
+        assert_eq!(signature, 14_720_953_615_095_536_853);
+    }
+
+    #[test]
+    fn v5_tree_species_share_exact_editable_crowns_and_keep_tree_anchors() {
+        let world = World::generate(42, WorldGeneration::GeographyV5);
+        let previous = World::generate(42, WorldGeneration::GeographyV4);
+        let mut found = [false; 6];
+        for gx in (-1_100..1_100).step_by(7) {
+            for gz in (-1_100..1_100).step_by(7) {
+                let Some(tree) = world.tree_at(gx, gz) else {
+                    continue;
+                };
+                let index = tree.kind as usize;
+                if found[index] {
+                    continue;
+                }
+                let old = previous
+                    .tree_at(gx, gz)
+                    .expect("V5 reserves more space, never moves tree anchors");
+                assert_eq!(tree.base, old.base);
+                assert!(tree.crown_radius <= 5);
+                for dx in -6..=6 {
+                    for dz in -6..=6 {
+                        let leaves = tree.leaf_bounds(dx, dz);
+                        if let Some((low, high)) = leaves {
+                            assert!(dx.abs() <= tree.crown_radius && dz.abs() <= tree.crown_radius);
+                            for y in low..=high {
+                                let block = world.block(BlockPos::new(
+                                    tree.base.x + dx,
+                                    y,
+                                    tree.base.z + dz,
+                                ));
+                                assert!(
+                                    block == Block::Leaves
+                                        || (dx == 0
+                                            && dz == 0
+                                            && y <= tree.crown_y()
+                                            && block == Block::Wood),
+                                    "{:?} crown differs at {dx},{y},{dz}: {block:?}",
+                                    tree.kind
+                                );
+                            }
+                        }
+                    }
+                }
+                found[index] = true;
+            }
+        }
+        assert!(
+            found.into_iter().all(|yes| yes),
+            "seed42 misses a tree species: {found:?}"
+        );
+    }
+
+    #[test]
     fn shared_tree_shapes_have_distinct_bounded_canopies() {
         for (kind, trunk_height, low, high) in [
             (TreeKind::Broadleaf, 12, -3, 3),
@@ -1108,6 +1285,7 @@ mod tests {
                     TreeKind::Broadleaf => 0,
                     TreeKind::Conifer => 1,
                     TreeKind::Scrub => 2,
+                    _ => panic!("new tree kinds must not enter GeographyV2"),
                 };
                 if found[index] {
                     continue;

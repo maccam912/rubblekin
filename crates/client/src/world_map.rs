@@ -147,6 +147,7 @@ pub(super) struct MapLabel(usize);
 #[derive(Component)]
 pub(super) enum MapMarker {
     Town(usize),
+    Roadside(usize),
     You,
     Spawn,
 }
@@ -278,6 +279,11 @@ pub(crate) fn setup(
         .settlements()
         .map(|plan| plan.villages.as_slice())
         .unwrap_or(&[]);
+    let roadside = world
+        .0
+        .settlements()
+        .map(|plan| plan.roadside_landmarks.as_slice())
+        .unwrap_or(&[]);
     commands
         .spawn((
             GameEntity,
@@ -337,6 +343,34 @@ pub(crate) fn setup(
                         },
                     ))
                     .with_children(|canvas| {
+                        for (index, site) in roadside.iter().enumerate() {
+                            canvas
+                                .spawn((
+                                    MapMarker::Roadside(index),
+                                    ZIndex(1),
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        width: px(16),
+                                        height: px(16),
+                                        align_items: AlignItems::Center,
+                                        justify_content: JustifyContent::Center,
+                                        border_radius: BorderRadius::all(px(3)),
+                                        border: UiRect::all(px(1)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgb(0.23, 0.15, 0.28)),
+                                    BorderColor::all(Color::srgb(0.83, 0.65, 0.92)),
+                                ))
+                                .with_child(label(
+                                    if site.building.kind == BuildingKind::TrailRuin {
+                                        "R"
+                                    } else {
+                                        "S"
+                                    },
+                                    &font,
+                                    11.,
+                                ));
+                        }
                         for (index, town) in towns.iter().enumerate() {
                             canvas
                                 .spawn((
@@ -708,11 +742,20 @@ pub(crate) fn refresh(
         .iter()
         .map(|town| map.point(map_uv(&world.0, town.center), side))
         .collect();
+    let roadside = world
+        .0
+        .settlements()
+        .map(|plan| plan.roadside_landmarks.as_slice())
+        .unwrap_or(&[]);
     let names: Vec<_> = towns.iter().map(|town| town.name.as_str()).collect();
-    let reserved: Vec<_> = you_point
+    let mut reserved: Vec<_> = you_point
         .into_iter()
         .map(|point| Rect::from_corners(point + Vec2::new(-10., -14.), point + Vec2::new(58., 16.)))
         .collect();
+    reserved.extend(roadside.iter().filter_map(|site| {
+        map.point(map_uv(&world.0, site.building.entrance()), side)
+            .map(|point| Rect::from_center_size(point, Vec2::splat(18.)))
+    }));
     let labels = town_labels(&points, &names, side, &reserved);
     for (mut node, root, canvas, marker, label, sidebar) in &mut nodes {
         if root.is_some() {
@@ -741,6 +784,12 @@ pub(crate) fn refresh(
         if let Some(marker) = marker {
             let (point, radius) = match marker {
                 MapMarker::Town(index) => (points[*index], 10.),
+                MapMarker::Roadside(index) => (
+                    roadside.get(*index).and_then(|site| {
+                        map.point(map_uv(&world.0, site.building.entrance()), side)
+                    }),
+                    8.,
+                ),
                 MapMarker::You => (you_point, 8.),
                 MapMarker::Spawn => {
                     let spawn = map.point(map_uv(&world.0, world.0.spawn_position()), side);
@@ -796,6 +845,22 @@ pub(crate) fn refresh(
                 you[1],
                 you[2]
             );
+            if side >= 520.
+                && let Some(site) = roadside.iter().min_by(|a, b| {
+                    let distance = |p: [f32; 3]| (p[0] - you[0]).hypot(p[2] - you[2]);
+                    distance(a.building.entrance()).total_cmp(&distance(b.building.entrance()))
+                })
+            {
+                let p = site.building.entrance();
+                let distance = (p[0] - you[0]).hypot(p[2] - you[2]);
+                let name = if site.building.kind == BuildingKind::TrailRuin {
+                    "trail ruin"
+                } else {
+                    "waystone"
+                };
+                text.0
+                    .push_str(&format!("\nNearest {name}: {:.1} km", distance / 1000.));
+            }
         }
         if let Some(index) = town {
             font.font_size = (if side < 280. {
@@ -818,7 +883,15 @@ pub(crate) fn refresh(
             } else {
                 format!("{meters:.0} m across")
             };
-            text.0 = if compact {
+            text.0 = if !roadside.is_empty() && compact {
+                format!(
+                    "{span} · Cyan: you · Gold: towns · Violet R/S: ruins/waystones · Drag/pinch"
+                )
+            } else if !roadside.is_empty() {
+                format!(
+                    "{span} · Cyan: you · Gold: towns · Violet R/S: ruins/waystones | Drag: pan · Scroll/pinch: zoom · C/R: center/world"
+                )
+            } else if compact {
                 format!("{span}  ·  Drag: pan  ·  Pinch: zoom  ·  Cyan: you  ·  Gold: towns")
             } else {
                 format!(
@@ -985,6 +1058,55 @@ mod tests {
             keys.press(key);
         }
         fixture.app.update();
+    }
+
+    #[test]
+    fn roadside_markers_follow_map_zoom_crop_and_do_not_invent_sites_in_old_worlds() {
+        use rubblekin_core::world::{World, WorldGeneration};
+        let mut fixture = fixture();
+        let world = World::generate(42, WorldGeneration::GeographyV5);
+        let entrance = world.settlements().unwrap().roadside_landmarks[0]
+            .building
+            .entrance();
+        let uv = map_uv(&world, entrance);
+        fixture.app.insert_resource(VoxelWorld(world));
+        let site = fixture
+            .app
+            .world_mut()
+            .spawn((MapMarker::Roadside(0), Node::default()))
+            .id();
+        fixture.app.world_mut().resource_mut::<WorldMap>().open = true;
+        fixture.app.update();
+        let side = layout(fixture.app.world().get::<Window>(fixture.window).unwrap()).0;
+        let marker = fixture.app.world().get::<Node>(site).unwrap();
+        assert_eq!(marker.display, Display::Flex);
+        assert_eq!(marker.left, px(uv.x * side - 8.));
+        assert_eq!(marker.top, px(uv.y * side - 8.));
+        {
+            let mut map = fixture.app.world_mut().resource_mut::<WorldMap>();
+            map.zoom = 8.;
+            map.center = Vec2::splat(if uv.x > 0.5 { 0.0625 } else { 0.9375 });
+        }
+        fixture.app.update();
+        assert_eq!(
+            fixture.app.world().get::<Node>(site).unwrap().display,
+            Display::None
+        );
+        fixture.app.world_mut().resource_mut::<WorldMap>().center = uv;
+        fixture.app.update();
+        assert_eq!(
+            fixture.app.world().get::<Node>(site).unwrap().display,
+            Display::Flex
+        );
+        fixture.app.insert_resource(VoxelWorld(World::generate(
+            42,
+            WorldGeneration::GeographyV4,
+        )));
+        fixture.app.update();
+        assert_eq!(
+            fixture.app.world().get::<Node>(site).unwrap().display,
+            Display::None
+        );
     }
 
     fn clear_keys(fixture: &mut Fixture) {

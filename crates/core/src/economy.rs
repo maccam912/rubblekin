@@ -95,3 +95,45 @@ pub enum MarketAction {
     Deliver,
     ReturnDelivery,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkKind {
+    TendField,
+    WorkshopMaintenance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkSite {
+    pub village_id: u32,
+    pub kind: WorkKind,
+    pub index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkOffer {
+    pub site: WorkSite,
+    pub position: [f32; 3],
+    pub label: String,
+    pub reward: u64,
+    pub duration_seconds: f32,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkProgress {
+    pub offer: WorkOffer,
+    pub elapsed_seconds: f32,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkState {
+    pub offer: Option<WorkOffer>,
+    pub active: Option<WorkProgress>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkAction {
+    View,
+    Start { site: WorkSite },
+    Cancel,
+}

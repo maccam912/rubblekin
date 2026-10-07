@@ -172,7 +172,10 @@ fn paint_trees_with_progress(
     let last = (world.radius_cells() - 1).div_euclid(TREE_GRID_CELLS);
     let refined = matches!(
         world.generation(),
-        WorldGeneration::GeographyV2 | WorldGeneration::GeographyV3 | WorldGeneration::GeographyV4
+        WorldGeneration::GeographyV2
+            | WorldGeneration::GeographyV3
+            | WorldGeneration::GeographyV4
+            | WorldGeneration::GeographyV5
     );
     for gz in first..=last {
         if (gz - first) % 64 == 0 {
@@ -344,29 +347,35 @@ fn paint_settlements(world: &World, grid: MapGrid, data: &mut [u8]) {
         grid,
         plan.trails
             .iter()
-            .chain(plan.villages.iter().flat_map(|v| &v.lanes)),
+            .chain(plan.villages.iter().flat_map(|v| &v.lanes))
+            .chain(plan.roadside_landmarks.iter().map(|site| &site.approach)),
     );
     for (pixel, coverage) in data.as_chunks_mut::<4>().0.iter_mut().zip(mask) {
         blend_pixel(pixel, ROAD_COLOR, coverage as f32 / 255.0);
     }
-    for village in &plan.villages {
-        for building in &village.buildings {
-            let [width, _, depth] = building.dimensions();
-            paint_rect(
-                data,
-                grid,
-                [
-                    building.origin.x as f32 * CELL_SIZE,
-                    building.origin.z as f32 * CELL_SIZE,
-                ],
-                [width as f32 * CELL_SIZE, depth as f32 * CELL_SIZE],
-                match building.kind {
-                    BuildingKind::TimberCabin | BuildingKind::Windmill => [128, 101, 72, 255],
-                    BuildingKind::MasonryCottage => [139, 142, 133, 255],
-                    _ => ROOF_COLOR,
-                },
-            );
-        }
+    for building in plan
+        .villages
+        .iter()
+        .flat_map(|v| &v.buildings)
+        .chain(plan.roadside_landmarks.iter().map(|site| &site.building))
+    {
+        let [width, _, depth] = building.dimensions();
+        paint_rect(
+            data,
+            grid,
+            [
+                building.origin.x as f32 * CELL_SIZE,
+                building.origin.z as f32 * CELL_SIZE,
+            ],
+            [width as f32 * CELL_SIZE, depth as f32 * CELL_SIZE],
+            match building.kind {
+                BuildingKind::TimberCabin | BuildingKind::Windmill => [128, 101, 72, 255],
+                BuildingKind::MasonryCottage | BuildingKind::TrailRuin | BuildingKind::Waystone => {
+                    [139, 142, 133, 255]
+                }
+                _ => ROOF_COLOR,
+            },
+        );
     }
 }
 
@@ -681,8 +690,8 @@ mod tests {
         let center = grid.center(x, z);
         let min = center.map(|axis| axis - grid.texel_meters * 0.5);
         let max = center.map(|axis| axis + grid.texel_meters * 0.5);
-        let first = min.map(|axis| ((axis - 2.5) / 12.0).floor() as i32);
-        let last = max.map(|axis| ((axis + 2.5) / 12.0).floor() as i32);
+        let first = min.map(|axis| ((axis - 3.0) / 12.0).floor() as i32);
+        let last = max.map(|axis| ((axis + 3.0) / 12.0).floor() as i32);
         let mut count = 0;
         for gz in first[1]..=last[1] {
             for gx in first[0]..=last[0] {
@@ -704,12 +713,25 @@ mod tests {
 
     #[test]
     fn painted_dots_match_generated_negative_positions_colors_and_empty_candidates() {
-        for generation in [WorldGeneration::GeographyV2, WorldGeneration::GeographyV1] {
+        for generation in [
+            WorldGeneration::GeographyV2,
+            WorldGeneration::GeographyV1,
+            WorldGeneration::GeographyV5,
+        ] {
             let world = World::generate(42, generation);
             let geo = world.geography().unwrap();
             let mut data = black_map(TEST_GRID);
             paint_trees(&world, TEST_GRID, &mut data);
-            let kinds = if generation == WorldGeneration::GeographyV2 {
+            let kinds = if generation == WorldGeneration::GeographyV5 {
+                vec![
+                    TreeKind::Broadleaf,
+                    TreeKind::Conifer,
+                    TreeKind::Scrub,
+                    TreeKind::Aspen,
+                    TreeKind::Cedar,
+                    TreeKind::Canopy,
+                ]
+            } else if generation == WorldGeneration::GeographyV2 {
                 vec![TreeKind::Broadleaf, TreeKind::Conifer, TreeKind::Scrub]
             } else {
                 vec![TreeKind::Broadleaf]
@@ -746,8 +768,10 @@ mod tests {
                         [61_u8, 102, 79]
                     } else {
                         match tree.kind {
-                            TreeKind::Broadleaf => [64, 110, 59],
-                            TreeKind::Conifer => [46, 87, 64],
+                            TreeKind::Broadleaf | TreeKind::Aspen | TreeKind::Canopy => {
+                                [64, 110, 59]
+                            }
+                            TreeKind::Conifer | TreeKind::Cedar => [46, 87, 64],
                             TreeKind::Scrub => [117, 122, 59],
                         }
                     };

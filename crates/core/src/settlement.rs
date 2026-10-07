@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
+#[path = "settlement_scenic.rs"]
+mod scenic;
+
 const BUCKET: f32 = 32.0;
 const SITE_SPACING: f32 = 1_600.0;
 const MAX_VILLAGES: usize = 10;
@@ -190,12 +193,22 @@ enum Feature {
     Lane(usize, usize, usize),
     Trail(usize, usize),
     Deposit(usize),
+    RoadsideBuilding(usize),
+    RoadsidePath(usize, usize),
 }
+/// A generated walking destination, independent of village jobs and transit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoadsideLandmark {
+    pub building: BuildingPlot,
+    pub approach: Trail,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettlementPlan {
     pub villages: Vec<Village>,
     pub trails: Vec<Trail>,
     pub resources: Vec<ResourceDeposit>,
+    pub roadside_landmarks: Vec<RoadsideLandmark>,
     buckets: HashMap<(i32, i32), Vec<Feature>>,
 }
 
@@ -277,6 +290,7 @@ impl SettlementPlan {
             villages: Vec::new(),
             trails: Vec::new(),
             resources,
+            roadside_landmarks: Vec::new(),
             buckets: HashMap::new(),
         };
         let freshwater = freshwater_index(geography);
@@ -506,6 +520,14 @@ impl SettlementPlan {
         }
     }
 
+    fn feature_building(&self, feature: Feature) -> Option<&BuildingPlot> {
+        match feature {
+            Feature::Building(vi, bi) => Some(&self.villages[vi].buildings[bi]),
+            Feature::RoadsideBuilding(index) => Some(&self.roadside_landmarks[index].building),
+            _ => None,
+        }
+    }
+
     fn build_index(&mut self) {
         let mut bounds = Vec::new();
         for (vi, v) in self.villages.iter().enumerate() {
@@ -540,6 +562,23 @@ impl SettlementPlan {
         for (ti, t) in self.trails.iter().enumerate() {
             segment_bounds(&mut bounds, |s| Feature::Trail(ti, s), t);
         }
+        for (index, site) in self.roadside_landmarks.iter().enumerate() {
+            let b = &site.building;
+            let [w, _, d] = b.dimensions();
+            let margin = LANDMARK_TREE_APRON + 3.0;
+            bounds.push((
+                Feature::RoadsideBuilding(index),
+                b.origin.x as f32 * CELL_SIZE - margin,
+                b.origin.z as f32 * CELL_SIZE - margin,
+                (b.origin.x + w) as f32 * CELL_SIZE + margin,
+                (b.origin.z + d) as f32 * CELL_SIZE + margin,
+            ));
+            segment_bounds(
+                &mut bounds,
+                |segment| Feature::RoadsidePath(index, segment),
+                &site.approach,
+            );
+        }
         for (di, d) in self.resources.iter().enumerate() {
             bounds.push((
                 Feature::Deposit(di),
@@ -566,8 +605,8 @@ impl SettlementPlan {
             return false;
         };
         features.iter().any(|f| match *f {
-            Feature::Building(vi, bi) => {
-                let b = &self.villages[vi].buildings[bi];
+            Feature::Building(..) | Feature::RoadsideBuilding(_) => {
+                let b = self.feature_building(*f).unwrap();
                 let [w, _, d] = b.dimensions();
                 let apron = if b.kind.is_landmark() {
                     LANDMARK_TREE_APRON
@@ -592,6 +631,10 @@ impl SettlementPlan {
             }
             Feature::Trail(ti, si) => {
                 let t = &self.trails[ti];
+                segment_distance(x, z, t.points[si], t.points[si + 1]).0 <= t.width * 0.5 + radius
+            }
+            Feature::RoadsidePath(index, si) => {
+                let t = &self.roadside_landmarks[index].approach;
                 segment_distance(x, z, t.points[si], t.points[si + 1]).0 <= t.width * 0.5 + radius
             }
             Feature::Deposit(_) => false,
@@ -649,9 +692,16 @@ impl SettlementPlan {
         let mut on_road = false;
         let mut total = 0.0_f64;
         let mut weights = 0.0_f64;
+        let mut on_approach = false;
+        let mut approach_total = 0.0_f64;
+        let mut approach_weights = 0.0_f64;
         for feature in features {
+            let roadside = matches!(feature, Feature::RoadsidePath(..));
             let (trail, si, village) = match *feature {
                 Feature::Trail(ti, si) => (&self.trails[ti], si, None),
+                Feature::RoadsidePath(index, si) => {
+                    (&self.roadside_landmarks[index].approach, si, None)
+                }
                 Feature::Lane(vi, li, si) => {
                     (&self.villages[vi].lanes[li], si, Some(&self.villages[vi]))
                 }
@@ -661,14 +711,30 @@ impl SettlementPlan {
             let b = trail.surface_point(si + 1);
             let (distance, t) = segment_distance(mx, mz, a, b);
             if distance <= trail.width * 0.5 {
-                on_road = true;
+                if roadside {
+                    on_approach = true;
+                } else {
+                    on_road = true;
+                }
             }
             if distance < 32.0 {
                 let foot = village.map_or(a[1] + (b[1] - a[1]) * t, |v| v.lane_height(mx, mz));
                 let weight = (1.0 - distance / 32.0).powi(3) as f64;
-                total += foot as f64 * weight;
-                weights += weight;
+                if roadside {
+                    approach_total += foot as f64 * weight;
+                    approach_weights += weight;
+                } else {
+                    total += foot as f64 * weight;
+                    weights += weight;
+                }
             }
+        }
+        // A short scenic spur may blend into the through-road, but must not
+        // raise its existing waypoints and strand traders on the junction.
+        if on_approach && !on_road {
+            total += approach_total;
+            weights += approach_weights;
+            on_road = true;
         }
         if on_road {
             let mut road_height = (total / weights) as f32;
@@ -703,8 +769,8 @@ impl SettlementPlan {
                         out.deposit = None;
                     }
                 }
-                Feature::Building(vi, bi) => {
-                    let b = &self.villages[vi].buildings[bi];
+                Feature::Building(..) | Feature::RoadsideBuilding(_) => {
+                    let b = self.feature_building(*feature).unwrap();
                     let [w, h, d] = b.dimensions();
                     let entry = b.entrance();
                     let ex = (entry[0] / CELL_SIZE).floor() as i32;

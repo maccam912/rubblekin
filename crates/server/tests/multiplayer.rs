@@ -133,7 +133,15 @@ impl Client {
     }
 
     fn until(&mut self, predicate: impl Fn(&ServerMessage) -> bool) -> ServerMessage {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        self.until_for(predicate, Duration::from_secs(5))
+    }
+
+    fn until_for(
+        &mut self,
+        predicate: impl Fn(&ServerMessage) -> bool,
+        timeout: Duration,
+    ) -> ServerMessage {
+        let deadline = Instant::now() + timeout;
         loop {
             assert!(
                 Instant::now() < deadline,
@@ -149,6 +157,16 @@ impl Client {
                 return message;
             }
         }
+    }
+
+    fn work(
+        &mut self,
+        request_id: u64,
+        action: rubblekin_core::economy::WorkAction,
+    ) -> ServerMessage {
+        thread::sleep(Duration::from_millis(110));
+        self.send(ClientMessage::Work { request_id, action });
+        self.until(|message| matches!(message, ServerMessage::WorkState {request_id: response, ..} if *response == request_id))
     }
 
     fn until_disconnected(&mut self, maximum_ack: u64) {
@@ -177,6 +195,200 @@ fn nearby_air() -> BlockPos {
         (world.surface_height(2.25, 0.25) / CELL_SIZE).round() as i32,
         0,
     )
+}
+
+#[test]
+fn local_work_times_cancels_and_persists_only_completed_useful_activity() {
+    use rubblekin_core::economy::{WorkAction, WorkKind, WorkSite};
+    const PROFILE: &str = "00000000000000000000000000000055";
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV5;
+    let world = World::generate(42, config.generation);
+    let village = &world.settlements().unwrap().villages[0];
+    let soil = village.fields[0].plant_positions().next().unwrap();
+    let position = [
+        soil.x as f32 * CELL_SIZE + 0.25,
+        (soil.y + 1) as f32 * CELL_SIZE,
+        soil.z as f32 * CELL_SIZE + 0.25,
+    ];
+    let site = WorkSite {
+        village_id: village.id,
+        kind: WorkKind::TendField,
+        index: 0,
+    };
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    let remote = client.work(1, WorkAction::Start { site });
+    assert!(
+        matches!(remote,ServerMessage::WorkState {accepted:false,ledger,..} if ledger.coins==0)
+    );
+    client.teleport(position);
+    let started = client.work(2, WorkAction::Start { site });
+    assert!(
+        matches!(started,ServerMessage::WorkState {accepted:true,work,ledger,..} if work.active.is_some() && ledger.coins==0)
+    );
+    let duplicate = client.work(3, WorkAction::Start { site });
+    assert!(
+        matches!(duplicate,ServerMessage::WorkState {accepted:false,work,..} if work.active.is_some())
+    );
+    let cancel = client.work(4, WorkAction::Cancel);
+    assert!(
+        matches!(cancel,ServerMessage::WorkState {accepted:true,work,ledger,..} if work.active.is_none() && ledger.coins==0)
+    );
+    client.work(5, WorkAction::Start { site });
+    let mut away = position;
+    away[0] += 3.0;
+    // Authoritative developer movement isolates timer cancellation from the
+    // independently tested movement controller.
+    client.teleport(away);
+    let stopped = client.until(|message| {
+        matches!(
+            message,
+            ServerMessage::WorkState {
+                request_id: 0,
+                accepted: false,
+                ..
+            }
+        )
+    });
+    assert!(
+        matches!(stopped,ServerMessage::WorkState {work,ledger,..} if work.active.is_none() && ledger.coins==0)
+    );
+    thread::sleep(Duration::from_millis(110));
+    client.teleport(position);
+    client.work(6, WorkAction::Start { site });
+    drop(client);
+    server.stop().unwrap();
+
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    let initial =
+        client.until(|message| matches!(message, ServerMessage::WorkState { request_id: 0, .. }));
+    assert!(
+        matches!(initial,ServerMessage::WorkState {work,ledger,..} if work.active.is_none() && ledger.coins==0)
+    );
+    let started = client.work(7, WorkAction::Start { site });
+    assert!(
+        matches!(started, ServerMessage::WorkState { accepted: true, .. }),
+        "{started:?}"
+    );
+    let wall_start = Instant::now();
+    let completion = client.until_for(
+        |message| {
+            matches!(message,ServerMessage::WorkState {request_id:0,ledger,work,notice,..}
+        if work.active.is_none() && ledger.coins==2 && notice.contains("Earned"))
+        },
+        Duration::from_secs(15),
+    );
+    assert!(
+        wall_start.elapsed() >= Duration::from_millis(5700),
+        "Work completed too early"
+    );
+    assert!(
+        matches!(completion,ServerMessage::WorkState {accepted:true,ledger,..} if ledger.revision==1)
+    );
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(on_disk["profiles"][PROFILE]["ledger"]["coins"], 2);
+    let replay = client.work(7, WorkAction::Start { site });
+    assert!(
+        matches!(replay, ServerMessage::WorkState {accepted:false, ledger, work, ..}
+        if ledger.coins == 2 && work.active.is_none())
+    );
+    let cancel = client.work(8, WorkAction::Cancel);
+    assert!(
+        matches!(cancel,ServerMessage::WorkState {ledger,work,..} if ledger.coins==2 && work.active.is_none())
+    );
+    let next = client.work(9, WorkAction::Start { site });
+    assert!(
+        matches!(next,ServerMessage::WorkState {accepted:true,work,..} if work.active.is_some())
+    );
+    let old_cancel = client.work(8, WorkAction::Cancel);
+    assert!(
+        matches!(old_cancel,ServerMessage::WorkState {accepted:false,work,..} if work.active.is_some())
+    );
+    client.work(10, WorkAction::Cancel);
+    drop(client);
+    server.stop().unwrap();
+    let server = spawn(config).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    let resumed =
+        client.until(|message| matches!(message, ServerMessage::WorkState { request_id: 0, .. }));
+    assert!(
+        matches!(resumed,ServerMessage::WorkState {ledger,work,..} if ledger.coins==2 && work.active.is_none())
+    );
+    drop(client);
+    server.stop().unwrap();
+}
+
+#[test]
+fn local_work_save_failure_does_not_confirm_wages_and_restart_keeps_old_progress() {
+    use rubblekin_core::economy::{WorkAction, WorkKind, WorkSite};
+    const PROFILE: &str = "00000000000000000000000000000056";
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV5;
+    let world = World::generate(42, config.generation);
+    let village = &world.settlements().unwrap().villages[0];
+    let soil = village.fields[0].plant_positions().next().unwrap();
+    let position = [
+        soil.x as f32 * CELL_SIZE + 0.25,
+        (soil.y + 1) as f32 * CELL_SIZE,
+        soil.z as f32 * CELL_SIZE + 0.25,
+    ];
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    client.teleport(position);
+    let started = client.work(
+        1,
+        WorkAction::Start {
+            site: WorkSite {
+                village_id: village.id,
+                kind: WorkKind::TendField,
+                index: 0,
+            },
+        },
+    );
+    assert!(
+        matches!(started, ServerMessage::WorkState { accepted: true, .. }),
+        "{started:?}"
+    );
+    client.until_for(
+        |message| {
+            matches!(message,ServerMessage::WorkState{work,..}
+        if work.active.as_ref().is_some_and(|active|active.elapsed_seconds>=5.25))
+        },
+        Duration::from_secs(15),
+    );
+    let before = fs::read(&config.save_path).unwrap();
+    let temporary = save
+        .0
+        .join(format!(".world.json.{}.tmp", std::process::id()));
+    fs::create_dir(&temporary).unwrap();
+    loop {
+        let mut line = String::new();
+        match client.reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => assert!(
+                !matches!(serde_json::from_str::<ServerMessage>(&line).unwrap(),ServerMessage::WorkState{ledger,..} if ledger.coins>0)
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
+            Err(error) => panic!("Expected save-failure disconnect: {error}"),
+        }
+    }
+    assert!(server.stop().is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), before);
+    fs::remove_dir(&temporary).unwrap();
+    let server = spawn(config).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    let state =
+        client.until(|message| matches!(message, ServerMessage::WorkState { request_id: 0, .. }));
+    assert!(
+        matches!(state,ServerMessage::WorkState{work,ledger,..} if ledger.coins==0 && ledger.revision==0 && work.active.is_none())
+    );
+    drop(client);
+    server.stop().unwrap();
 }
 
 #[test]
@@ -970,7 +1182,10 @@ fn assert_geographic_world_restart(world_generation: WorldGeneration) {
     config.generation = match world_generation {
         WorldGeneration::GeographyV1 => WorldGeneration::GeographyV2,
         WorldGeneration::GeographyV2 => WorldGeneration::ValleyV1,
-        WorldGeneration::ValleyV1 | WorldGeneration::GeographyV3 | WorldGeneration::GeographyV4 => {
+        WorldGeneration::ValleyV1
+        | WorldGeneration::GeographyV3
+        | WorldGeneration::GeographyV4
+        | WorldGeneration::GeographyV5 => {
             unreachable!()
         }
     };
@@ -1093,6 +1308,18 @@ fn observers_receive_the_live_world_without_an_avatar_and_cannot_mutate_it() {
         village_id: None,
         revision: 0,
         action: rubblekin_core::economy::MarketAction::Deliver,
+    });
+    let notice = observer.until(|message| matches!(message, ServerMessage::Notice { .. }));
+    assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("read-only")));
+    observer.send(ClientMessage::Work {
+        request_id: 93,
+        action: rubblekin_core::economy::WorkAction::Start {
+            site: rubblekin_core::economy::WorkSite {
+                village_id: 0,
+                kind: rubblekin_core::economy::WorkKind::TendField,
+                index: 0,
+            },
+        },
     });
     let notice = observer.until(|message| matches!(message, ServerMessage::Notice { .. }));
     assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("read-only")));

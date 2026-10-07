@@ -1,11 +1,61 @@
 //! Render the actual generated voxel assets as a compact vector review sheet.
+//! Add `--trees` after the output path for the tree silhouette sheet.
 //! Run: cargo run -p rubblekin_core --example village_asset_catalog -- artifacts/village-assets.svg
 
 use rubblekin_core::{
     village_assets::{BuildingKind, block_at, dimensions},
-    world::Block,
+    world::{Block, BlockPos, GeneratedTree, TreeKind},
 };
 use std::{fmt::Write, fs};
+
+#[derive(Clone, Copy)]
+enum Asset {
+    Building(BuildingKind),
+    Tree(GeneratedTree),
+}
+impl Asset {
+    fn dimensions(self) -> [i32; 3] {
+        match self {
+            Self::Building(kind) => dimensions(kind),
+            Self::Tree(tree) => [
+                tree.crown_radius * 2 + 3,
+                tree.leaf_bounds(0, 0).unwrap().1 + 1,
+                tree.crown_radius * 2 + 3,
+            ],
+        }
+    }
+    fn block(self, x: i32, y: i32, z: i32) -> Option<Block> {
+        match self {
+            Self::Building(kind) => block_at(kind, x, y, z),
+            Self::Tree(tree) => {
+                let [w, h, d] = self.dimensions();
+                if !(0..w).contains(&x) || !(0..h).contains(&y) || !(0..d).contains(&z) {
+                    return None;
+                }
+                Some(
+                    if x == tree.base.x && z == tree.base.z && y <= tree.crown_y() {
+                        Block::Wood
+                    } else if tree
+                        .leaf_bounds(x - tree.base.x, z - tree.base.z)
+                        .is_some_and(|(lo, hi)| (lo..=hi).contains(&y))
+                    {
+                        Block::Leaves
+                    } else {
+                        Block::Air
+                    },
+                )
+            }
+        }
+    }
+    fn color(self, block: Block) -> [f32; 4] {
+        if block == Block::Leaves
+            && let Self::Tree(tree) = self
+        {
+            return tree.kind.leaf_color();
+        }
+        block.color()
+    }
+}
 
 fn project([x, y, z]: [i32; 3], offset: [f32; 2], scale: f32) -> [f32; 2] {
     [
@@ -18,10 +68,7 @@ fn main() {
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "artifacts/village-assets.svg".to_owned());
-    let mut svg = String::from(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1168" viewBox="0 0 1200 1168"><rect width="1200" height="1168" fill="#18232b"/><g font-family="system-ui,sans-serif" fill="#edf3e9"><text x="32" y="37" font-size="24" font-weight="700">Rubblekin village assets</text><text x="32" y="61" font-size="13" fill="#b5c5c6">Editable 50 cm voxels · walk-in interiors · original homes + regional architecture + village landmarks</text></g>"##,
-    );
-    let assets = [
+    let mut assets: Vec<_> = [
         (
             BuildingKind::Cottage,
             "Cottage",
@@ -67,9 +114,86 @@ fn main() {
             "Lookout",
             "Walkable stairs to a sheltered viewing deck",
         ),
-    ];
-    for (index, (kind, title, detail)) in assets.into_iter().enumerate() {
-        let [width, height, depth] = dimensions(kind);
+        (
+            BuildingKind::TrailRuin,
+            "Trail ruin",
+            "Open arches, a roofless hall, and an old hearth",
+        ),
+        (
+            BuildingKind::Waystone,
+            "Waystone",
+            "A roadside marker and a place to rest",
+        ),
+    ]
+    .into_iter()
+    .map(|(kind, title, detail)| (Asset::Building(kind), title, detail))
+    .collect();
+    let trees = std::env::args().any(|arg| arg == "--trees");
+    if trees {
+        assets = [
+            (
+                TreeKind::Broadleaf,
+                13,
+                4,
+                "Broadleaf",
+                "Original rounded canopy",
+            ),
+            (
+                TreeKind::Conifer,
+                21,
+                4,
+                "Conifer",
+                "Original conical crown",
+            ),
+            (TreeKind::Scrub, 4, 2, "Scrub", "Original low dryland shrub"),
+            (
+                TreeKind::Aspen,
+                20,
+                2,
+                "Aspen",
+                "Narrow upright crown in temperate forests",
+            ),
+            (
+                TreeKind::Cedar,
+                25,
+                5,
+                "Cedar",
+                "Broad tapered crown in pine forests",
+            ),
+            (
+                TreeKind::Canopy,
+                21,
+                5,
+                "Canopy tree",
+                "High spreading crown in rainforests",
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, trunk_height, crown_radius, title, detail)| {
+            (
+                Asset::Tree(GeneratedTree {
+                    base: BlockPos::new(crown_radius + 1, 0, crown_radius + 1),
+                    trunk_height,
+                    kind,
+                    crown_radius,
+                }),
+                title,
+                detail,
+            )
+        })
+        .collect();
+    }
+    let height = 80 + assets.len().div_ceil(3) * 365;
+    let title = if trees {
+        "Rubblekin tree silhouettes"
+    } else {
+        "Rubblekin village and trail assets"
+    };
+    let mut svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="{height}" viewBox="0 0 1200 {height}"><rect width="1200" height="{height}" fill="#18232b"/><g font-family="system-ui,sans-serif" fill="#edf3e9"><text x="32" y="37" font-size="24" font-weight="700">{title}</text><text x="32" y="61" font-size="13" fill="#b5c5c6">Actual editable 50 cm geometry and material colors · panels scaled to fit</text></g>"##
+    );
+    for (index, (asset, title, detail)) in assets.into_iter().enumerate() {
+        let [width, height, depth] = asset.dimensions();
         let panel_x = 24.0 + (index % 3) as f32 * 388.0;
         let panel_y = 80.0 + (index / 3) as f32 * 365.0;
         let scale = 7.5_f32
@@ -77,13 +201,13 @@ fn main() {
             .min(270.0 / (height as f32 + (width + depth) as f32 * 0.5));
         let offset = [
             panel_x + (364.0 - (width + depth) as f32 * scale) / 2.0,
-            panel_y + 10.0 + (height as f32 + depth as f32 * 0.5) * scale,
+            panel_y + 280.0 - width as f32 * 0.5 * scale,
         ];
         let mut faces = Vec::new();
         for x in 0..width {
             for y in 0..height {
                 for z in 0..depth {
-                    let block = block_at(kind, x, y, z).unwrap();
+                    let block = asset.block(x, y, z).unwrap();
                     if block == Block::Air {
                         continue;
                     }
@@ -114,13 +238,14 @@ fn main() {
                             1.0,
                         ),
                     ] {
-                        if block_at(kind, neighbor[0], neighbor[1], neighbor[2])
+                        if asset
+                            .block(neighbor[0], neighbor[1], neighbor[2])
                             .unwrap_or(Block::Air)
                             .is_solid()
                         {
                             continue;
                         }
-                        let mut color = block.color();
+                        let mut color = asset.color(block);
                         color.iter_mut().take(3).for_each(|v| *v *= light);
                         let depth = vertices.iter().map(|p| p[0] - p[2] + p[1]).sum::<i32>();
                         faces.push((depth, vertices.map(|p| project(p, offset, scale)), color));

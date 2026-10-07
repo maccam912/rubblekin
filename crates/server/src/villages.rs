@@ -274,6 +274,74 @@ impl VillageLife {
             .map(|village| &village.snapshot)
     }
 
+    pub(crate) fn local_work_available(
+        &self,
+        village_id: u32,
+        kind: rubblekin_core::economy::WorkKind,
+    ) -> Result<(), String> {
+        use rubblekin_core::economy::WorkKind;
+        let economy = self
+            .villages
+            .iter()
+            .find(|village| village.snapshot.id == village_id)
+            .ok_or("That village is unavailable.")?;
+        match kind {
+            WorkKind::TendField if economy.planted && economy.snapshot.crop_growth >= 1.0 => {
+                Err("These crops are ready for the farmers to harvest.".into())
+            }
+            WorkKind::WorkshopMaintenance
+                if economy.snapshot.timber < 9.0 || economy.snapshot.stone < 9.0 =>
+            {
+                Err("The workshop needs spare timber and stone above its reserves.".into())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn complete_local_work(
+        &mut self,
+        world: &World,
+        village_id: u32,
+        kind: rubblekin_core::economy::WorkKind,
+    ) -> Result<(), String> {
+        use rubblekin_core::economy::WorkKind;
+        self.local_work_available(village_id, kind)?;
+        let village = world
+            .settlements()
+            .and_then(|plan| {
+                plan.villages
+                    .iter()
+                    .find(|village| village.id == village_id)
+            })
+            .ok_or("That village is unavailable.")?;
+        let economy = self
+            .villages
+            .iter_mut()
+            .find(|village| village.snapshot.id == village_id)
+            .unwrap();
+        match kind {
+            WorkKind::TendField => {
+                let cultivated = cultivated_fraction(world, village);
+                if cultivated <= 0.0 {
+                    return Err("This field needs intact planting soil.".into());
+                }
+                economy.cultivated_fraction = cultivated;
+                if economy.planted {
+                    economy.snapshot.crop_growth =
+                        (economy.snapshot.crop_growth + 0.08 * cultivated).min(1.0);
+                } else {
+                    economy.planted = true;
+                    economy.snapshot.crop_growth = 0.01;
+                }
+            }
+            WorkKind::WorkshopMaintenance => {
+                economy.snapshot.timber -= 1.0;
+                economy.snapshot.stone -= 1.0;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn change_market_stock(
         &mut self,
         id: u32,

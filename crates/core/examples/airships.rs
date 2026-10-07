@@ -1,6 +1,6 @@
 //! Inspect the generated fleet without a client or save changes.
 //! Feed simulation times (seconds) on stdin after the initial `ready` JSON line.
-//! Example: printf '0\n180\n' | cargo run -p rubblekin_core --example airships -- 42 v4
+//! Example: printf '0\n180\n' | cargo run -p rubblekin_core --example airships -- 42 v5
 use std::io::{self, BufRead, Write};
 
 use rubblekin_core::{
@@ -13,25 +13,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "--help") {
         println!(
-            "airships [SEED] [v3|v4]\nReads simulation times in seconds from stdin; prints one JSON line per time.\nUses unedited GeographyV4 by default. Does not connect, move players, or modify saves."
+            "airships [SEED] [v3|v4|v5]\nReads simulation times in seconds from stdin; prints one JSON line per time.\nUses unedited GeographyV5 by default. Does not connect, move players, or modify saves."
         );
         return Ok(());
     }
     if args.len() > 2 {
-        return Err("Usage: airships [SEED] [v3|v4]".into());
+        return Err("Usage: airships [SEED] [v3|v4|v5]".into());
     }
     let seed = args.first().map_or(Ok(42), |arg| arg.parse::<u32>())?;
     let generation = match args.get(1).map(String::as_str) {
-        None | Some("v4") => WorldGeneration::GeographyV4,
+        None | Some("v5") => WorldGeneration::GeographyV5,
+        Some("v4") => WorldGeneration::GeographyV4,
         Some("v3") => WorldGeneration::GeographyV3,
-        _ => return Err("Generation must be v3 or v4".into()),
+        _ => return Err("Generation must be v3, v4 or v5".into()),
     };
     let world = World::generate(seed, generation);
     let network = AirshipNetwork::try_new(&world)?;
-    let villages = &world
+    let plan = world
         .settlements()
-        .ok_or("No villages in generated world")?
-        .villages;
+        .ok_or("No villages in generated world")?;
+    let villages = &plan.villages;
     let mut output = io::stdout().lock();
     writeln!(
         output,
@@ -48,6 +49,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "routes": network.routes().iter().map(|route| json!({
                 "id": route.id, "from": route.from, "to": route.to,
                 "travel_seconds": route.travel_seconds, "ships": route.ship_count,
+            })).collect::<Vec<_>>(),
+            "roadside_landmarks": plan.roadside_landmarks.iter().map(|site| json!({
+                "kind": format!("{:?}", site.building.kind),
+                "entrance": site.building.entrance(),
+                "approach": site.approach.points,
             })).collect::<Vec<_>>(),
         })
     )?;

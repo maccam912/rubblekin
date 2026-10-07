@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 #[path = "village_assets_regional.rs"]
 mod regional;
+#[path = "village_assets_scenic.rs"]
+mod scenic;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BuildingKind {
@@ -22,11 +24,16 @@ pub enum BuildingKind {
     UplandHouse,
     Windmill,
     Lookout,
+    TrailRuin,
+    Waystone,
 }
 
 impl BuildingKind {
     pub const fn is_landmark(self) -> bool {
-        matches!(self, Self::Windmill | Self::Lookout)
+        matches!(
+            self,
+            Self::Windmill | Self::Lookout | Self::TrailRuin | Self::Waystone
+        )
     }
 }
 
@@ -41,6 +48,8 @@ pub const fn dimensions(kind: BuildingKind) -> [i32; 3] {
         BuildingKind::UplandHouse => [14, 18, 16],
         BuildingKind::Windmill => [24, 34, 22],
         BuildingKind::Lookout => [18, 22, 24],
+        BuildingKind::TrailRuin => [24, 12, 24],
+        BuildingKind::Waystone => [10, 12, 10],
     }
 }
 
@@ -64,6 +73,8 @@ pub fn block_at(kind: BuildingKind, x: i32, y: i32, z: i32) -> Option<Block> {
         }
         BuildingKind::Windmill => regional::windmill(x, y, z),
         BuildingKind::Lookout => regional::lookout(x, y, z),
+        BuildingKind::TrailRuin => scenic::ruin(x, y, z),
+        BuildingKind::Waystone => scenic::waystone(x, y, z),
     })
 }
 

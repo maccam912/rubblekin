@@ -3,6 +3,7 @@
 
 mod admin_commands;
 mod airships;
+mod local_work;
 mod navigation;
 mod npc;
 mod persistence;
@@ -34,7 +35,7 @@ use std::{
 use persistence::{MAX_EDITS, Simulation};
 use rubblekin_core::{
     airships::{AirshipNetwork, deck_position, initial_deck_position, pilot_position},
-    economy::{MarketAction, PlayerEconomy},
+    economy::{MarketAction, PlayerEconomy, WorkAction, WorkState},
     physics::{
         Body, EYE_HEIGHT, MoveInput, PLAYER_HEIGHT, PLAYER_RADIUS, character_position_is_clear,
         move_character_with_airships,
@@ -69,7 +70,7 @@ impl Default for ServerConfig {
             bind_addr: "127.0.0.1:7878".into(),
             save_path: "saves/world.json".into(),
             seed: 42,
-            generation: WorldGeneration::GeographyV4,
+            generation: WorldGeneration::GeographyV5,
             allow_admin: false,
         }
     }
@@ -183,6 +184,8 @@ struct Connection {
     player: Option<PlayerSnapshot>,
     profile_id: Option<String>,
     last_market_request: Option<Instant>,
+    active_work: Option<local_work::ActiveWork>,
+    last_work_action_id: Option<u64>,
     connected_at: Instant,
     closing_at: Option<Instant>,
     last_input: Instant,
@@ -208,6 +211,8 @@ impl Connection {
             player: None,
             profile_id: None,
             last_market_request: None,
+            active_work: None,
+            last_work_action_id: None,
             connected_at: now,
             closing_at: None,
             last_input: now,
@@ -457,6 +462,7 @@ fn run(
             &passenger_seats,
         );
         sim.world_time = next_world_time;
+        advance_local_work(&mut connections, &mut sim, config)?;
         checkpoint_players(&connections, &mut sim);
         let state = ServerMessage::State {
             players: players(&connections),
@@ -736,6 +742,7 @@ fn handle_message(
         connections.get_mut(&id).unwrap().send(&welcome);
         if profile_id.is_some() {
             send_market_state(connections, sim, id, 0, None, String::new(), true);
+            send_work_state(connections, sim, id, 0, String::new(), true);
         }
         return Ok(());
     }
@@ -757,7 +764,8 @@ fn handle_message(
             ClientMessage::Input { .. }
             | ClientMessage::Admin { .. }
             | ClientMessage::TalkToPilot { .. }
-            | ClientMessage::Market { .. } => {
+            | ClientMessage::Market { .. }
+            | ClientMessage::Work { .. } => {
                 connections
                     .get_mut(&id)
                     .unwrap()
@@ -780,6 +788,9 @@ fn handle_message(
         }
     }
     match message {
+        ClientMessage::Work { request_id, action } => {
+            handle_work(id, request_id, action, connections, sim);
+        }
         ClientMessage::Market {
             request_id,
             village_id,
@@ -1092,6 +1103,170 @@ fn handle_market(
         notice,
         accepted,
     );
+    if action == MarketAction::View {
+        send_work_state(connections, sim, id, request_id, String::new(), true);
+    }
+    Ok(())
+}
+
+fn send_work_state(
+    connections: &mut BTreeMap<u64, Connection>,
+    sim: &Simulation,
+    id: u64,
+    request_id: u64,
+    notice: String,
+    accepted: bool,
+) {
+    let connection = connections.get_mut(&id).unwrap();
+    let ledger = connection
+        .profile_id
+        .as_ref()
+        .and_then(|id| sim.profiles.get(id))
+        .map_or_else(PlayerEconomy::default, |saved| saved.ledger.clone());
+    let work = WorkState {
+        offer: connection.player.as_ref().and_then(|player| {
+            local_work::nearest_offer(&sim.world, &sim.villages, player.body.position)
+        }),
+        active: connection
+            .active_work
+            .as_ref()
+            .map(|active| active.progress.clone()),
+    };
+    connection.send(&ServerMessage::WorkState {
+        request_id,
+        work,
+        ledger,
+        notice,
+        accepted,
+    });
+}
+
+fn handle_work(
+    id: u64,
+    request_id: u64,
+    action: WorkAction,
+    connections: &mut BTreeMap<u64, Connection>,
+    sim: &Simulation,
+) {
+    let result = (|| -> Result<String, String> {
+        let connection = connections.get_mut(&id).unwrap();
+        if connection.profile_id.is_none() {
+            return Err("Rejoin with a saved guest profile to do village work.".into());
+        }
+        let player = connection
+            .player
+            .as_ref()
+            .ok_or("Only players can do village work.")?;
+        if action != WorkAction::View {
+            if request_id == 0
+                || connection
+                    .last_work_action_id
+                    .is_some_and(|previous| request_id <= previous)
+            {
+                return Err(
+                    "That work request was already handled. Check the current work state.".into(),
+                );
+            }
+            connection.last_work_action_id = Some(request_id);
+        }
+        // Cancelling never spends a durable transaction or waits on a view's
+        // rate limit. Starting/querying shares the existing market request cap.
+        if action != WorkAction::Cancel {
+            if connection
+                .last_market_request
+                .is_some_and(|last| last.elapsed() < Duration::from_millis(100))
+            {
+                return Err("Please wait a moment before the next work request.".into());
+            }
+            connection.last_market_request = Some(Instant::now());
+        }
+        match action {
+            WorkAction::View => Ok(String::new()),
+            WorkAction::Cancel => {
+                let was_active = connection.active_work.take().is_some();
+                Ok(if was_active {
+                    "Work cancelled.".into()
+                } else {
+                    String::new()
+                })
+            }
+            WorkAction::Start { site } => {
+                if connection.active_work.is_some() {
+                    return Err("Finish or cancel your current work first.".into());
+                }
+                connection.active_work = Some(local_work::start(
+                    &sim.world,
+                    &sim.villages,
+                    site,
+                    player.body.position,
+                    sim.world_time,
+                )?);
+                Ok("Stay at the work site for six seconds.".into())
+            }
+        }
+    })();
+    let (notice, accepted) = match result {
+        Ok(notice) => (notice, true),
+        Err(reason) => (reason, false),
+    };
+    send_work_state(connections, sim, id, request_id, notice, accepted);
+}
+
+fn advance_local_work(
+    connections: &mut BTreeMap<u64, Connection>,
+    sim: &mut Simulation,
+    config: &ServerConfig,
+) -> io::Result<()> {
+    let mut replies = Vec::new();
+    let mut completed = false;
+    for (&id, connection) in connections.iter_mut() {
+        let Some(mut active) = connection.active_work.take() else {
+            continue;
+        };
+        let (Some(profile), Some(player)) = (&connection.profile_id, &connection.player) else {
+            continue;
+        };
+        match local_work::advance(
+            &sim.world,
+            &sim.villages,
+            &mut active,
+            player.body.position,
+            sim.world_time,
+        ) {
+            Err(reason) => replies.push((id, format!("Work stopped: {reason}"), false)),
+            Ok(true) => {
+                let result = local_work::complete(
+                    &sim.world,
+                    &mut sim.villages,
+                    &mut sim.profiles.get_mut(profile).unwrap().ledger,
+                    &active,
+                );
+                match result {
+                    Ok(notice) => {
+                        completed = true;
+                        replies.push((id, notice, true));
+                    }
+                    Err(reason) => replies.push((id, reason, false)),
+                }
+            }
+            Ok(false) => {
+                if sim.world_time - active.last_update >= 0.25 {
+                    active.last_update = sim.world_time;
+                    replies.push((id, String::new(), true));
+                }
+                connection.active_work = Some(active);
+            }
+        }
+    }
+    // One save can contain simultaneous completions. No completion message is
+    // queued until all effects and player positions have been durably written.
+    if completed {
+        checkpoint_players(connections, sim);
+        sim.save(&config.save_path)?;
+    }
+    for (id, notice, accepted) in replies {
+        send_work_state(connections, sim, id, 0, notice, accepted);
+    }
     Ok(())
 }
 

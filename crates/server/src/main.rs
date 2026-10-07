@@ -26,10 +26,11 @@ fn main() -> io::Result<()> {
                 config.generation = match value(&mut args, "--generation")?.as_str() {
                     "v3" => WorldGeneration::GeographyV3,
                     "v4" => WorldGeneration::GeographyV4,
+                    "v5" => WorldGeneration::GeographyV5,
                     _ => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
-                            "--generation requires v3 or v4",
+                            "--generation requires v3, v4 or v5",
                         ));
                     }
                 };
@@ -45,7 +46,7 @@ fn main() -> io::Result<()> {
             "--allow-admin" => config.allow_admin = true,
             "--help" | "-h" => {
                 println!(
-                    "rubblekin-server [--bind 0.0.0.0:7878] [--save saves/world.json] [--seed 42] [--generation v3|v4] [--allow-admin]\n\n--allow-admin grants developer controls to EVERY connected player and allows read-only observer sessions. Use only on a trusted development server.\nExisting saves retain their seed and generation. New save paths default to v4 villages; --generation v3 reproduces the earlier terrain. The world keeps simulating without players; server downtime is not replayed."
+                    "rubblekin-server [--bind 0.0.0.0:7878] [--save saves/world.json] [--seed 42] [--generation v3|v4|v5] [--allow-admin]\n\n--allow-admin grants developer controls to EVERY connected player and allows read-only observer sessions. Use only on a trusted development server.\nExisting saves retain their seed and generation. New save paths default to v5 villages; --generation v3 reproduces the earlier terrain. The world keeps simulating without players; server downtime is not replayed."
                 );
                 return Ok(());
             }

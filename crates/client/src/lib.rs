@@ -241,7 +241,12 @@ fn options() -> Result<Options, String> {
                 result.generation = Some(match args.next().as_deref() {
                     Some("v3") => rubblekin_core::world::WorldGeneration::GeographyV3,
                     Some("v4") => rubblekin_core::world::WorldGeneration::GeographyV4,
-                    _ => return Err("--generation needs v3 or v4 (new local worlds only)".into()),
+                    Some("v5") => rubblekin_core::world::WorldGeneration::GeographyV5,
+                    _ => {
+                        return Err(
+                            "--generation needs v3, v4 or v5 (new local worlds only)".into()
+                        );
+                    }
                 });
             }
             "--screenshot" => {
@@ -263,7 +268,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4   Generator for a new local world (default v4)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / village market | G talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5 Generator for a new local world (default v5)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -337,7 +342,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             seed: options.seed.unwrap_or(42),
             generation: options
                 .generation
-                .unwrap_or(rubblekin_core::world::WorldGeneration::GeographyV4),
+                .unwrap_or(rubblekin_core::world::WorldGeneration::GeographyV5),
             allow_admin: true,
         },
         graphics.quality,
@@ -622,6 +627,21 @@ fn receive_network(
             } => {
                 if let Some(panel) = &mut market {
                     panel.reply(request_id, ledger, view, notice.clone(), accepted);
+                }
+                if !notice.is_empty() {
+                    session.status = notice;
+                    session.status_until = time.elapsed_secs_f64() + 5.0;
+                }
+            }
+            ServerMessage::WorkState {
+                request_id,
+                work,
+                ledger,
+                notice,
+                accepted,
+            } => {
+                if let Some(panel) = &mut market {
+                    panel.work_reply(request_id, work, ledger, notice.clone(), accepted);
                 }
                 if !notice.is_empty() {
                     session.status = notice;

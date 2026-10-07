@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = args.get(2).map_or("distant-map.ppm", String::as_str);
     let max_side = args.get(3).map_or(Ok(8192), |s| s.parse())?;
     let started = Instant::now();
-    let world = World::generate(seed, WorldGeneration::GeographyV4);
+    let world = World::generate(seed, WorldGeneration::GeographyV5);
     println!("World generated in {:.2?}", started.elapsed());
     let started = Instant::now();
     let side = terrain_albedo::atlas_side(max_side, false);
