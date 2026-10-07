@@ -39,10 +39,18 @@ pub enum Progress {
 pub struct Launcher {
     data_dir: PathBuf,
     target: &'static str,
-    // The open handle owns the OS lock, which is released even after a crash.
-    _lock: File,
+    lock: File,
     #[cfg(test)]
     test_releases: Option<String>,
+}
+
+impl Drop for Launcher {
+    fn drop(&mut self) {
+        // A concurrent subprocess can inherit this descriptor until exec.
+        // Closing only our copy would keep the lock alive in that interval.
+        // The file still closes afterward, including if unlocking fails.
+        let _ = self.lock.unlock();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +152,7 @@ impl Launcher {
         Ok(Self {
             data_dir,
             target,
-            _lock: lock,
+            lock,
             #[cfg(test)]
             test_releases: None,
         })

@@ -399,7 +399,25 @@ fn locks_out_a_second_launcher_and_releases_lock_on_drop() {
     let path = launcher.data_dir.clone();
     assert!(Launcher::open(Some(path.clone())).is_err());
     drop(launcher);
-    assert!(Launcher::open(Some(path)).is_ok());
+    Launcher::open(Some(path)).unwrap_or_else(|error| panic!("reopen after drop: {error}"));
+}
+
+#[cfg(unix)]
+#[test]
+fn releases_lock_while_a_spawn_inherited_descriptor_is_still_open() {
+    let (_directory, launcher) = new_launcher();
+    let path = launcher.data_dir.clone();
+    // A concurrent fork/spawn duplicates open descriptors until exec closes
+    // CLOEXEC files. Keep a duplicate to reproduce that interval without races.
+    let inherited = launcher.lock.try_clone().unwrap();
+    assert!(Launcher::open(Some(path.clone())).is_err());
+    drop(launcher);
+    let replacement = Launcher::open(Some(path.clone()))
+        .unwrap_or_else(|error| panic!("reopen with inherited descriptor: {error}"));
+    drop(inherited);
+    assert!(Launcher::open(Some(path.clone())).is_err());
+    drop(replacement);
+    Launcher::open(Some(path)).unwrap_or_else(|error| panic!("reopen replacement: {error}"));
 }
 
 #[test]
