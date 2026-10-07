@@ -286,6 +286,7 @@ impl VillageLife {
             .find(|village| village.snapshot.id == village_id)
             .ok_or("That village is unavailable.")?;
         match kind {
+            WorkKind::QuarryStone => Err("Quarry stone comes from its physical pile.".into()),
             WorkKind::TendField if economy.planted && economy.snapshot.crop_growth >= 1.0 => {
                 Err("These crops are ready to harvest.".into())
             }
@@ -313,6 +314,9 @@ impl VillageLife {
         kind: WorkKind,
     ) -> Result<WorkReward, String> {
         Ok(match kind {
+            WorkKind::QuarryStone => {
+                return Err("Quarry stone comes from its physical pile.".into());
+            }
             WorkKind::TendField => WorkReward::Coins(2),
             WorkKind::WorkshopMaintenance => WorkReward::Coins(4),
             WorkKind::HarvestField => {
@@ -357,6 +361,9 @@ impl VillageLife {
             .find(|village| village.snapshot.id == village_id)
             .unwrap();
         match kind {
+            WorkKind::QuarryStone => {
+                return Err("Quarry stone comes from its physical pile.".into());
+            }
             WorkKind::TendField => {
                 let cultivated = cultivated_fraction(world, village);
                 if cultivated <= 0.0 {
@@ -3653,6 +3660,7 @@ mod tests {
         ));
         let simulation = crate::persistence::Simulation {
             profiles: Default::default(),
+            consumed_quarry_cells: Vec::new(),
             world: world.clone(),
             npc: crate::npc::Forager::new(&world),
             world_time: time,
@@ -3806,6 +3814,7 @@ mod tests {
             ));
             let simulation = crate::persistence::Simulation {
                 profiles: Default::default(),
+                consumed_quarry_cells: Vec::new(),
                 world: world.clone(),
                 npc: crate::npc::Forager::new(&world),
                 world_time: saved_time,
@@ -3896,6 +3905,7 @@ mod tests {
         ));
         let simulation = crate::persistence::Simulation {
             profiles: Default::default(),
+            consumed_quarry_cells: Vec::new(),
             world: world.clone(),
             npc: crate::npc::Forager::new(&world),
             world_time: 120.0,
@@ -4019,7 +4029,7 @@ mod tests {
             kind: WorkKind::HarvestField,
             index: 0,
         };
-        let active = local_work::start(&world, &life, site, position, 0.0).unwrap();
+        let active = local_work::start(&world, &life, &[], site, position, 0.0).unwrap();
         let mut player_first = life.clone();
         let food = life.villages[0].snapshot.food;
 
@@ -4594,6 +4604,7 @@ mod tests {
         ));
         let sim = Simulation {
             profiles: Default::default(),
+            consumed_quarry_cells: Vec::new(),
             npc: Forager::new(&world),
             world,
             world_time: 123.0,

@@ -29,6 +29,7 @@ pub struct TouchControls {
     pub(crate) market: bool,
     pub(crate) help: bool,
     pub(crate) selected: Option<usize>,
+    pub(crate) palette_page: bool,
     pub(crate) zoom: f32,
     pub(crate) return_spawn: bool,
     pub(crate) next_village: bool,
@@ -52,6 +53,7 @@ enum Action {
     Market,
     Menu,
     Material(usize),
+    PalettePage,
     ZoomIn,
     ZoomOut,
     Blocked,
@@ -81,6 +83,7 @@ struct Layout {
 impl Layout {
     fn for_session(size: Vec2, session: &Session, menu_open: bool) -> Self {
         let mut layout = Self::new(size, session.observer.is_some(), session.flying, menu_open);
+        layout.set_palette_page(session.selected);
         if session.ride.is_some() {
             layout.regions.retain(|region| {
                 matches!(
@@ -97,6 +100,25 @@ impl Layout {
             });
         }
         layout
+    }
+
+    fn set_palette_page(&mut self, selected: usize) {
+        self.regions.retain_mut(|region| {
+            if let Action::Material(slot) = region.action {
+                let Some(index) = crate::palette::index_for_slot(selected, slot) else {
+                    return false;
+                };
+                region.action = Action::Material(index);
+                region.label = PALETTE[index].name().into();
+            } else if region.action == Action::PalettePage {
+                region.label = format!(
+                    "Blocks {}/{} ›",
+                    crate::palette::page(selected) + 1,
+                    crate::palette::PAGE_COUNT
+                );
+            }
+            true
+        });
     }
 
     fn new(size: Vec2, observing: bool, flying: bool, menu_open: bool) -> Self {
@@ -226,8 +248,16 @@ impl Layout {
                     label.into(),
                 );
             }
+            add(
+                Action::PalettePage,
+                (size.x - s(144.0)) * 0.5,
+                size.y - s(132.0),
+                144.0,
+                44.0,
+                "Blocks 1/2 ›".into(),
+            );
             let left = (size.x - s(301.0)) * 0.5;
-            for (index, block) in PALETTE.iter().enumerate() {
+            for (index, block) in PALETTE.iter().take(crate::palette::QUICK_SLOTS).enumerate() {
                 add(
                     Action::Material(index),
                     left + s(index as f32 * 51.0),
@@ -287,6 +317,7 @@ impl TouchControls {
         self.market = false;
         self.help = false;
         self.selected = None;
+        self.palette_page = false;
         self.zoom = 0.0;
         self.return_spawn = false;
         self.next_village = false;
@@ -306,6 +337,7 @@ impl TouchControls {
                 self.contacts.clear();
             }
             Action::Material(index) => self.selected = Some(index),
+            Action::PalettePage => self.palette_page = true,
             Action::Menu => {
                 self.menu_open = !self.menu_open;
                 self.contacts.clear();
@@ -315,6 +347,7 @@ impl TouchControls {
                 self.dig = false;
                 self.build = false;
                 self.selected = None;
+                self.palette_page = false;
                 self.flight = false;
             }
             _ => {}
@@ -372,6 +405,7 @@ impl TouchControls {
                         Action::Jump => self.jump = false,
                         Action::Dig => self.dig = false,
                         Action::Build => self.build = false,
+                        Action::PalettePage => self.palette_page = false,
                         Action::Look => self.look = Vec2::ZERO,
                         _ => {}
                     }
@@ -621,6 +655,7 @@ pub fn setup(
         Action::Menu,
         Action::ZoomIn,
         Action::ZoomOut,
+        Action::PalettePage,
     ];
     for action in actions
         .into_iter()
@@ -836,7 +871,12 @@ mod tests {
     #[test]
     fn brief_jump_dig_and_build_taps_survive_one_frame_and_canceled_taps_do_not_edit() {
         let layout = layout();
-        for action in [Action::Jump, Action::Dig, Action::Build] {
+        for action in [
+            Action::Jump,
+            Action::Dig,
+            Action::Build,
+            Action::PalettePage,
+        ] {
             let mut input = TouchControls::default();
             let position = action_position(&layout, action);
             input.route(&event(1, TouchPhase::Started, position), &layout);
@@ -845,16 +885,17 @@ mod tests {
             assert_eq!(input.jump, action == Action::Jump);
             assert_eq!(input.dig, action == Action::Dig);
             assert_eq!(input.build, action == Action::Build);
+            assert_eq!(input.palette_page, action == Action::PalettePage);
             input.clear_frame();
             input.held(&layout);
-            assert!(!input.jump && !input.dig && !input.build);
+            assert!(!input.jump && !input.dig && !input.build && !input.palette_page);
             input.route(&event(1, TouchPhase::Started, position), &layout);
             input.route(
                 &event(1, TouchPhase::Canceled, Vec2::splat(f32::NAN)),
                 &layout,
             );
             input.held(&layout);
-            assert!(!input.jump && !input.dig && !input.build);
+            assert!(!input.jump && !input.dig && !input.build && !input.palette_page);
         }
     }
 
@@ -919,6 +960,7 @@ mod tests {
                         | Action::Jump
                         | Action::Flight
                         | Action::Material(_)
+                        | Action::PalettePage
                 )));
             }
         }
@@ -931,8 +973,20 @@ mod tests {
             Vec2::new(640.0, 360.0),
             Vec2::new(1280.0, 720.0),
         ] {
-            for menu in [false, true] {
-                let layout = Layout::new(size, false, true, menu);
+            for (menu, selected) in [(false, 0), (false, 6), (true, 0), (true, 6)] {
+                let mut layout = Layout::new(size, false, true, menu);
+                layout.set_palette_page(selected);
+                assert!(!layout.regions.iter().any(|region| matches!(region.action, Action::Material(index) if index >= PALETTE.len())));
+                if !menu {
+                    assert_eq!(
+                        layout
+                            .regions
+                            .iter()
+                            .filter(|region| matches!(region.action, Action::Material(_)))
+                            .count(),
+                        if selected == 0 { 6 } else { 5 }
+                    );
+                }
                 for (index, a) in layout.regions.iter().enumerate() {
                     assert!(a.rect.min.cmpge(Vec2::ZERO).all() && a.rect.max.cmple(size).all());
                     assert_eq!(layout.action(a.rect.center(), menu), a.action);
@@ -1111,6 +1165,79 @@ mod tests {
             }
         ));
 
+        // Both down and up may arrive in one frame. Page selection survives
+        // that short tap, and the visible second-page Clay button sends Clay.
+        for (id, action) in [
+            (80, Action::PalettePage),
+            (81, Action::Material(9)),
+            (82, Action::Build),
+        ] {
+            let layout = Layout::for_session(
+                Vec2::new(840., 400.),
+                app.world().resource::<Session>(),
+                false,
+            );
+            let position = action_position(&layout, action);
+            app.world_mut().resource_mut::<Session>().edit_clock = 0.;
+            for phase in [TouchPhase::Started, TouchPhase::Ended] {
+                app.world_mut().write_message(TouchInput {
+                    window,
+                    ..event(id, phase, position)
+                });
+            }
+            app.world_mut().run_schedule(Update);
+            assert!(matches!(
+                read_message(&mut peer),
+                ClientMessage::Input { .. }
+            ));
+            assert_eq!(
+                app.world().resource::<Session>().selected,
+                if id == 80 { 6 } else { 9 }
+            );
+        }
+        assert!(matches!(
+            read_message(&mut peer),
+            ClientMessage::Edit {
+                request_id: 3,
+                block: Block::Clay,
+                ..
+            }
+        ));
+        // A held C cycles once; digits refer to the current page, with no
+        // phantom sixth material on page two.
+        for (key, selected) in [
+            (KeyCode::Digit6, 9),
+            (KeyCode::KeyC, 0),
+            (KeyCode::Digit6, 5),
+            (KeyCode::KeyC, 6),
+            (KeyCode::Digit4, 9),
+        ] {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key);
+            app.world_mut().run_schedule(Update);
+            assert!(matches!(
+                read_message(&mut peer),
+                ClientMessage::Input { .. }
+            ));
+            assert_eq!(app.world().resource::<Session>().selected, selected);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .clear();
+            app.world_mut().run_schedule(Update);
+            assert!(matches!(
+                read_message(&mut peer),
+                ClientMessage::Input { .. }
+            ));
+            assert_eq!(app.world().resource::<Session>().selected, selected);
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+
         let movement = layout.stick.center() - Vec2::Y * 40.0;
         app.world_mut().write_message(TouchInput {
             window,
@@ -1171,6 +1298,11 @@ mod tests {
                 map.open = open;
                 map.input_blocked = true;
             }
+            for key in [KeyCode::KeyC, KeyCode::Digit1] {
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(key);
+            }
             for (id, position) in [(3, movement), (7, build)] {
                 app.world_mut().write_message(TouchInput {
                     window,
@@ -1182,6 +1314,14 @@ mod tests {
                 matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
                 if input.direction == [0.0; 2] && !input.jump && input.vertical == 0.0)
             );
+            assert_eq!(
+                app.world().resource::<Session>().selected,
+                9,
+                "Opening or closing a modal must not also change materials"
+            );
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
             assert!(app.world().resource::<TouchControls>().contacts.is_empty());
             app.world_mut()
                 .resource_mut::<Connection>()

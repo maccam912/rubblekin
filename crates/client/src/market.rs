@@ -15,7 +15,7 @@ use rubblekin_core::{
     },
     protocol::ClientMessage,
     settlement::ResourceKind,
-    village_assets::BuildingKind,
+    village_assets::{BuildingKind, dimensions, quarry_pile_cells},
     world::CELL_SIZE,
 };
 
@@ -456,7 +456,42 @@ fn near_worksite_geometry(world: &VoxelWorld, position: [f32; 3]) -> bool {
                         let [width, _, depth] = building.dimensions();
                         near(building.origin, width, depth)
                     })
+        }) || plan.roadside_landmarks.iter().any(|site| {
+            site.building.kind == BuildingKind::QuarryYard
+                && quarry_pile_targets(&site.building).any(|(cell, feet)| {
+                    world.0.block(cell) == rubblekin_core::world::Block::Stone
+                        && within_work_reach(position, feet)
+                })
         })
+    })
+}
+
+// The server checks spent cells and actual visibility; this only bounds passive
+// offer reads to the generated pile, never nearby walls, floor, or loose terrain.
+fn quarry_pile_targets(
+    building: &rubblekin_core::settlement::BuildingPlot,
+) -> impl Iterator<Item = (rubblekin_core::world::BlockPos, [f32; 3])> + '_ {
+    let [width, _, depth] = dimensions(building.kind);
+    quarry_pile_cells().map(move |[x, y, z]| {
+        let [x, z] = match building.rotation % 4 {
+            0 => [x, z],
+            1 => [depth - 1 - z, x],
+            2 => [width - 1 - x, depth - 1 - z],
+            _ => [z, width - 1 - x],
+        };
+        let cell = rubblekin_core::world::BlockPos::new(
+            building.origin.x + x,
+            building.origin.y + y,
+            building.origin.z + z,
+        );
+        (
+            cell,
+            [
+                (cell.x as f32 + 0.5) * CELL_SIZE,
+                (building.origin.y + 1) as f32 * CELL_SIZE,
+                (cell.z as f32 + 0.5) * CELL_SIZE,
+            ],
+        )
     })
 }
 
@@ -841,14 +876,14 @@ fn work_text(panel: &MarketPanel, session: &Session) -> String {
             active.offer.duration_seconds,
             reward_text(active.offer.reward),
             if matches!(active.offer.reward, WorkReward::Cargo { .. }) {
-                "Sell the harvested cargo at a village market to earn coins.\n"
+                "Sell the cargo at a village market to earn coins.\n"
             } else {
                 ""
             }
         );
     }
     let Some(offer) = &panel.work.offer else {
-        return "LOCAL WORK · Visit cultivated fields or a workshop to earn coins.".into();
+        return "LOCAL WORK · Visit fields or workshops for work, or collect stone at a quarry and sell it at a market.".into();
     };
     let distance = Vec2::new(
         offer.position[0] - session.body.position[0],
@@ -859,6 +894,9 @@ fn work_text(panel: &MarketPanel, session: &Session) -> String {
         WorkKind::TendField => "Plant and tend the village's real crops.",
         WorkKind::HarvestField => {
             "Gather ripe Food into your cargo. Sell it at a village market to earn coins; village food reserves stay protected."
+        }
+        WorkKind::QuarryStone => {
+            "Collect 1 Stone from this finite pile into your cargo. Sell it at a village market to earn coins."
         }
         WorkKind::WorkshopMaintenance => {
             "Use 1 Timber and 1 Stone from village supplies above its reserves."
@@ -950,6 +988,7 @@ pub(crate) fn hud_text(
         let activity = match offer.site.kind {
             WorkKind::TendField => "Tend field",
             WorkKind::HarvestField => "Harvest field",
+            WorkKind::QuarryStone => "Collect stone",
             WorkKind::WorkshopMaintenance => "Workshop maintenance",
         };
         text.push_str(&format!(
@@ -1264,6 +1303,108 @@ mod tests {
     }
 
     #[test]
+    fn quarry_cargo_reward_never_claims_food_or_coins_before_completion() {
+        let (mut app, _, _, _peer) = app();
+        app.world_mut().resource_mut::<Session>().inspector = false;
+        let session = app.world().resource::<Session>();
+        let mut offer = work_offer();
+        offer.site.kind = WorkKind::QuarryStone;
+        offer.label = "Quarry near Willowmead · Collect stone".into();
+        offer.position = session.body.position;
+        offer.reward = WorkReward::Cargo {
+            kind: ResourceKind::Stone,
+            amount: 1,
+        };
+        let mut panel = MarketPanel::default();
+        panel.work_reply(
+            0,
+            WorkState {
+                offer: Some(offer.clone()),
+                active: None,
+            },
+            PlayerEconomy::default(),
+            String::new(),
+            true,
+        );
+        panel.observe_work_reply(0.);
+        let text = work_text(&panel, session);
+        assert!(
+            text.contains("1 Stone") && text.contains("finite pile") && text.contains("Sell it")
+        );
+        assert!(!text.contains("Food") && !text.contains("1 coins"));
+        assert!(
+            hud_text(
+                &panel,
+                session,
+                app.world().resource::<VoxelWorld>(),
+                true,
+                0.
+            )
+            .contains("Work: Collect stone · 1 Stone · Sell at a market")
+        );
+        panel.work_reply(
+            0,
+            WorkState {
+                offer: Some(offer.clone()),
+                active: Some(WorkProgress {
+                    offer,
+                    elapsed_seconds: 3.,
+                }),
+            },
+            PlayerEconomy::default(),
+            String::new(),
+            true,
+        );
+        let text = work_text(&panel, session);
+        assert!(text.contains("1 Stone on completion") && text.contains("Sell the cargo"));
+        assert!(!text.contains("harvest") && !text.contains("Food"));
+        assert_eq!(panel.ledger.as_ref().unwrap().cargo_total(), 0);
+        assert_eq!(panel.ledger.as_ref().unwrap().coins, 0);
+    }
+
+    #[test]
+    fn quarry_hint_geometry_uses_rotated_real_piles_and_stops_after_they_are_removed() {
+        use rubblekin_core::world::{Block, World, WorldGeneration};
+        let mut world = VoxelWorld(World::generate(42, WorldGeneration::GeographyV6));
+        let building = world
+            .0
+            .settlements()
+            .unwrap()
+            .roadside_landmarks
+            .iter()
+            .find(|site| site.building.kind == BuildingKind::QuarryYard)
+            .unwrap()
+            .building
+            .clone();
+        for rotation in 0..4 {
+            let mut rotated = building.clone();
+            rotated.rotation = rotation;
+            for ((cell, feet), local) in quarry_pile_targets(&rotated).zip(quarry_pile_cells()) {
+                assert_eq!(
+                    rotated.local_cell(cell.x, cell.z),
+                    Some([local[0], local[2]])
+                );
+                assert_eq!(rotated.asset_at(cell), Some(Block::Stone));
+                assert_eq!(feet[1], (building.origin.y + 1) as f32 * CELL_SIZE);
+            }
+        }
+        let targets: Vec<_> = quarry_pile_targets(&building).collect();
+        let position = targets[0].1;
+        assert!(near_worksite_geometry(&world, position));
+        assert!(!near_worksite_geometry(
+            &world,
+            [position[0], position[1] + 2., position[2]]
+        ));
+        for (cell, _) in targets {
+            world.0.set_block(cell, Block::Air).unwrap();
+        }
+        assert!(
+            !near_worksite_geometry(&world, position),
+            "Quarry walls and floor must not keep passive work reads alive"
+        );
+    }
+
+    #[test]
     fn harvest_rewards_describe_real_cargo_and_wait_for_the_final_ledger() {
         let (mut app, _, _, _peer) = app();
         app.world_mut().resource_mut::<Session>().inspector = false;
@@ -1321,7 +1462,7 @@ mod tests {
             true,
         );
         let text = work_text(&panel, session);
-        assert!(text.contains("6 Food on completion") && text.contains("Sell the harvested cargo"));
+        assert!(text.contains("6 Food on completion") && text.contains("Sell the cargo"));
         assert_eq!(panel.ledger.as_ref().unwrap().cargo_total(), 0);
         let mut final_ledger = PlayerEconomy {
             revision: 1,

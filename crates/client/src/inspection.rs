@@ -1,7 +1,7 @@
 //! A locked inspection target, selected along the camera's center ray on opening.
 use crate::{Avatar, Avatars, GameCamera, Session, VoxelWorld, crops, pause};
 use bevy::prelude::*;
-use rubblekin_core::world::{Block, BlockPos, CELL_SIZE, World};
+use rubblekin_core::world::{BlockPos, CELL_SIZE, World};
 
 const INSPECT_DISTANCE: f32 = 128.0;
 const CHARACTER_SIZE: Vec3 = Vec3::new(0.80, 1.88, 0.80);
@@ -168,11 +168,9 @@ fn pick(
                 if box_hit(origin, direction, center, size, closest).is_none() {
                     continue;
                 }
+                let kind = crops::crop_kind(world, village, field);
                 for soil in plot.plant_positions() {
-                    if !matches!(world.block(soil), Block::Dirt | Block::Grass) {
-                        continue;
-                    }
-                    for (center, size) in crops::plant_parts(soil, stage) {
+                    for (center, size, _) in crops::visible_plant_parts(world, soil, stage, kind) {
                         if let Some(distance) = box_hit(origin, direction, center, size, closest) {
                             closest = distance;
                             selected = Some(InspectTarget::FarmPlot {
@@ -243,7 +241,7 @@ mod tests {
     use super::*;
     use crate::{graphics::GraphicsQuality, join::session_from_welcome};
     use rubblekin_core::protocol::{ServerMessage, SessionMode, VillageSnapshot};
-    use rubblekin_core::world::WorldGeneration;
+    use rubblekin_core::world::{Block, WorldGeneration};
 
     fn fixture(generation: WorldGeneration) -> (World, Session) {
         let mut welcome = crate::join::tests::welcome(SessionMode::Observer);
@@ -321,6 +319,16 @@ mod tests {
         let upward =
             Transform::from_translation(surface + Vec3::Y * 0.55).looking_to(Vec3::Y, Vec3::Z);
         assert_eq!(pick(&world, &session, &upward, []), Some(target));
+        let ceiling = BlockPos::new(soil.x, soil.y + 2, soil.z);
+        world.set_block(ceiling, Block::Wood).unwrap();
+        let beneath_cover =
+            Transform::from_translation(surface + Vec3::Y * 0.25).looking_to(Vec3::Y, Vec3::Z);
+        assert_eq!(
+            pick(&world, &session, &beneath_cover, []),
+            Some(InspectTarget::Block(ceiling)),
+            "a covered mature plant must disappear from aimed inspection as well as its mesh"
+        );
+        world.set_block(ceiling, Block::Air).unwrap();
         let below = BlockPos::new(soil.x, soil.y - 1, soil.z);
         assert_eq!(block_target(&world, below), InspectTarget::Block(below));
         world.set_block(soil, Block::Air).unwrap();

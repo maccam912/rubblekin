@@ -1,7 +1,10 @@
 //! Small, batched, noncolliding crop visuals from authoritative growth.
 use crate::{GameEntity, Session, VoxelWorld, terrain::Geometry};
 use bevy::prelude::*;
-use rubblekin_core::{settlement::Village, world::CELL_SIZE};
+use rubblekin_core::{
+    settlement::Village,
+    world::{Block, BlockPos, CELL_SIZE, World, WorldGeneration},
+};
 
 #[derive(Component)]
 pub struct CropField {
@@ -61,21 +64,10 @@ pub fn update_crops(
 
 fn crop_geometry(village: &Village, world: &rubblekin_core::world::World, stage: u8) -> Geometry {
     let mut geometry = Geometry::default();
-    let color = if stage >= 4 {
-        [0.78, 0.64, 0.25, 1.0]
-    } else {
-        [0.35, 0.56, 0.20, 1.0]
-    };
-    for field in &village.fields {
+    for (index, field) in village.fields.iter().enumerate() {
+        let kind = crop_kind(world, village, index);
         for position in field.plant_positions() {
-            let soil = world.block(position);
-            if !matches!(
-                soil,
-                rubblekin_core::world::Block::Dirt | rubblekin_core::world::Block::Grass
-            ) {
-                continue;
-            }
-            for (center, size) in plant_parts(position, stage) {
+            for (center, size, color) in visible_plant_parts(world, position, stage, kind) {
                 geometry.cuboid(center, size, color);
             }
         }
@@ -84,26 +76,127 @@ fn crop_geometry(village: &Village, world: &rubblekin_core::world::World, stage:
 }
 
 pub(crate) fn growth_stage(growth: f32) -> u8 {
-    (growth.clamp(0.0, 1.0) * 5.0) as u8
+    if growth > 0.0 {
+        (growth.clamp(0.0, 1.0) * 5.0) as u8 + 1
+    } else {
+        0 // Harvested/awaiting planting fields have no decorative seedlings.
+    }
 }
 
-/// Rendering and inspection use the same decorative plant shape.
-pub(crate) fn plant_parts(
-    position: rubblekin_core::world::BlockPos,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CropKind {
+    Grain,
+    Leafy,
+    Roots,
+}
+
+impl CropKind {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Grain => "Grain",
+            Self::Leafy => "Leafy greens",
+            Self::Roots => "Root vegetables",
+        }
+    }
+}
+
+/// V6 fields mix familiar food plants. These share the same authoritative Food
+/// crop cycle; this changes appearance, never crop prices, soil or yields.
+pub(crate) fn crop_kind(world: &World, village: &Village, field: usize) -> CropKind {
+    if world.generation() != WorldGeneration::GeographyV6 {
+        return CropKind::Grain;
+    }
+    match (village.id as usize + field) % 3 {
+        0 => CropKind::Grain,
+        1 => CropKind::Leafy,
+        _ => CropKind::Roots,
+    }
+}
+
+/// Both the mesh and aimed inspection use these actual supported, uncovered
+/// shapes. Covering the top of a tall plant removes the whole plant.
+pub(crate) fn visible_plant_parts(
+    world: &World,
+    position: BlockPos,
     stage: u8,
-) -> impl Iterator<Item = (Vec3, Vec3)> {
-    let height = 0.12 + f32::from(stage) * 0.14;
+    kind: CropKind,
+) -> impl Iterator<Item = (Vec3, Vec3, [f32; 4])> {
+    let phase = stage.saturating_sub(1).min(5);
+    let height = 0.12 + f32::from(phase) * 0.14;
+    let headroom = if kind == CropKind::Grain && height > CELL_SIZE {
+        2
+    } else {
+        1
+    };
+    let visible = stage > 0
+        && matches!(world.block(position), Block::Dirt | Block::Grass)
+        && (1..=headroom).all(|dy| {
+            world.block(BlockPos::new(position.x, position.y + dy, position.z)) == Block::Air
+        });
     let p = Vec3::new(
         (position.x as f32 + 0.5) * CELL_SIZE,
         (position.y as f32 + 1.0) * CELL_SIZE,
         (position.z as f32 + 0.5) * CELL_SIZE,
     );
-    [
-        Some((p + Vec3::Y * height * 0.5, Vec3::new(0.10, height, 0.10))),
-        (stage >= 3).then_some((p + Vec3::Y * (height - 0.10), Vec3::new(0.22, 0.16, 0.16))),
-    ]
-    .into_iter()
-    .flatten()
+    let green = [0.35, 0.56, 0.20, 1.0];
+    let mature = phase >= 4;
+    let parts = match kind {
+        CropKind::Grain => {
+            let color = if mature {
+                [0.78, 0.64, 0.25, 1.0]
+            } else {
+                green
+            };
+            [
+                Some((
+                    p + Vec3::Y * height * 0.5,
+                    Vec3::new(0.10, height, 0.10),
+                    color,
+                )),
+                (phase >= 3).then_some((
+                    p + Vec3::Y * (height - 0.10),
+                    Vec3::new(0.22, 0.16, 0.16),
+                    color,
+                )),
+                None,
+            ]
+        }
+        CropKind::Leafy => {
+            let spread = 0.10 + f32::from(phase) * 0.045;
+            let h = 0.08 + f32::from(phase) * 0.035;
+            [
+                Some((
+                    p + Vec3::Y * h * 0.5,
+                    Vec3::new(spread, h, spread),
+                    [0.28, 0.47, 0.19, 1.0],
+                )),
+                (phase >= 3).then_some((
+                    p + Vec3::Y * (h + 0.025),
+                    Vec3::new(spread * 0.65, 0.05, spread * 0.65),
+                    [0.43, 0.61, 0.25, 1.0],
+                )),
+                None,
+            ]
+        }
+        CropKind::Roots => {
+            let h = 0.08 + f32::from(phase) * 0.025;
+            let spread = 0.08 + f32::from(phase) * 0.026;
+            [
+                Some((p + Vec3::Y * h * 0.5, Vec3::new(0.065, h, 0.065), green)),
+                (phase >= 3).then_some((
+                    p + Vec3::Y * (h - 0.015),
+                    Vec3::new(spread, 0.065, 0.09),
+                    [0.30, 0.49, 0.18, 1.0],
+                )),
+                (phase >= 3).then_some((
+                    p + Vec3::Y * 0.035,
+                    Vec3::new(0.105, 0.07, 0.105),
+                    [0.78, 0.39, 0.18, 1.0],
+                )),
+            ]
+        }
+    };
+    parts.into_iter().flatten().filter(move |_| visible)
 }
 
 #[cfg(test)]
@@ -116,8 +209,8 @@ mod tests {
     fn crop_visuals_follow_growth_and_removed_soil() {
         let mut world = World::generate(42, WorldGeneration::GeographyV3);
         let village = world.settlements().unwrap().villages[0].clone();
-        let young = crop_geometry(&village, &world, 0).into_mesh();
-        let mature = crop_geometry(&village, &world, 5).into_mesh();
+        let young = crop_geometry(&village, &world, 1).into_mesh();
+        let mature = crop_geometry(&village, &world, 6).into_mesh();
         let positions = |mesh: &Mesh| match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
             VertexAttributeValues::Float32x3(values) => values.clone(),
             _ => panic!("crop positions must have three components"),
@@ -140,7 +233,87 @@ mod tests {
                 Block::Air,
             )
             .unwrap();
-        let edited = crop_geometry(&village, &world, 5).into_mesh();
+        let edited = crop_geometry(&village, &world, 6).into_mesh();
         assert!(positions(&edited).len() < mature_positions.len());
+    }
+
+    #[test]
+    fn real_crop_sites_share_headroom_rules_and_empty_fields_have_no_plants() {
+        let mut world = World::generate(42, WorldGeneration::GeographyV6);
+        let village = world.settlements().unwrap().villages[0].clone();
+        let soil = village.fields[0].plant_positions().next().unwrap();
+        let lower = BlockPos::new(soil.x, soil.y + 1, soil.z);
+        let upper = BlockPos::new(soil.x, soil.y + 2, soil.z);
+        assert_eq!(growth_stage(0.0), 0);
+        assert_eq!(
+            crop_geometry(&village, &world, 0)
+                .into_mesh()
+                .count_vertices(),
+            0
+        );
+        assert_eq!(growth_stage(0.01), 1);
+        for kind in [CropKind::Grain, CropKind::Leafy, CropKind::Roots] {
+            assert!(visible_plant_parts(&world, soil, 6, kind).count() >= 2);
+            world.set_block(lower, Block::Glass).unwrap();
+            assert_eq!(visible_plant_parts(&world, soil, 6, kind).count(), 0);
+            world.set_block(lower, Block::Air).unwrap();
+        }
+        world.set_block(upper, Block::Wood).unwrap();
+        assert_eq!(
+            visible_plant_parts(&world, soil, 6, CropKind::Grain).count(),
+            0
+        );
+        assert_eq!(
+            visible_plant_parts(&world, soil, 1, CropKind::Grain).count(),
+            1
+        );
+        assert!(visible_plant_parts(&world, soil, 6, CropKind::Leafy).count() > 0);
+        world.set_block(upper, Block::Air).unwrap();
+        world.set_block(soil, Block::Stone).unwrap();
+        assert_eq!(
+            visible_plant_parts(&world, soil, 6, CropKind::Roots).count(),
+            0
+        );
+    }
+
+    #[test]
+    fn mixed_food_shapes_remain_inside_their_soil_column_and_bounded_mesh() {
+        let world = World::generate(42, WorldGeneration::GeographyV6);
+        let village = &world.settlements().unwrap().villages[0];
+        let soil = village.fields[0].plant_positions().next().unwrap();
+        let base = Vec3::new(
+            (soil.x as f32 + 0.5) * CELL_SIZE,
+            (soil.y as f32 + 1.0) * CELL_SIZE,
+            (soil.z as f32 + 0.5) * CELL_SIZE,
+        );
+        let mut appearances = Vec::new();
+        for kind in [CropKind::Grain, CropKind::Leafy, CropKind::Roots] {
+            let mut geometry = Geometry::default();
+            for stage in 1..=6 {
+                let parts: Vec<_> = visible_plant_parts(&world, soil, stage, kind).collect();
+                assert!(parts.len() <= 3);
+                for (center, size, color) in parts {
+                    let relative = center - base;
+                    assert!(center.is_finite() && size.is_finite());
+                    assert!(relative.x.abs() + size.x * 0.5 <= CELL_SIZE * 0.5);
+                    assert!(relative.z.abs() + size.z * 0.5 <= CELL_SIZE * 0.5);
+                    assert!(relative.y - size.y * 0.5 >= -0.0001);
+                    assert!(relative.y + size.y * 0.5 <= 0.83);
+                    if stage == 6 {
+                        geometry.cuboid(center, size, color);
+                    }
+                }
+            }
+            let mesh = geometry.into_mesh();
+            assert!(mesh.count_vertices() <= 72);
+            appearances.push(mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().clone());
+        }
+        assert_ne!(appearances[0], appearances[1]);
+        assert_ne!(appearances[1], appearances[2]);
+        let old = World::generate(42, WorldGeneration::GeographyV5);
+        assert_eq!(
+            crop_kind(&old, &old.settlements().unwrap().villages[0], 1),
+            CropKind::Grain
+        );
     }
 }

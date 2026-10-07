@@ -27,7 +27,9 @@ fn arm_angle(kind: WorkKind, phase: f32, limb_phase: f32) -> f32 {
     match kind {
         WorkKind::TendField => 0.85 + phase.sin() * 0.38,
         WorkKind::HarvestField => 1.1 + phase.sin() * 0.4,
-        WorkKind::WorkshopMaintenance => 0.65 + (phase + limb_phase).sin() * 0.45,
+        WorkKind::WorkshopMaintenance | WorkKind::QuarryStone => {
+            0.65 + (phase + limb_phase).sin() * 0.45
+        }
     }
 }
 
@@ -199,12 +201,20 @@ mod tests {
         );
         let tending = arm_rotations(&mut app, id);
         work.offer.site.kind = WorkKind::HarvestField;
-        confirm(&mut app, Some(work));
+        confirm(&mut app, Some(work.clone()));
         app.update();
         assert_ne!(
             arm_rotations(&mut app, id),
             tending,
             "Gathering uses its own confirmed pose"
+        );
+        work.offer.site.kind = WorkKind::QuarryStone;
+        confirm(&mut app, Some(work));
+        app.update();
+        assert!(
+            arm_rotations(&mut app, id)
+                .iter()
+                .all(|rotation| *rotation != Quat::IDENTITY)
         );
         confirm(&mut app, None);
         app.update();

@@ -102,6 +102,7 @@ pub enum WorkKind {
     TendField,
     WorkshopMaintenance,
     HarvestField,
+    QuarryStone,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

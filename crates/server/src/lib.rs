@@ -8,6 +8,7 @@ mod navigation;
 mod npc;
 mod persistence;
 mod player_economy;
+mod quarry_work;
 mod villages;
 
 #[cfg(test)]
@@ -35,7 +36,7 @@ use std::{
 use persistence::{MAX_EDITS, Simulation};
 use rubblekin_core::{
     airships::{AirshipNetwork, deck_position, initial_deck_position, pilot_position},
-    economy::{MarketAction, PlayerEconomy, WorkAction, WorkState},
+    economy::{MarketAction, PlayerEconomy, WorkAction, WorkKind, WorkState},
     physics::{
         Body, EYE_HEIGHT, MoveInput, PLAYER_HEIGHT, PLAYER_RADIUS, character_position_is_clear,
         move_character_with_airships,
@@ -1131,7 +1132,13 @@ fn send_work_state(
         .map_or_else(PlayerEconomy::default, |saved| saved.ledger.clone());
     let work = WorkState {
         offer: connection.player.as_ref().and_then(|player| {
-            local_work::nearest_offer(&sim.world, &sim.villages, player.body.position, &ledger)
+            local_work::nearest_offer(
+                &sim.world,
+                &sim.villages,
+                &sim.consumed_quarry_cells,
+                player.body.position,
+                &ledger,
+            )
         }),
         active: connection
             .active_work
@@ -1205,6 +1212,7 @@ fn handle_work(
                 let active = local_work::start(
                     &sim.world,
                     &sim.villages,
+                    &sim.consumed_quarry_cells,
                     site,
                     player.body.position,
                     sim.world_time,
@@ -1229,6 +1237,7 @@ fn advance_local_work(
     config: &ServerConfig,
 ) -> io::Result<()> {
     let mut replies = Vec::new();
+    let mut block_changes = Vec::new();
     let mut completed = false;
     for (&id, connection) in connections.iter_mut() {
         let Some(mut active) = connection.active_work.take() else {
@@ -1240,18 +1249,28 @@ fn advance_local_work(
         match local_work::advance(
             &sim.world,
             &sim.villages,
+            &sim.consumed_quarry_cells,
             &mut active,
             player.body.position,
             sim.world_time,
         ) {
             Err(reason) => replies.push((id, format!("Work stopped: {reason}"), false)),
             Ok(true) => {
-                let result = local_work::complete(
-                    &sim.world,
-                    &mut sim.villages,
-                    &mut sim.profiles.get_mut(profile).unwrap().ledger,
-                    &active,
-                );
+                let ledger = &mut sim.profiles.get_mut(profile).unwrap().ledger;
+                let result = if active.progress.offer.site.kind == WorkKind::QuarryStone {
+                    quarry_work::complete(
+                        &mut sim.world,
+                        &mut sim.consumed_quarry_cells,
+                        ledger,
+                        &active,
+                    )
+                    .map(|(notice, edit)| {
+                        block_changes.push((id, edit));
+                        notice
+                    })
+                } else {
+                    local_work::complete(&sim.world, &mut sim.villages, ledger, &active)
+                };
                 match result {
                     Ok(notice) => {
                         completed = true;
@@ -1274,6 +1293,16 @@ fn advance_local_work(
     if completed {
         checkpoint_players(connections, sim);
         sim.save(&config.save_path)?;
+    }
+    for (player_id, edit) in block_changes {
+        broadcast(
+            connections,
+            &ServerMessage::BlockChanged {
+                request_id: 0,
+                player_id,
+                edit,
+            },
+        );
     }
     for (id, notice, accepted) in replies {
         send_work_state(connections, sim, id, 0, notice, accepted);
@@ -1411,6 +1440,7 @@ mod tests {
             villages: villages::VillageLife::new(&world),
             world,
             profiles: BTreeMap::from([(profile, saved)]),
+            consumed_quarry_cells: Vec::new(),
             world_time: 0.0,
         };
         let mut budget = 1;

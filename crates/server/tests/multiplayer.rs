@@ -2179,3 +2179,282 @@ fn dedicated_server_flushes_and_exits_cleanly_on_termination_signals() {
         assert!(saved["world_time"].as_f64().unwrap() > 0.1);
     }
 }
+
+fn quarry_fixture(
+    config: &ServerConfig,
+) -> (World, rubblekin_core::economy::WorkSite, [f32; 3], BlockPos) {
+    use rubblekin_core::{
+        economy::{WorkKind, WorkSite},
+        village_assets::quarry_pile_cells,
+        world::BlockEdit,
+    };
+    let world = World::generate(42, config.generation);
+    let building = &world.settlements().unwrap().roadside_landmarks[17].building;
+    let anchor = BlockPos::new(7473, 473, 3347);
+    assert_eq!(world.block(anchor), Block::Stone);
+    // Deplete the other finite pile cells in a disposable world. Both players
+    // must capture this same remaining cell, rather than choosing adjacent rocks.
+    let local: Vec<_> = quarry_pile_cells().collect();
+    let [width, height, depth] = building.dimensions();
+    let mut edits = Vec::new();
+    for x in building.origin.x..building.origin.x + width {
+        for z in building.origin.z..building.origin.z + depth {
+            let [lx, lz] = building.local_cell(x, z).unwrap();
+            for y in 1..height {
+                let position = BlockPos::new(x, building.origin.y + y, z);
+                if position != anchor && local.contains(&[lx, y, lz]) {
+                    edits.push(BlockEdit {
+                        position,
+                        block: Block::Air,
+                    });
+                }
+            }
+        }
+    }
+    assert_eq!(edits.len(), 49);
+    spawn(config.clone()).unwrap().stop().unwrap();
+    let mut save: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    save["edits"] = serde_json::to_value(edits).unwrap();
+    fs::write(&config.save_path, serde_json::to_vec(&save).unwrap()).unwrap();
+    (
+        world,
+        WorkSite {
+            village_id: 5,
+            kind: WorkKind::QuarryStone,
+            index: 17,
+        },
+        [3736.75, 236.0, 1672.75],
+        anchor,
+    )
+}
+
+#[test]
+fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo() {
+    use rubblekin_core::{
+        economy::{MarketAction, WorkAction},
+        settlement::ResourceKind,
+    };
+    const FIRST: &str = "00000000000000000000000000000059";
+    const SECOND: &str = "00000000000000000000000000000060";
+    let save = TestSave::new();
+    let config = ServerConfig {
+        generation: WorldGeneration::GeographyV6,
+        ..save.config(true)
+    };
+    let (world, site, position, anchor) = quarry_fixture(&config);
+    let server = spawn(config.clone()).unwrap();
+    let (mut first, _) = Client::connect_profile(server.addr, FIRST);
+    let (mut second, _) = Client::connect_profile(server.addr, SECOND);
+    let (mut observer, _) = Client::connect_mode(server.addr, "Observer", SessionMode::Observer);
+    observer.send(ClientMessage::Work {
+        request_id: 1,
+        action: WorkAction::Start { site },
+    });
+    assert!(
+        matches!(observer.until(|m| matches!(m, ServerMessage::Notice {..})), ServerMessage::Notice {text} if text.contains("read-only"))
+    );
+    assert!(matches!(
+        first.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState {
+            accepted: false,
+            ..
+        }
+    ));
+    first.teleport(position);
+    second.teleport([position[0] - 1.0, position[1], position[2]]);
+    let started = first.work(2, WorkAction::Start { site });
+    assert!(
+        matches!(started, ServerMessage::WorkState { accepted: true, .. }),
+        "{started:?}"
+    );
+    let started_at = Instant::now();
+    let started = second.work(1, WorkAction::Start { site });
+    assert!(
+        matches!(started, ServerMessage::WorkState { accepted: true, .. }),
+        "{started:?}"
+    );
+    let changed = observer.until_for(
+        |m| matches!(m, ServerMessage::BlockChanged {edit,..} if edit.position == anchor),
+        Duration::from_secs(15),
+    );
+    assert!(started_at.elapsed() >= Duration::from_millis(5700));
+    assert!(
+        matches!(changed, ServerMessage::BlockChanged { request_id:0, edit,..} if edit.block == Block::Air)
+    );
+    let durable: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(
+        durable["consumed_quarry_cells"],
+        serde_json::json!([anchor])
+    );
+    assert_eq!(durable["profiles"][FIRST]["ledger"]["cargo"][2], 1);
+    assert_eq!(durable["profiles"][SECOND]["ledger"]["cargo"][2], 0);
+    assert!(
+        matches!(first.until_for(|m| matches!(m, ServerMessage::WorkState {request_id:0,work,ledger,..} if work.active.is_none() && ledger.cargo[2]==1), Duration::from_secs(5)), ServerMessage::WorkState {accepted:true,ledger,..} if ledger.coins==0 && ledger.revision==1)
+    );
+    assert!(
+        matches!(second.until_for(|m| matches!(m, ServerMessage::WorkState {request_id:0,work,accepted:false,..} if work.active.is_none()), Duration::from_secs(5)), ServerMessage::WorkState {ledger,..} if ledger.cargo_total()==0)
+    );
+    assert!(matches!(
+        first.work(2, WorkAction::Start { site }),
+        ServerMessage::WorkState {
+            accepted: false,
+            ..
+        }
+    ));
+    // Restoring this exact paid stone must not mint cargo again for either profile.
+    first.send(ClientMessage::Edit {
+        request_id: 3,
+        position: anchor,
+        block: Block::Stone,
+    });
+    first.until(|m| matches!(m, ServerMessage::BlockChanged { request_id: 3, .. }));
+    let replay = second.work(2, WorkAction::Start { site });
+    assert!(
+        matches!(replay, ServerMessage::WorkState {accepted:false,ledger,..} if ledger.cargo_total()==0)
+    );
+    let remote = first.market(
+        4,
+        Some(5),
+        1,
+        MarketAction::Sell {
+            kind: ResourceKind::Stone,
+            quantity: 1,
+            unit_price: 1,
+        },
+    );
+    assert!(
+        matches!(remote, ServerMessage::MarketState {accepted:false,ledger,..} if ledger.cargo[2]==1)
+    );
+    let village = world
+        .settlements()
+        .unwrap()
+        .villages
+        .iter()
+        .find(|v| v.id == 5)
+        .unwrap();
+    first.teleport(village.market);
+    let ServerMessage::MarketState {
+        market: Some(market),
+        ..
+    } = first.market(5, Some(5), 1, MarketAction::View)
+    else {
+        panic!("Expected quote")
+    };
+    let price = market.goods[2].sell_price;
+    let sold = first.market(
+        6,
+        Some(5),
+        1,
+        MarketAction::Sell {
+            kind: ResourceKind::Stone,
+            quantity: 1,
+            unit_price: price,
+        },
+    );
+    assert!(
+        matches!(sold, ServerMessage::MarketState {accepted:true,ledger,..} if ledger.coins==price && ledger.cargo[2]==0 && ledger.revision==2)
+    );
+    drop((first, second, observer));
+    server.stop().unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let (mut first, welcome) = Client::connect_profile(server.addr, FIRST);
+    assert!(
+        matches!(welcome, ServerMessage::Welcome {edits,..} if !edits.iter().any(|edit| edit.position==anchor))
+    );
+    assert!(
+        matches!(first.until(|m| matches!(m, ServerMessage::WorkState {request_id:0,..})), ServerMessage::WorkState {ledger,..} if ledger.coins==price && ledger.cargo_total()==0)
+    );
+    first.teleport(position);
+    assert!(matches!(
+        first.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState {
+            accepted: false,
+            ..
+        }
+    ));
+    let durable: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(
+        durable["consumed_quarry_cells"],
+        serde_json::json!([anchor])
+    );
+    drop(first);
+    server.stop().unwrap();
+}
+
+#[test]
+fn quarry_save_failure_confirms_neither_block_removal_nor_cargo_and_restart_keeps_stone() {
+    use rubblekin_core::economy::WorkAction;
+    const PROFILE: &str = "00000000000000000000000000000061";
+    let save = TestSave::new();
+    let config = ServerConfig {
+        generation: WorldGeneration::GeographyV6,
+        ..save.config(true)
+    };
+    let (_, site, position, anchor) = quarry_fixture(&config);
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    let (mut observer, _) = Client::connect_mode(server.addr, "Observer", SessionMode::Observer);
+    client.teleport(position);
+    assert!(matches!(
+        client.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState { accepted: true, .. }
+    ));
+    client.until_for(|m| matches!(m,ServerMessage::WorkState {work,..} if work.active.as_ref().is_some_and(|w|w.elapsed_seconds>=5.25)),Duration::from_secs(15));
+    let before = fs::read(&config.save_path).unwrap();
+    let temporary = save
+        .0
+        .join(format!(".world.json.{}.tmp", std::process::id()));
+    fs::create_dir(&temporary).unwrap();
+    for connection in [&mut client, &mut observer] {
+        loop {
+            let mut line = String::new();
+            match connection.reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    // Fatal shutdown can interrupt an ordinary large State frame.
+                    // A partial EOF frame is not a protocol confirmation.
+                    let message = match serde_json::from_str::<ServerMessage>(&line) {
+                        Ok(message) => message,
+                        Err(error) if !line.ends_with('\n') && error.is_eof() => break,
+                        Err(error) => panic!("Invalid complete frame: {error}"),
+                    };
+                    match message {
+                        ServerMessage::BlockChanged { edit, .. } => {
+                            assert_ne!(edit.position, anchor)
+                        }
+                        ServerMessage::WorkState { ledger, .. } => {
+                            assert_eq!(ledger.cargo_total(), 0)
+                        }
+                        _ => {}
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
+                Err(error) => panic!("Expected save-failure disconnect: {error}"),
+            }
+        }
+    }
+    assert!(server.stop().is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), before);
+    fs::remove_dir(temporary).unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, welcome) = Client::connect_profile(server.addr, PROFILE);
+    assert!(
+        matches!(welcome,ServerMessage::Welcome {edits,..} if !edits.iter().any(|edit|edit.position==anchor))
+    );
+    assert!(
+        matches!(client.until(|m|matches!(m,ServerMessage::WorkState {request_id:0,..})),ServerMessage::WorkState {ledger,work,..} if ledger.cargo_total()==0 && work.active.is_none())
+    );
+    assert!(matches!(
+        client.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState { accepted: true, .. }
+    ));
+    client.work(2, WorkAction::Cancel);
+    let durable: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(durable["consumed_quarry_cells"], serde_json::json!([]));
+    drop(client);
+    server.stop().unwrap();
+}

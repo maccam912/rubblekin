@@ -10,7 +10,7 @@ use rubblekin_core::{
     world::{Block, BlockPos, CELL_SIZE, World},
 };
 
-use crate::{player_economy::MAX_COINS, villages::VillageLife};
+use crate::{player_economy::MAX_COINS, quarry_work, villages::VillageLife};
 
 const WORK_SECONDS: f32 = 6.0;
 const MOVE_LIMIT: f32 = 0.8;
@@ -85,6 +85,7 @@ fn site_target(
                 building.origin.z + z,
             )
         }
+        WorkKind::QuarryStone => return Err("Quarry work needs its shared supply record.".into()),
     };
     let target = [
         anchor.x as f32 * CELL_SIZE + 0.25,
@@ -99,6 +100,7 @@ fn site_target(
         WorkKind::TendField => "Tend field",
         WorkKind::WorkshopMaintenance => "Workshop maintenance",
         WorkKind::HarvestField => "Harvest surplus crops",
+        WorkKind::QuarryStone => "Collect stone",
     };
     Ok((anchor, target, format!("{} · {activity}", village.name)))
 }
@@ -118,11 +120,13 @@ fn access(
             world.block(anchor) == Block::Stone
                 && world.block(BlockPos::new(anchor.x, anchor.y - 1, anchor.z)) == Block::Wood
         }
+        WorkKind::QuarryStone => world.block(anchor) == Block::Stone,
     };
     if !intact {
         return Err(match site.kind {
             WorkKind::TendField | WorkKind::HarvestField => "This plot needs intact planting soil.",
             WorkKind::WorkshopMaintenance => "The workshop needs its intact workbench.",
+            WorkKind::QuarryStone => "This quarry stone is no longer here.",
         }
         .into());
     }
@@ -132,6 +136,15 @@ fn access(
         || (position[1] - target[1]).abs() > 1.5
     {
         return Err("Move closer to the work site.".into());
+    }
+    if site.kind == WorkKind::QuarryStone {
+        return crate::validate_edit(
+            world,
+            &rubblekin_core::physics::Body::new(position),
+            anchor,
+            Block::Air,
+            std::iter::empty(),
+        );
     }
     let eye = [position[0], position[1] + EYE_HEIGHT, position[2]];
     let aim = [target[0], target[1] + EYE_HEIGHT, target[2]];
@@ -146,13 +159,44 @@ fn access(
 pub(crate) fn offer(
     world: &World,
     life: &VillageLife,
+    consumed: &[BlockPos],
     site: WorkSite,
     position: [f32; 3],
 ) -> Result<(WorkOffer, BlockPos), String> {
-    let (anchor, target, label) = site_target(world, site, position)?;
-    let reward = life.local_work_reward(world, site.village_id, site.kind)?;
+    let (anchor, target, label) = if site.kind == WorkKind::QuarryStone {
+        let (anchor, target) = quarry_work::target(world, site, consumed, position)?;
+        let town = &world
+            .settlements()
+            .unwrap()
+            .villages
+            .iter()
+            .find(|village| village.id == site.village_id)
+            .unwrap()
+            .name;
+        (
+            anchor,
+            target,
+            format!("Quarry near {town} · Collect stone"),
+        )
+    } else {
+        site_target(world, site, position)?
+    };
+    let reward = if site.kind == WorkKind::QuarryStone {
+        WorkReward::Cargo {
+            kind: rubblekin_core::settlement::ResourceKind::Stone,
+            amount: 1,
+        }
+    } else {
+        life.local_work_reward(world, site.village_id, site.kind)?
+    };
     let unavailable_reason = access(world, site, anchor, target, position)
-        .and_then(|()| life.local_work_available(site.village_id, site.kind))
+        .and_then(|()| {
+            if site.kind == WorkKind::QuarryStone {
+                quarry_work::available(world, site, anchor, consumed)
+            } else {
+                life.local_work_available(site.village_id, site.kind)
+            }
+        })
         .and_then(|()| check_reward(&PlayerEconomy::default(), reward))
         .err();
     Ok((
@@ -171,6 +215,7 @@ pub(crate) fn offer(
 pub(crate) fn nearest_offer(
     world: &World,
     life: &VillageLife,
+    consumed: &[BlockPos],
     position: [f32; 3],
     ledger: &PlayerEconomy,
 ) -> Option<WorkOffer> {
@@ -207,8 +252,9 @@ pub(crate) fn nearest_offer(
                         }),
                 )
         })
+        .chain(quarry_work::sites(world))
         .filter_map(|site| {
-            offer(world, life, site, position)
+            offer(world, life, consumed, site, position)
                 .ok()
                 .map(|(mut offer, _)| {
                     if offer.unavailable_reason.is_none() {
@@ -231,11 +277,12 @@ pub(crate) fn nearest_offer(
 pub(crate) fn start(
     world: &World,
     life: &VillageLife,
+    consumed: &[BlockPos],
     site: WorkSite,
     position: [f32; 3],
     now: f64,
 ) -> Result<ActiveWork, String> {
-    let (offer, anchor) = offer(world, life, site, position)?;
+    let (offer, anchor) = offer(world, life, consumed, site, position)?;
     if let Some(reason) = &offer.unavailable_reason {
         return Err(reason.clone());
     }
@@ -254,6 +301,7 @@ pub(crate) fn start(
 pub(crate) fn advance(
     world: &World,
     life: &VillageLife,
+    consumed: &[BlockPos],
     active: &mut ActiveWork,
     position: [f32; 3],
     now: f64,
@@ -263,8 +311,12 @@ pub(crate) fn advance(
     }
     let offer = &mut active.progress.offer;
     access(world, offer.site, active.anchor, offer.position, position)?;
-    life.local_work_available(offer.site.village_id, offer.site.kind)?;
-    offer.reward = life.local_work_reward(world, offer.site.village_id, offer.site.kind)?;
+    if offer.site.kind == WorkKind::QuarryStone {
+        quarry_work::available(world, offer.site, active.anchor, consumed)?;
+    } else {
+        life.local_work_available(offer.site.village_id, offer.site.kind)?;
+        offer.reward = life.local_work_reward(world, offer.site.village_id, offer.site.kind)?;
+    }
     check_reward(&PlayerEconomy::default(), offer.reward)?;
     active.progress.elapsed_seconds = ((now - active.started_at).max(0.0) as f32).min(WORK_SECONDS);
     Ok(now - active.started_at >= f64::from(WORK_SECONDS))
@@ -311,7 +363,7 @@ pub(crate) fn check_reward(ledger: &PlayerEconomy, reward: WorkReward) -> Result
         WorkReward::Cargo { amount, .. }
             if amount > CARGO_CAPACITY.saturating_sub(ledger.cargo_total()) =>
         {
-            Err(format!("Make room for {amount} units of harvest cargo."))
+            Err(format!("Make room for {amount} units of cargo."))
         }
         _ => Ok(()),
     }
@@ -378,17 +430,17 @@ mod tests {
         let (mut site, position) = field();
         site.kind = WorkKind::HarvestField;
         let food = life.market_stocks(site.village_id).unwrap().food;
-        let mut first = start(world, &life, site, position, 0.0).unwrap();
-        let mut competitor = start(world, &life, site, position, 0.0).unwrap();
+        let mut first = start(world, &life, &[], site, position, 0.0).unwrap();
+        let mut competitor = start(world, &life, &[], site, position, 0.0).unwrap();
         assert_eq!(
-            nearest_offer(world, &life, position, &PlayerEconomy::default())
+            nearest_offer(world, &life, &[], position, &PlayerEconomy::default())
                 .unwrap()
                 .site
                 .kind,
             WorkKind::HarvestField
         );
-        assert!(!advance(world, &life, &mut first, position, 5.999).unwrap());
-        assert!(advance(world, &life, &mut first, position, 6.0).unwrap());
+        assert!(!advance(world, &life, &[], &mut first, position, 5.999).unwrap());
+        assert!(advance(world, &life, &[], &mut first, position, 6.0).unwrap());
         let mut ledger = PlayerEconomy::default();
         complete(world, &mut life, &mut ledger, &first).unwrap();
         assert_eq!(ledger.cargo, [12, 0, 0, 0, 0]);
@@ -401,7 +453,7 @@ mod tests {
         let after = serde_json::to_value(&life).unwrap();
         assert!(!after["villages"][0]["planted"].as_bool().unwrap());
         assert_eq!(after["villages"][0]["harvests"], 1);
-        assert!(advance(world, &life, &mut competitor, position, 6.0).is_err());
+        assert!(advance(world, &life, &[], &mut competitor, position, 6.0).is_err());
         let mut other_ledger = PlayerEconomy::default();
         assert!(complete(world, &mut life, &mut other_ledger, &competitor).is_err());
         assert_eq!(other_ledger, PlayerEconomy::default());
@@ -415,9 +467,9 @@ mod tests {
         let world = world();
         let (mut site, position) = field();
         site.kind = WorkKind::HarvestField;
-        assert!(start(world, &VillageLife::new(world), site, position, 0.0).is_err());
+        assert!(start(world, &VillageLife::new(world), &[], site, position, 0.0).is_err());
         let mut life = ripe_life(world);
-        let active = start(world, &life, site, position, 0.0).unwrap();
+        let active = start(world, &life, &[], site, position, 0.0).unwrap();
         let mut ledger = PlayerEconomy {
             cargo: [7, 0, 0, 0, 0],
             delivery: Some(DeliveryContract {
@@ -439,7 +491,7 @@ mod tests {
         assert_eq!(ledger.revision, 0);
         assert_eq!(serde_json::to_value(&life).unwrap(), before);
         assert!(
-            nearest_offer(world, &life, position, &ledger)
+            nearest_offer(world, &life, &[], position, &ledger)
                 .unwrap()
                 .unavailable_reason
                 .is_some()
@@ -473,7 +525,7 @@ mod tests {
         let (mut site, position) = field();
         site.kind = WorkKind::HarvestField;
         let mut life = ripe_life(world);
-        let mut active = start(world, &life, site, position, 0.0).unwrap();
+        let mut active = start(world, &life, &[], site, position, 0.0).unwrap();
         let soils: Vec<_> = world.settlements().unwrap().villages[0]
             .fields
             .iter()
@@ -490,7 +542,7 @@ mod tests {
         }
         let amount = (12.0 * kept as f32 / soils.len() as f32).floor() as u32;
         assert!((1..12).contains(&amount));
-        assert!(advance(&damaged, &life, &mut active, position, 6.0).unwrap());
+        assert!(advance(&damaged, &life, &[], &mut active, position, 6.0).unwrap());
         assert_eq!(
             active.progress.offer.reward,
             WorkReward::Cargo {
@@ -508,7 +560,7 @@ mod tests {
         }
         let life = ripe_life(&damaged);
         assert!(
-            start(&damaged, &life, site, position, 0.0)
+            start(&damaged, &life, &[], site, position, 0.0)
                 .err()
                 .unwrap()
                 .contains("one unit")
@@ -521,9 +573,9 @@ mod tests {
         let mut life = VillageLife::new(world);
         let (site, position) = field();
         let before = life.market_stocks(site.village_id).unwrap().crop_growth;
-        let mut active = start(world, &life, site, position, 100.0).unwrap();
-        assert!(!advance(world, &life, &mut active, position, 105.999).unwrap());
-        assert!(advance(world, &life, &mut active, position, 106.0).unwrap());
+        let mut active = start(world, &life, &[], site, position, 100.0).unwrap();
+        assert!(!advance(world, &life, &[], &mut active, position, 105.999).unwrap());
+        assert!(advance(world, &life, &[], &mut active, position, 106.0).unwrap());
         let mut ledger = PlayerEconomy::default();
         complete(world, &mut life, &mut ledger, &active).unwrap();
         assert!(life.market_stocks(site.village_id).unwrap().crop_growth > before);
@@ -532,10 +584,10 @@ mod tests {
 
         let mut moved = position;
         moved[0] += 0.81;
-        assert!(advance(world, &life, &mut active, moved, 106.0).is_err());
+        assert!(advance(world, &life, &[], &mut active, moved, 106.0).is_err());
         let mut damaged = world.clone();
         damaged.set_block(active.anchor, Block::Stone).unwrap();
-        assert!(advance(&damaged, &life, &mut active, position, 106.0).is_err());
+        assert!(advance(&damaged, &life, &[], &mut active, position, 106.0).is_err());
     }
 
     #[test]
@@ -547,22 +599,22 @@ mod tests {
         let mut damaged = world.clone();
         damaged.set_block(nearest, Block::Air).unwrap();
 
-        let (nearby, anchor) = offer(&damaged, &life, site, position).unwrap();
+        let (nearby, anchor) = offer(&damaged, &life, &[], site, position).unwrap();
         assert_ne!(anchor, nearest);
         assert!(matches!(damaged.block(anchor), Block::Dirt | Block::Grass));
         assert!(nearby.unavailable_reason.is_none());
-        let mut active = start(&damaged, &life, site, position, 0.0).unwrap();
-        assert!(!advance(&damaged, &life, &mut active, position, 5.0).unwrap());
+        let mut active = start(&damaged, &life, &[], site, position, 0.0).unwrap();
+        assert!(!advance(&damaged, &life, &[], &mut active, position, 5.0).unwrap());
         damaged.set_block(active.anchor, Block::Air).unwrap();
         assert!(
-            offer(&damaged, &life, site, position)
+            offer(&damaged, &life, &[], site, position)
                 .unwrap()
                 .0
                 .unavailable_reason
                 .is_none()
         );
         assert!(
-            advance(&damaged, &life, &mut active, position, 6.0)
+            advance(&damaged, &life, &[], &mut active, position, 6.0)
                 .unwrap_err()
                 .contains("intact planting soil")
         );
@@ -570,7 +622,7 @@ mod tests {
         for soil in world.settlements().unwrap().villages[0].fields[0].plant_positions() {
             damaged.set_block(soil, Block::Air).unwrap();
         }
-        let (unavailable, fallback) = offer(&damaged, &life, site, position).unwrap();
+        let (unavailable, fallback) = offer(&damaged, &life, &[], site, position).unwrap();
         assert_eq!(fallback, nearest);
         assert!(
             unavailable
@@ -578,7 +630,7 @@ mod tests {
                 .unwrap()
                 .contains("intact planting soil")
         );
-        assert!(start(&damaged, &life, site, position, 0.0).is_err());
+        assert!(start(&damaged, &life, &[], site, position, 0.0).is_err());
     }
 
     #[test]
@@ -589,11 +641,11 @@ mod tests {
         let mut value = serde_json::to_value(&life).unwrap();
         value["villages"][0]["snapshot"]["crop_growth"] = 1.0.into();
         let ready: VillageLife = serde_json::from_value(value.clone()).unwrap();
-        assert!(start(world, &ready, site, position, 0.0).is_err());
+        assert!(start(world, &ready, &[], site, position, 0.0).is_err());
         value["villages"][0]["snapshot"]["crop_growth"] = 0.0.into();
         value["villages"][0]["planted"] = false.into();
         let mut empty: VillageLife = serde_json::from_value(value).unwrap();
-        let active = start(world, &empty, site, position, 0.0).unwrap();
+        let active = start(world, &empty, &[], site, position, 0.0).unwrap();
         let mut ledger = PlayerEconomy::default();
         complete(world, &mut empty, &mut ledger, &active).unwrap();
         assert_eq!(
@@ -616,7 +668,7 @@ mod tests {
             .unwrap();
         life.change_market_stock(site.village_id, ResourceKind::Stone, 9.0 - stone)
             .unwrap();
-        let active = start(world, &life, site, position, 0.0).unwrap();
+        let active = start(world, &life, &[], site, position, 0.0).unwrap();
         let mut ledger = PlayerEconomy::default();
         complete(world, &mut life, &mut ledger, &active).unwrap();
         let after = life.market_stocks(site.village_id).unwrap();
@@ -626,7 +678,7 @@ mod tests {
         assert_eq!(ledger.coins, 4);
         let mut damaged = world.clone();
         damaged.set_block(active.anchor, Block::Air).unwrap();
-        assert!(start(&damaged, &VillageLife::new(world), site, position, 0.0).is_err());
+        assert!(start(&damaged, &VillageLife::new(world), &[], site, position, 0.0).is_err());
     }
 
     #[test]
@@ -636,11 +688,12 @@ mod tests {
         let (site, position) = field();
         let mut distant = position;
         distant[0] += 100.0;
-        assert!(start(world, &life, site, distant, 0.0).is_err());
+        assert!(start(world, &life, &[], site, distant, 0.0).is_err());
         assert!(
             start(
                 world,
                 &life,
+                &[],
                 WorkSite {
                     index: u32::MAX,
                     ..site
@@ -651,7 +704,7 @@ mod tests {
             .is_err()
         );
         let (site, position) = workshop();
-        let active = start(world, &life, site, position, 0.0).unwrap();
+        let active = start(world, &life, &[], site, position, 0.0).unwrap();
         let target = active.progress.offer.position;
         let midpoint = [
             (position[0] + target[0]) * 0.5,
@@ -663,6 +716,6 @@ mod tests {
         blocked
             .set_block(BlockPos::new(cell[0], cell[1], cell[2]), Block::Stone)
             .unwrap();
-        assert!(start(&blocked, &life, site, position, 0.0).is_err());
+        assert!(start(&blocked, &life, &[], site, position, 0.0).is_err());
     }
 }

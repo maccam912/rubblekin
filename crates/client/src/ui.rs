@@ -16,6 +16,10 @@ pub struct NpcPanel;
 #[derive(Component)]
 pub struct PaletteSlot(pub usize);
 #[derive(Component)]
+pub struct PaletteSwatch(pub usize);
+#[derive(Component)]
+pub struct PaletteLabel(pub usize);
+#[derive(Component)]
 pub struct ModeText;
 
 fn ink() -> Color {
@@ -131,7 +135,7 @@ pub fn setup_ui(
             (Text::new(format!("{}{}", if observing {
                 "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect aimed target     •     F2   graphics\nV   visit next village     •     M   world map\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
-                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot     •     M   world map\nB   cargo, markets & local work\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
+                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   select materials     •     C   more blocks\nF   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot     •     M   world map\nB   cargo, markets & local work\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
             }, if session.can_admin { "\n` / ~   admin commands (help lists commands)" } else { "" })), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
         ],
     ));
@@ -170,43 +174,50 @@ pub fn setup_ui(
                     },
                     ..default()
                 },
-                Children::spawn(SpawnIter(PALETTE.into_iter().enumerate().map(
-                    move |(index, block)| {
-                        let [r, g, b, _] = block.color();
-                        (
-                            Node {
-                                width: px(76),
-                                height: px(70),
-                                padding: UiRect::all(px(6)),
-                                flex_direction: FlexDirection::Column,
-                                align_items: AlignItems::Center,
-                                justify_content: JustifyContent::SpaceBetween,
-                                border: UiRect::all(px(2)),
-                                border_radius: BorderRadius::all(px(7)),
-                                ..default()
-                            },
-                            BackgroundColor(panel()),
-                            BorderColor::all(Color::srgba(0.6, 0.7, 0.6, 0.2)),
-                            PaletteSlot(index),
-                            children![
-                                (
-                                    Node {
-                                        width: px(24),
-                                        height: px(20),
-                                        border_radius: BorderRadius::all(px(3)),
-                                        ..default()
-                                    },
-                                    BackgroundColor(Color::srgb(r, g, b))
-                                ),
-                                (
-                                    Text::new(format!("{} {}", index + 1, block.name())),
-                                    TextFont::from_font_size(13.0).with_font(palette_font.clone()),
-                                    TextColor(ink())
-                                ),
-                            ],
-                        )
-                    }
-                )))
+                Children::spawn(SpawnIter(
+                    PALETTE
+                        .into_iter()
+                        .take(crate::palette::QUICK_SLOTS)
+                        .enumerate()
+                        .map(move |(index, block)| {
+                            let [r, g, b, _] = block.color();
+                            (
+                                Node {
+                                    width: px(76),
+                                    height: px(70),
+                                    padding: UiRect::all(px(6)),
+                                    flex_direction: FlexDirection::Column,
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::SpaceBetween,
+                                    border: UiRect::all(px(2)),
+                                    border_radius: BorderRadius::all(px(7)),
+                                    ..default()
+                                },
+                                BackgroundColor(panel()),
+                                BorderColor::all(Color::srgba(0.6, 0.7, 0.6, 0.2)),
+                                PaletteSlot(index),
+                                children![
+                                    (
+                                        Node {
+                                            width: px(24),
+                                            height: px(20),
+                                            border_radius: BorderRadius::all(px(3)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgb(r, g, b)),
+                                        PaletteSwatch(index)
+                                    ),
+                                    (
+                                        Text::new(format!("{} {}", index + 1, block.name())),
+                                        TextFont::from_font_size(13.0)
+                                            .with_font(palette_font.clone()),
+                                        TextColor(ink()),
+                                        PaletteLabel(index)
+                                    ),
+                                ],
+                            )
+                        })
+                ))
             ),
         ],
     ));
@@ -317,7 +328,7 @@ fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) 
                     Text::new(if observing {
                         "Left stick: fly · swipe the world: look\nRise / Fall: vertical flight · Sprint: boost\n+ / −: camera speed\nMenu: graphics, return to spawn, next village, servers\nInspect: aimed character, block, or plot · swipe panel to scroll\nRead-only observer: no avatar or editing"
                     } else {
-                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose a building block\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nCargo / Work: coins, goods, deliveries and local jobs · trade at market entrances\nMenu: graphics, controls, and leave world"
+                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose · Blocks switches pages\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nCargo / Work: coins, goods, deliveries and local jobs · trade at market entrances\nMenu: graphics, controls, and leave world"
                     }),
                     TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink()),
                     Node { flex_shrink: 0., ..default() },
@@ -432,14 +443,27 @@ pub fn update_ui(
         Query<&mut Text, With<NpcText>>,
         Query<&mut Text, With<NoticeText>>,
         Query<&mut Text, With<ModeText>>,
+        Query<(&PaletteLabel, &mut Text)>,
     )>,
-    mut panels: Query<(
-        &mut Node,
-        Option<&HelpPanel>,
-        Option<&NpcPanel>,
-        Option<&NoticePanel>,
-    )>,
-    mut slots: Query<(&PaletteSlot, &mut BorderColor, &mut BackgroundColor)>,
+    mut panels: Query<
+        (
+            &mut Node,
+            Option<&HelpPanel>,
+            Option<&NpcPanel>,
+            Option<&NoticePanel>,
+        ),
+        Without<PaletteSlot>,
+    >,
+    mut slots: Query<
+        (
+            &PaletteSlot,
+            &mut Node,
+            &mut BorderColor,
+            &mut BackgroundColor,
+        ),
+        Without<PaletteSwatch>,
+    >,
+    mut swatches: Query<(&PaletteSwatch, &mut BackgroundColor), Without<PaletteSlot>>,
 ) {
     *refresh += time.delta_secs();
     if *refresh < 0.1 {
@@ -522,12 +546,15 @@ pub fn update_ui(
             )
         } else {
             format!(
-                "CREATIVE  /  {}",
+                "CREATIVE  /  {}\n{} · Blocks {}/{} · C more blocks",
                 if session.flying {
                     "FLIGHT ENABLED"
                 } else {
                     "UNLIMITED MATERIALS"
-                }
+                },
+                PALETTE[session.selected].name(),
+                crate::palette::page(session.selected) + 1,
+                crate::palette::PAGE_COUNT
             )
         };
         set_text(&mut text, value);
@@ -555,8 +582,28 @@ pub fn update_ui(
             };
         }
     }
-    for (slot, mut border, mut background) in &mut slots {
-        let active = slot.0 == session.selected;
+    for (label, mut text) in &mut texts.p4() {
+        if let Some(index) = crate::palette::index_for_slot(session.selected, label.0) {
+            set_text(
+                &mut text,
+                format!("{} {}", label.0 + 1, PALETTE[index].name()),
+            );
+        }
+    }
+    for (swatch, mut background) in &mut swatches {
+        if let Some(index) = crate::palette::index_for_slot(session.selected, swatch.0) {
+            let [r, g, b, _] = PALETTE[index].color();
+            *background = BackgroundColor(Color::srgb(r, g, b));
+        }
+    }
+    for (slot, mut node, mut border, mut background) in &mut slots {
+        let index = crate::palette::index_for_slot(session.selected, slot.0);
+        node.display = if index.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        let active = index == Some(session.selected);
         *border = BorderColor::all(if active {
             Color::srgb(0.95, 0.75, 0.35)
         } else {
@@ -649,6 +696,78 @@ mod tests {
         session.status_until = 0.;
         session.captured = true;
         (VoxelWorld(world), session)
+    }
+
+    #[test]
+    fn palette_refresh_updates_visible_names_colors_and_selection_together() {
+        let (world, mut session) = fixture(WorldGeneration::ValleyV1);
+        session.selected = 9; // Clay on page two.
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(150));
+        let mut app = App::new();
+        app.insert_resource(world)
+            .insert_resource(session)
+            .insert_resource(time)
+            .init_resource::<Assets<Font>>()
+            .add_systems(Startup, setup_ui)
+            .add_systems(Update, update_ui);
+        app.update(); // Also validates ECS query disjointness against the real UI.
+        for (slot, node, border) in app
+            .world_mut()
+            .query::<(&PaletteSlot, &Node, &BorderColor)>()
+            .iter(app.world())
+        {
+            assert_eq!(
+                node.display,
+                if slot.0 == 5 {
+                    Display::None
+                } else {
+                    Display::Flex
+                }
+            );
+            if slot.0 == 3 {
+                assert_eq!(*border, BorderColor::all(Color::srgb(0.95, 0.75, 0.35)));
+            }
+        }
+        for (label, text) in app
+            .world_mut()
+            .query::<(&PaletteLabel, &Text)>()
+            .iter(app.world())
+        {
+            if label.0 == 3 {
+                assert_eq!(text.0, "4 Clay");
+            }
+        }
+        let [r, g, b, _] = PALETTE[9].color();
+        for (swatch, background) in app
+            .world_mut()
+            .query::<(&PaletteSwatch, &BackgroundColor)>()
+            .iter(app.world())
+        {
+            if swatch.0 == 3 {
+                assert_eq!(background.0, Color::srgb(r, g, b));
+            }
+        }
+        let mode = app
+            .world_mut()
+            .query_filtered::<&Text, With<ModeText>>()
+            .single(app.world())
+            .unwrap();
+        assert!(mode.0.contains("Clay · Blocks 2/2 · C more blocks"));
+        app.world_mut().resource_mut::<Session>().selected = 3;
+        app.update();
+        assert!(
+            app.world_mut()
+                .query::<(&PaletteSlot, &Node)>()
+                .iter(app.world())
+                .all(|(_, node)| node.display == Display::Flex)
+        );
+        assert!(
+            app.world_mut()
+                .query::<(&PaletteLabel, &Text)>()
+                .iter(app.world())
+                .any(|(label, text)| label.0 == 3 && text.0 == "4 Wood")
+        );
     }
 
     #[test]

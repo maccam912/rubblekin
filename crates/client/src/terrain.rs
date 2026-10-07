@@ -1947,6 +1947,16 @@ fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
             add_meadow_details(&mut opaque, world, &cache, x, z, geographic_biome);
         }
     }
+    crate::village_details::append(
+        &mut opaque,
+        world,
+        [
+            cx * CHUNK_SIZE,
+            cz * CHUNK_SIZE,
+            (cx + 1) * CHUNK_SIZE,
+            (cz + 1) * CHUNK_SIZE,
+        ],
+    );
     for position in berry_patch_positions(world) {
         let center = Vec3::from_array(position);
         let patch_x = (center.x / CELL_SIZE).floor() as i32;

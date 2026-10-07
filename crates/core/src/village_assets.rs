@@ -67,6 +67,15 @@ pub const fn entrance(kind: BuildingKind) -> [i32; 3] {
     [dimensions(kind)[0] / 2, 1, 0]
 }
 
+/// Collectable loose stone only; the quarry floor and structure are excluded.
+pub fn quarry_pile_cells() -> impl Iterator<Item = [i32; 3]> {
+    (20..=23).flat_map(|x| {
+        (5..=11)
+            .filter(|z| (z - 5) % 3 < 2)
+            .flat_map(move |z| (1..=2 + (x - 20) / 2).map(move |y| [x, y, z]))
+    })
+}
+
 pub fn block_at(kind: BuildingKind, x: i32, y: i32, z: i32) -> Option<Block> {
     let [width, height, depth] = dimensions(kind);
     if !(0..width).contains(&x) || !(0..height).contains(&y) || !(0..depth).contains(&z) {

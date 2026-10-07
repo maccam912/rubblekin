@@ -15,6 +15,7 @@ mod join;
 mod market;
 mod network;
 mod observer;
+mod palette;
 mod pause;
 mod platform;
 mod prediction;
@@ -24,6 +25,7 @@ mod terrain_albedo;
 mod terrain_material;
 mod touch;
 mod ui;
+mod village_details;
 mod work_animation;
 mod world_map;
 mod world_map_image;
@@ -58,14 +60,7 @@ use rubblekin_core::{
 use rubblekin_server::ServerConfig;
 use std::{collections::HashMap, path::PathBuf};
 
-pub const PALETTE: [Block; 6] = [
-    Block::Grass,
-    Block::Dirt,
-    Block::Stone,
-    Block::Wood,
-    Block::Brick,
-    Block::Glass,
-];
+pub use palette::MATERIALS as PALETTE;
 
 #[derive(Resource)]
 pub struct VoxelWorld(pub GameWorld);
@@ -271,7 +266,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 visible material | C more blocks | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -895,23 +890,30 @@ fn controls(
         graphics.set_quality(quality);
     }
     session.graphics = graphics.quality;
-    for (i, key) in [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-    ]
-    .iter()
-    .enumerate()
-    {
-        if !blocked && window.focused && keys.just_pressed(*key) {
-            session.selected = i;
+    if !blocked && window.focused && !observing {
+        if keys.just_pressed(KeyCode::KeyC) || touch.palette_page {
+            session.selected = palette::next_page(session.selected);
         }
-    }
-    if !blocked && let Some(selected) = touch.selected {
-        session.selected = selected;
+        for (slot, key) in [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+        ]
+        .iter()
+        .enumerate()
+        {
+            if keys.just_pressed(*key)
+                && let Some(index) = palette::index_for_slot(session.selected, slot)
+            {
+                session.selected = index;
+            }
+        }
+        if let Some(selected) = touch.selected.filter(|index| *index < PALETTE.len()) {
+            session.selected = selected;
+        }
     }
     if !blocked && window.focused && session.can_admin && !observing {
         let goal = if keys.just_pressed(KeyCode::F6) {

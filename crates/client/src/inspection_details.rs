@@ -278,6 +278,10 @@ fn farm_text(world: &GameWorld, session: &Session, id: u32, index: usize) -> Str
         intact,
         total,
     );
+    value.push_str(&format!(
+        "\nCrop appearance   {}",
+        crate::crops::crop_kind(world, village, index).name()
+    ));
     if let Some(state) = session.villages.iter().find(|v| v.id == id) {
         let readiness = if intact == 0 {
             "No crops on this plot"
