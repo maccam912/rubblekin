@@ -2209,15 +2209,20 @@ impl Geometry {
     }
 
     pub(crate) fn into_mesh(self) -> Mesh {
-        Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
-        .with_inserted_indices(Indices::U32(self.indices))
+        // Bevy 0.19 skips allocating empty vertex/index buffers but still tries
+        // to upload them. Keep empty geometry on the CPU; a later nonempty
+        // replacement restores GPU usage under the same asset handle.
+        let usage = if self.positions.is_empty() {
+            RenderAssetUsages::MAIN_WORLD
+        } else {
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD
+        };
+        Mesh::new(PrimitiveTopology::TriangleList, usage)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
+            .with_inserted_indices(Indices::U32(self.indices))
     }
 }
 

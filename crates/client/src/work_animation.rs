@@ -4,7 +4,7 @@ use rubblekin_core::economy::{WORK_REACH, WorkKind, WorkProgress};
 
 use crate::{Avatar, Avatars, Limb, Session, market::MarketPanel};
 
-fn can_pose(session: &Session, work: &WorkProgress) -> bool {
+pub(crate) fn can_pose(session: &Session, work: &WorkProgress) -> bool {
     session.observer.is_none()
         && !session.flying
         && session.ride.is_none()

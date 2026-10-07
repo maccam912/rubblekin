@@ -27,6 +27,7 @@ mod touch;
 mod ui;
 mod village_details;
 mod work_animation;
+mod work_tools;
 mod world_map;
 mod world_map_image;
 
@@ -436,6 +437,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         edit_blocks,
                         update_avatars,
                         work_animation::animate,
+                        work_tools::update,
                         airships::update_scene,
                         crops::update_crops,
                         inspection::update,

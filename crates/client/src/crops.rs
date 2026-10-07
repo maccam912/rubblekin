@@ -206,6 +206,91 @@ mod tests {
     use rubblekin_core::world::{Block, BlockPos, World, WorldGeneration};
 
     #[test]
+    fn empty_crop_updates_skip_gpu_uploads_and_regrowth_reuses_the_same_renderable_handle() {
+        use bevy::asset::RenderAssetUsages;
+        use rubblekin_core::protocol::{SessionMode, VillageSnapshot};
+        let world = World::generate(42, WorldGeneration::GeographyV6);
+        let village = world.settlements().unwrap().villages[0].clone();
+        let (_, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(SessionMode::Player),
+            "empty crops".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            SessionMode::Player,
+        )
+        .unwrap();
+        session.villages = vec![VillageSnapshot {
+            id: village.id,
+            crop_growth: 0.,
+            food: 0.,
+            timber: 0.,
+            stone: 0.,
+            clay: 0.,
+            iron: 0.,
+            population: 0,
+            housing_capacity: 0,
+            food_reserve: 0.,
+            capacity_for_growth: false,
+        }];
+        let mut app = App::new();
+        app.insert_resource(VoxelWorld(world))
+            .insert_resource(session)
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, update_crops);
+        app.update();
+        let handle = app
+            .world_mut()
+            .query::<&CropField>()
+            .iter(app.world())
+            .find(|field| field.village == village.id)
+            .unwrap()
+            .mesh
+            .clone();
+        let count = app.world().resource::<Assets<Mesh>>().len();
+        let check = |app: &App, visible: bool| {
+            let meshes = app.world().resource::<Assets<Mesh>>();
+            let mesh = meshes.get(&handle).unwrap();
+            assert_eq!(mesh.count_vertices() > 0, visible);
+            assert_eq!(
+                mesh.asset_usage.contains(RenderAssetUsages::RENDER_WORLD),
+                visible
+            );
+            assert!(mesh.asset_usage.contains(RenderAssetUsages::MAIN_WORLD));
+            assert_eq!(meshes.len(), count);
+        };
+        check(&app, false);
+        for growth in [0.01, 1., 0., 1.] {
+            app.world_mut().resource_mut::<Session>().villages[0].crop_growth = growth;
+            app.update();
+            check(&app, growth > 0.);
+        }
+        let sites: Vec<_> = village
+            .fields
+            .iter()
+            .flat_map(|field| field.plant_positions())
+            .collect();
+        for soil in &sites {
+            app.world_mut()
+                .resource_mut::<VoxelWorld>()
+                .0
+                .set_block(BlockPos::new(soil.x, soil.y + 1, soil.z), Block::Wood)
+                .unwrap();
+        }
+        app.update();
+        check(&app, false);
+        // Opening real growing soil restores this existing mesh to GPU usage.
+        let soil = sites[0];
+        app.world_mut()
+            .resource_mut::<VoxelWorld>()
+            .0
+            .set_block(BlockPos::new(soil.x, soil.y + 1, soil.z), Block::Air)
+            .unwrap();
+        app.update();
+        check(&app, true);
+    }
+
+    #[test]
     fn crop_visuals_follow_growth_and_removed_soil() {
         let mut world = World::generate(42, WorldGeneration::GeographyV3);
         let village = world.settlements().unwrap().villages[0].clone();
