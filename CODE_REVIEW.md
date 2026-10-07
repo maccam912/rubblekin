@@ -139,3 +139,27 @@ I would allocate the next pass primarily to the visible journey defects and the 
 - Review-document links and whitespace checked before commit.
 
 No new runtime, generator, protocol, save-format, or visual changes were implemented. No fresh graphics benchmark, Android build/device run, Windows/Linux runtime test, live-server change, or release publication was performed. Source inspection of those paths is not target-platform validation.
+
+## C05 follow-up — 2026-10-06
+
+Measured and repaired the unbuffered serialization cost before changing commit boundaries. Temporary seed-42 GeographyV3 saves on macOS 26.6.2, Apple M5 Pro/64 GiB produced these five-sample medians:
+
+| Edits | Save size | Original durable save | Buffered durable save |
+| --- | ---: | ---: | ---: |
+| 0 | 34,860 bytes | 23.97 ms | 7.95 ms |
+| 99,900 | 6,028,859 bytes | 3,724.73 ms | 18.47 ms |
+
+The near-limit JSON serialization/write stage fell from about 3,714 ms to 8.27 ms. `Simulation::save` now buffers small JSON writes and checks the final flush before the unchanged file-sync, atomic-replacement and directory-sync sequence. Save version, exclusive locking, message order, permissions, and acknowledgment timing retain their previous semantics.
+
+A legal 16-client edit burst improved from 393 ms to 139 ms in the small world; the buffered near-limit burst took 373 ms. All 16 edits succeeded in request order. The large unbuffered burst was stopped after the standalone measurements established its cost. Bursts still exceed the 50 ms simulation tick, so C05 is partially addressed; tick batching remains a separate follow-up. These are bounded local filesystem measurements, not Linux/container-storage or cross-platform performance claims.
+
+Persistence tests and targeted TCP regressions passed, including a buffered final-write failure and a failed commit that reaches neither player nor observer, preserves the previous save and remains absent after restart. Server all-target Clippy, formatting and whitespace checks passed. Benchmark instrumentation and worlds stayed under a temporary directory; no live save or server was modified.
+
+
+## C08 — NPC controls bypassed the admin request limit (2026-10-06)
+
+**Newly reproduced and repaired during the follow-up.** The legacy `ClientMessage::Admin` branch accepted every valid NPC-control request and saved each one, while `AdminCommand` already enforced a per-connection 100 ms interval. A single enabled player could submit the receive loop's 64-message allowance in one packet and force 64 synchronous saves. With C05 buffering already applied, a disposable seed-42 GeographyV3 reproduction still measured a 460 ms tick.
+
+Both request forms now use one small connection-owned admission check after permissions. Throttled requests receive feedback without mutating NPCs, saving, teleporting or extending the interval. An accepted NPC change retains durable-before-success ordering. The same packet now produced one accepted change, 63 rejections, one save and a 12 ms tick. These are bounded local macOS measurements; enabled admin servers remain trusted-only, and this is not a global multi-client work limit or a storage-latency guarantee.
+
+All 13 admin-handler and 24 TCP multiplayer tests, server all-target Clippy, formatting and whitespace checks passed. Focused regressions exercise NPC/console sharing in both directions, per-player isolation, retry after the interval, permission precedence, and unchanged NPC/canonical-save state on rejection. No protocol, save format or deployment changed.

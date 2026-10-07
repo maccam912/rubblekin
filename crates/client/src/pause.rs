@@ -30,6 +30,7 @@ pub struct PauseMenu {
     focused: Option<Action>,
     scroll_finger: Option<(u64, Vec2)>,
     distance_drag: Option<DistanceDrag>,
+    keyboard_distance: Option<(Distance, f32)>,
 }
 
 #[derive(Component)]
@@ -93,7 +94,13 @@ impl Distance {
         if !fraction.is_finite() || !self.enabled(graphics) {
             return;
         }
-        let value = self.value_at_fraction(fraction);
+        self.set_value(self.value_at_fraction(fraction), graphics);
+    }
+
+    fn set_value(self, value: f32, graphics: &mut GraphicsSettings) {
+        if !value.is_finite() || !self.enabled(graphics) {
+            return;
+        }
         match self {
             Self::Near => graphics.adjust_near_distance(value - graphics.near_distance),
             Self::Trees => graphics.adjust_tree_distance(value.round() - graphics.tree_distance),
@@ -115,6 +122,11 @@ impl Distance {
     }
 
     fn displayed_value(self, pause: &PauseMenu, graphics: &GraphicsSettings) -> f32 {
+        if let Some((distance, value)) = pause.keyboard_distance
+            && distance == self
+        {
+            return value;
+        }
         pause
             .distance_drag
             .filter(|drag| drag.distance == self)
@@ -130,6 +142,7 @@ pub(super) enum Action {
     Resume,
     Map,
     Quality(GraphicsQuality),
+    Distance(Distance),
     NearLess,
     NearMore,
     TreeLess,
@@ -268,7 +281,7 @@ pub fn setup(
                                         Action::TreeLess => { row.commands().entity(value).insert(TreeText); }
                                         _ => { row.commands().entity(value).insert(ShadowText); }
                                     }
-                                    row.spawn((distance, Node { height: px(44), flex_grow: 1., min_width: px(40), align_items: AlignItems::Center, ..default() })).with_children(|track| {
+                                    row.spawn((distance, Action::Distance(distance), Interaction::None, Node { height: px(44), flex_grow: 1., min_width: px(40), align_items: AlignItems::Center, padding: UiRect::horizontal(px(4)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::NONE), BorderColor::all(Color::NONE))).with_children(|track| {
                                         track.spawn((Node { width: percent(100), height: px(8), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(Color::srgb(0.16, 0.27, 0.25)))).with_child((DistanceFill(distance), Node { width: percent(0), height: percent(100), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(accent())));
                                     });
                                     row.spawn(button(more, px(48))).with_child(label("+", &font, 23.));
@@ -290,7 +303,7 @@ pub fn setup(
                             actions.spawn(button(Action::NextVillage, percent(100))).with_child(label("Next village", &font, 16.));
                         }
                         actions.spawn(button(Action::Leave, percent(100))).with_child(label("Leave world", &font, 18.));
-                        actions.spawn((Text::new(if touch.enabled { "Tap to choose\nSwipe blank space to scroll" } else { "Esc  resume\nTab / Shift+Tab  select\nEnter  activate\nScroll if needed" }), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+                        actions.spawn((Text::new(if touch.enabled { "Tap to choose\nSwipe blank space to scroll" } else { "Esc  resume\nTab / Shift+Tab  select\nEnter  activate\nSelected bar: Left / Right\nHome / End  minimum / maximum\nRelease keys to apply\nScroll if needed" }), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
                     });
                 });
             });
@@ -299,6 +312,7 @@ pub fn setup(
 
 fn enabled(action: Action, graphics: &GraphicsSettings) -> bool {
     match action {
+        Action::Distance(distance) => distance.enabled(graphics),
         Action::NearLess => graphics.near_distance > MIN_NEAR_DISTANCE,
         Action::NearMore => graphics.near_distance < MAX_NEAR_DISTANCE,
         Action::TreeLess => graphics.tree_distance > MIN_TREE_DISTANCE,
@@ -324,6 +338,7 @@ fn activate(
         return;
     }
     match action {
+        Action::Distance(_) => pause.focused = Some(action),
         Action::Quality(quality) => graphics.set_quality(quality),
         Action::NearLess => graphics.adjust_near_distance(-DISTANCE_STEP),
         Action::NearMore => graphics.adjust_near_distance(DISTANCE_STEP),
@@ -397,9 +412,31 @@ pub fn read(
     let (keys, mouse, wheel) = input;
     let (conversation, console, mut map) = modals;
     pause.just_closed = false;
-    let back = native
-        .read()
-        .any(|key| key.input.state.is_pressed() && key.input.logical_key == Key::BrowserBack);
+    // Drain the full frame: short-circuiting would replay later Back events on
+    // the next frame and could reopen the menu immediately after closing it.
+    let mut back = false;
+    let adjustment_keys = [
+        KeyCode::ArrowLeft,
+        KeyCode::ArrowRight,
+        KeyCode::Home,
+        KeyCode::End,
+    ];
+    let mut adjustments = Vec::new();
+    for key in native.read() {
+        back |= key.input.state.is_pressed()
+            && !key.input.repeat
+            && key.input.logical_key == Key::BrowserBack;
+        if key.input.state.is_pressed() && adjustment_keys.contains(&key.input.key_code) {
+            adjustments.push((key.input.key_code, key.input.repeat));
+        }
+    }
+    // ButtonInput supplies initial presses in headless tests and synthetic
+    // input; native events additionally retain desktop held-key repeats.
+    for key in adjustment_keys {
+        if keys.just_pressed(key) && !adjustments.iter().any(|(candidate, _)| *candidate == key) {
+            adjustments.push((key, false));
+        }
+    }
     let lost_focus = focus_events
         .read()
         .any(|event| !event.focused && windows.get(event.window).is_ok());
@@ -417,6 +454,7 @@ pub fn read(
         pause.input_blocked = false;
         pause.scroll_finger = None;
         pause.distance_drag = None;
+        pause.keyboard_distance = None;
         touch.reset();
         fingers.clear();
         return;
@@ -425,6 +463,7 @@ pub fn read(
         pause.input_blocked = true;
         pause.scroll_finger = None;
         pause.distance_drag = None;
+        pause.keyboard_distance = None;
         touch.menu_open = pause.open;
         fingers.clear();
         return;
@@ -445,6 +484,7 @@ pub fn read(
         pause.focused = Some(Action::Resume);
         pause.scroll_finger = None;
         pause.distance_drag = None;
+        pause.keyboard_distance = None;
         touch.reset();
     }
     if !pause.open || !was_open {
@@ -477,10 +517,18 @@ pub fn read(
             .map(|(_, _, computed, transform, _, _)| track_fraction(point, computed, transform))
     };
     let mut finished_drag = None;
+    // Bevy may synthesize Interaction::Pressed from a touch while preferring
+    // a stale desktop mouse position. Raw touches own their actual targets,
+    // including their release frame and frames between movement events.
+    let mut native_touch = pause.scroll_finger.is_some()
+        || pause
+            .distance_drag
+            .is_some_and(|drag| drag.finger.is_some());
     for finger in fingers.read() {
         let Ok(window) = windows.get(finger.window) else {
             continue;
         };
+        native_touch = true;
         match finger.phase {
             TouchPhase::Started => {
                 // One contact owns a drag until it ends. A second finger
@@ -490,6 +538,8 @@ pub fn read(
                 }
                 let point = finger.position * window.scale_factor();
                 if let Some((distance, fraction)) = distance_at(point) {
+                    pause.focused = Some(Action::Distance(distance));
+                    pause.keyboard_distance = None;
                     pause.distance_drag = Some(DistanceDrag {
                         distance,
                         finger: Some(finger.id),
@@ -550,7 +600,7 @@ pub fn read(
             }
         }
     }
-    if !cfg!(target_os = "android") {
+    if !cfg!(target_os = "android") && !native_touch {
         let cursor = windows
             .single()
             .ok()
@@ -559,6 +609,8 @@ pub fn read(
             && pause.distance_drag.is_none()
             && let Some((distance, fraction)) = cursor.and_then(distance_at)
         {
+            pause.focused = Some(Action::Distance(distance));
+            pause.keyboard_distance = None;
             pause.distance_drag = Some(DistanceDrag {
                 distance,
                 finger: None,
@@ -581,16 +633,19 @@ pub fn read(
     if let Some(drag) = finished_drag {
         drag.distance.set_fraction(drag.fraction, &mut graphics);
     }
-    if !cfg!(target_os = "android") && chosen.is_none() {
+    if !cfg!(target_os = "android") && !native_touch && chosen.is_none() {
         chosen = actions
             .iter()
-            .find(|(_, interaction)| **interaction == Interaction::Pressed)
+            .find(|(action, interaction)| {
+                !matches!(action, Action::Distance(_)) && **interaction == Interaction::Pressed
+            })
             .map(|(action, _)| *action);
     }
-    if keys.just_pressed(KeyCode::Tab)
+    let navigating = keys.just_pressed(KeyCode::Tab)
         || keys.just_pressed(KeyCode::ArrowDown)
-        || keys.just_pressed(KeyCode::ArrowUp)
-    {
+        || keys.just_pressed(KeyCode::ArrowUp);
+    if navigating {
+        pause.keyboard_distance = None;
         let choices: Vec<_> = [
             Action::Resume,
             Action::Map,
@@ -598,10 +653,13 @@ pub fn read(
             Action::Quality(GraphicsQuality::Balanced),
             Action::Quality(GraphicsQuality::High),
             Action::NearLess,
+            Action::Distance(Distance::Near),
             Action::NearMore,
             Action::TreeLess,
+            Action::Distance(Distance::Trees),
             Action::TreeMore,
             Action::ShadowLess,
+            Action::Distance(Distance::Shadows),
             Action::ShadowMore,
             Action::ResetDistances,
             Action::Inspect,
@@ -637,12 +695,48 @@ pub fn read(
     if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) {
         chosen = pause.focused.or(Some(Action::Resume));
     }
+    if !navigating
+        && chosen.is_none()
+        && pause.distance_drag.is_none()
+        && let Some(Action::Distance(distance)) = pause.focused
+        && distance.enabled(&graphics)
+    {
+        let (min, max) = distance.bounds();
+        let step = if distance == Distance::Near {
+            DISTANCE_STEP
+        } else {
+            1.
+        };
+        for (key, repeat) in adjustments {
+            // A held key cannot begin changing a newly selected bar after a
+            // focus change, canceled preview or window reactivation.
+            if repeat && pause.keyboard_distance.is_none() {
+                continue;
+            }
+            let value = distance.displayed_value(&pause, &graphics);
+            let value = match key {
+                KeyCode::ArrowLeft => value - step,
+                KeyCode::ArrowRight => value + step,
+                KeyCode::Home => min,
+                KeyCode::End => max,
+                _ => unreachable!(),
+            };
+            pause.keyboard_distance = Some((distance, value.clamp(min, max)));
+        }
+        if !keys.any_pressed(adjustment_keys)
+            && let Some((distance, value)) = pause.keyboard_distance.take()
+        {
+            distance.set_value(value, &mut graphics);
+        }
+    }
     for (computed, mut scroll) in &mut roots {
         let max = (computed.content_size.y - computed.size.y) * computed.inverse_scale_factor;
         scroll.0.y = (scroll.0.y + scroll_delta).clamp(0., max.max(0.));
     }
     if let Some(action) = chosen {
         pause.distance_drag = None;
+        pause.keyboard_distance = None;
+        pause.focused = Some(action);
         activate(
             action,
             &mut pause,
@@ -776,7 +870,9 @@ pub fn refresh(
     for (action, interaction, mut background, mut border) in &mut buttons {
         let selected = matches!(action, Action::Quality(quality) if *quality == graphics.quality);
         let enabled = enabled(*action, &graphics);
-        background.0 = if !enabled {
+        background.0 = if matches!(action, Action::Distance(_)) {
+            Color::NONE
+        } else if !enabled {
             Color::srgb(0.12, 0.20, 0.19)
         } else if *interaction == Interaction::Pressed {
             Color::srgb(0.34, 0.44, 0.28)
@@ -917,6 +1013,52 @@ mod tests {
     }
 
     #[test]
+    fn android_back_drains_the_frame_and_ignores_held_key_repeats() {
+        use bevy::input::{ButtonState, keyboard::KeyboardInput};
+        use winit::keyboard::ModifiersState;
+        let (mut app, window) = menu_app();
+        let send = |app: &mut App, state, repeat| {
+            app.world_mut().write_message(MenuKey {
+                input: KeyboardInput {
+                    key_code: KeyCode::Escape,
+                    logical_key: Key::BrowserBack,
+                    text: None,
+                    state,
+                    repeat,
+                    window,
+                },
+                modifiers: ModifiersState::empty(),
+            });
+        };
+        for (state, repeat) in [
+            (ButtonState::Pressed, false),
+            (ButtonState::Pressed, false),
+            (ButtonState::Pressed, true),
+            (ButtonState::Released, false),
+        ] {
+            send(&mut app, state, repeat);
+        }
+        app.update();
+        let pause = app.world().resource::<PauseMenu>();
+        assert!(!pause.open && pause.just_closed && pause.input_blocked);
+        app.update();
+        let pause = app.world().resource::<PauseMenu>();
+        assert!(
+            !pause.open && !pause.just_closed && !pause.input_blocked,
+            "queued Back events must not reopen pause next frame"
+        );
+        send(&mut app, ButtonState::Pressed, true);
+        app.update();
+        assert!(!app.world().resource::<PauseMenu>().open);
+        send(&mut app, ButtonState::Pressed, false);
+        app.update();
+        assert!(app.world().resource::<PauseMenu>().open);
+        send(&mut app, ButtonState::Pressed, true);
+        app.update();
+        assert!(app.world().resource::<PauseMenu>().open);
+    }
+
+    #[test]
     fn keyboard_navigation_skips_disabled_tree_decrease_and_increases_distance() {
         let (mut app, _) = menu_app();
         target(&mut app, Action::Resume);
@@ -976,17 +1118,270 @@ mod tests {
         assert_eq!(app.world().get::<Text>(value).unwrap().0, "2500 m");
     }
 
-    fn distance_target(app: &mut App, distance: Distance) {
-        app.world_mut().spawn((
-            distance,
-            Node::default(),
-            InheritedVisibility::VISIBLE,
-            ComputedNode {
-                size: Vec2::new(200., 44.),
-                ..default()
+    fn distance_target(app: &mut App, distance: Distance) -> Entity {
+        app.world_mut()
+            .spawn((
+                distance,
+                Action::Distance(distance),
+                Interaction::None,
+                BackgroundColor(Color::NONE),
+                BorderColor::all(Color::NONE),
+                Node::default(),
+                InheritedVisibility::VISIBLE,
+                ComputedNode {
+                    size: Vec2::new(200., 44.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(200., 100.),
+            ))
+            .id()
+    }
+
+    fn native_adjustment(app: &mut App, window: Entity, key: KeyCode, repeat: bool) {
+        use bevy::input::{ButtonState, keyboard::KeyboardInput};
+        use winit::keyboard::ModifiersState;
+        app.world_mut().write_message(MenuKey {
+            input: KeyboardInput {
+                key_code: key,
+                logical_key: Key::Unidentified(bevy::input::keyboard::NativeKey::Unidentified),
+                text: None,
+                state: ButtonState::Pressed,
+                repeat,
+                window,
             },
-            UiGlobalTransform::from_xy(200., 100.),
-        ));
+            modifiers: ModifiersState::empty(),
+        });
+    }
+
+    #[test]
+    fn selected_distance_keys_preview_fine_steps_and_apply_only_on_release() {
+        for (distance, before, step) in [
+            (Distance::Near, 48., 8.),
+            (Distance::Trees, 128., 1.),
+            (Distance::Shadows, 32., 1.),
+        ] {
+            let (mut app, window) = menu_app();
+            target(&mut app, Action::Resume);
+            let bar = distance_target(&mut app, distance);
+            app.add_systems(Update, refresh.after(read));
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Tab);
+            app.update();
+            assert_eq!(
+                app.world().resource::<PauseMenu>().focused,
+                Some(Action::Distance(distance))
+            );
+            assert_eq!(app.world().get::<BorderColor>(bar).unwrap().top, accent());
+            {
+                let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                keys.clear();
+                keys.press(KeyCode::ArrowRight);
+            }
+            // The native initial press and ButtonInput describe one step.
+            native_adjustment(&mut app, window, KeyCode::ArrowRight, false);
+            app.update();
+            for repeats in 0..=2 {
+                if repeats > 0 {
+                    app.world_mut()
+                        .resource_mut::<ButtonInput<KeyCode>>()
+                        .clear();
+                    native_adjustment(&mut app, window, KeyCode::ArrowRight, true);
+                    app.update();
+                }
+                assert_eq!(
+                    distance.value(app.world().resource::<GraphicsSettings>()),
+                    before
+                );
+                assert_eq!(
+                    distance.displayed_value(
+                        app.world().resource::<PauseMenu>(),
+                        app.world().resource::<GraphicsSettings>()
+                    ),
+                    before + step * (repeats + 1) as f32
+                );
+            }
+            {
+                let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                keys.clear();
+                keys.release(KeyCode::ArrowRight);
+            }
+            app.update();
+            assert_eq!(
+                distance.value(app.world().resource::<GraphicsSettings>()),
+                before + 3. * step
+            );
+            assert!(
+                app.world()
+                    .resource::<PauseMenu>()
+                    .keyboard_distance
+                    .is_none()
+            );
+            app.update();
+            assert_eq!(
+                distance.value(app.world().resource::<GraphicsSettings>()),
+                before + 3. * step
+            );
+        }
+    }
+
+    #[test]
+    fn selected_distance_home_end_and_arrows_respect_bounds_and_disabled_shadows() {
+        for distance in [Distance::Near, Distance::Trees, Distance::Shadows] {
+            let (mut app, _) = menu_app();
+            distance_target(&mut app, distance);
+            app.world_mut().resource_mut::<PauseMenu>().focused = Some(Action::Distance(distance));
+            let (min, max) = distance.bounds();
+            for (key, expected) in [
+                (KeyCode::End, max),
+                (KeyCode::ArrowRight, max),
+                (KeyCode::Home, min),
+                (KeyCode::ArrowLeft, min),
+            ] {
+                {
+                    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                    keys.clear();
+                    keys.press(key);
+                }
+                app.update();
+                {
+                    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                    keys.clear();
+                    keys.release(key);
+                }
+                app.update();
+                assert_eq!(
+                    distance.value(app.world().resource::<GraphicsSettings>()),
+                    expected
+                );
+            }
+            app.world_mut()
+                .resource_mut::<GraphicsSettings>()
+                .set_quality(GraphicsQuality::Low);
+            app.world_mut().resource_mut::<PauseMenu>().focused =
+                Some(Action::Distance(Distance::Shadows));
+            let before = app.world().resource::<GraphicsSettings>().shadow_distance;
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::End);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<PauseMenu>()
+                    .keyboard_distance
+                    .is_none()
+            );
+            assert_eq!(
+                app.world().resource::<GraphicsSettings>().shadow_distance,
+                before
+            );
+        }
+    }
+
+    #[test]
+    fn unfinished_keyboard_distance_is_discarded_on_focus_modal_close_or_navigation() {
+        for interruption in ["focus", "suspend", "map", "console", "escape", "tab"] {
+            let (mut app, window) = menu_app();
+            distance_target(&mut app, Distance::Trees);
+            target(&mut app, Action::Resume);
+            app.world_mut().resource_mut::<PauseMenu>().focused =
+                Some(Action::Distance(Distance::Trees));
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::End);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<PauseMenu>()
+                    .keyboard_distance
+                    .is_some()
+            );
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .clear();
+            match interruption {
+                "focus" => {
+                    app.world_mut().write_message(WindowFocused {
+                        window,
+                        focused: false,
+                    });
+                }
+                "suspend" => app.world_mut().resource_mut::<TouchControls>().suspended = true,
+                "map" => {
+                    let mut map = crate::world_map::WorldMap::default();
+                    map.open = true;
+                    app.insert_resource(map);
+                }
+                "console" => {
+                    let mut console = crate::admin_console::AdminConsole::default();
+                    console.input_blocked = true;
+                    app.insert_resource(console);
+                }
+                "escape" => app
+                    .world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::Escape),
+                "tab" => app
+                    .world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::Tab),
+                _ => unreachable!(),
+            }
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<PauseMenu>()
+                    .keyboard_distance
+                    .is_none(),
+                "{interruption}"
+            );
+            assert_eq!(
+                app.world().resource::<GraphicsSettings>().tree_distance,
+                MIN_TREE_DISTANCE,
+                "{interruption}"
+            );
+            if interruption == "escape" {
+                let pause = app.world().resource::<PauseMenu>();
+                assert!(pause.just_closed && pause.input_blocked && !pause.open);
+            }
+        }
+    }
+
+    #[test]
+    fn held_keys_cannot_begin_an_adjustment_after_another_bar_is_selected() {
+        let (mut app, window) = menu_app();
+        distance_target(&mut app, Distance::Near);
+        distance_target(&mut app, Distance::Trees);
+        app.world_mut().resource_mut::<PauseMenu>().focused =
+            Some(Action::Distance(Distance::Near));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ArrowRight);
+        app.update();
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.clear();
+            keys.press(KeyCode::Tab);
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<PauseMenu>().focused,
+            Some(Action::Distance(Distance::Trees))
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        native_adjustment(&mut app, window, KeyCode::ArrowRight, true);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<PauseMenu>()
+                .keyboard_distance
+                .is_none()
+        );
+        let graphics = app.world().resource::<GraphicsSettings>();
+        assert_eq!(graphics.near_distance, 48.);
+        assert_eq!(graphics.tree_distance, MIN_TREE_DISTANCE);
     }
 
     fn drag_touch(app: &mut App, window: Entity, phase: TouchPhase, x: f32) {
@@ -1081,6 +1476,78 @@ mod tests {
         drag_touch(&mut app, window, TouchPhase::Ended, 300.);
         let graphics = app.world().resource::<GraphicsSettings>();
         assert_eq!(drag.distance.value(graphics), drag.distance.bounds().1);
+    }
+
+    #[test]
+    fn native_touch_owns_slider_and_release_despite_stale_mouse_interactions() {
+        let (mut app, window) = menu_app();
+        distance_target(&mut app, Distance::Near);
+        let resume = target(&mut app, Action::Resume);
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(bevy::math::DVec2::splat(100.)));
+        app.world_mut()
+            .entity_mut(resume)
+            .insert(Interaction::Pressed);
+        drag_touch(&mut app, window, TouchPhase::Started, 250.);
+        assert!(app.world().resource::<PauseMenu>().open);
+        assert_eq!(
+            app.world()
+                .resource::<PauseMenu>()
+                .distance_drag
+                .unwrap()
+                .finger,
+            Some(19)
+        );
+        // A held contact still owns input on a frame with no raw movement.
+        app.world_mut()
+            .entity_mut(resume)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert!(app.world().resource::<PauseMenu>().distance_drag.is_some());
+        app.world_mut()
+            .entity_mut(resume)
+            .insert(Interaction::Pressed);
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(bevy::math::DVec2::new(200., 100.)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        drag_touch(&mut app, window, TouchPhase::Ended, 300.);
+        assert!(app.world().resource::<PauseMenu>().open);
+        assert!(app.world().resource::<PauseMenu>().distance_drag.is_none());
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().near_distance,
+            MAX_NEAR_DISTANCE
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .reset_all();
+        // Even a short blank-space tap must not click the old mouse target.
+        app.world_mut()
+            .entity_mut(resume)
+            .insert(Interaction::Pressed);
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            app.world_mut().write_message(TouchInput {
+                id: 22,
+                phase,
+                position: Vec2::new(400., 200.),
+                window,
+                force: None,
+            });
+        }
+        app.update();
+        assert!(app.world().resource::<PauseMenu>().open);
+        assert!(app.world().resource::<PauseMenu>().scroll_finger.is_none());
+        // A subsequent real mouse press remains usable.
+        app.world_mut()
+            .entity_mut(resume)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert!(!app.world().resource::<PauseMenu>().open);
     }
 
     #[test]

@@ -68,6 +68,10 @@ Follow-up 2026-10-06: added camera envelope clearance and smooth outward recover
 
 ### R06 — Investigate the prolonged trader/player encounter on the approach
 
+Follow-up 2026-10-06: deterministic reproduction found that a player occupying an intermediate landing waypoint can trap both boarding and alighting residents despite a reachable passing route. The controller now checks a supported shortcut before advancing that gate; all seed-42/43 incident landings pass with the player stationary or stepping aside, at 0.05/0.25-second steps, without overlap or cargo changes. Opposing-trader coverage now includes both seeds. An advancing-clock regression also repaired a blocked exit resuming during the next docking turn: residents now wait for the existing turn-complete threshold. Native replay of the filmed encounter remains open.
+
+Native save/reopen follow-up: alighting could contact another craft at a shared landing without updating its journey's craft, causing a legitimate save to fail validation. Actual contact now selects the correct exit path; compatible older states retain their physical attachment, destination and cargo. The exact observed state roundtrips and reaches its port, and a copy of the complete native save opens and reopens successfully. The original save was preserved.
+
 **Investigate · 04:16–04:38 · [04:21](artifacts/gameplay-review-2026-10-06/0421-walkway-encounter.jpg), [04:36](artifacts/gameplay-review-2026-10-06/0436-trader-cargo.jpg).** The purple-clad trader and player remain in very close contact on the narrow walkway for roughly fifteen seconds. The trader eventually leaves; the later inspector says it is walking off the airship to the road. The player is in its path, so this is not proof of autonomous NPC deadlock or a regression in the recent avoidance fix.
 
 - **Recommendation:** reproduce a stationary player blocking this approach, then step aside; repeat with opposing NPCs and while the ship departs. Check available passing space, support-aware detours, and the alighting target. Widening the approach may be better than adding navigation complexity.
@@ -207,6 +211,8 @@ Follow-up 2026-10-06: aboard trip information now occupies the main notice, the 
 
 ### R25 — Inspector presentation still looks like a development tool
 
+Follow-up 2026-10-06: resident inspection now leads with name, role, activity and cargo, then village and the live authoritative reason. Descriptive hunger/energy words precede exact values; Moss still exposes decision scores and permission-gated overrides. Fixed-target/live-update regressions pass; broader visual redesign is still a proposal.
+
 **Design / usability · 00:17–00:19, 00:44–00:57, 04:36–04:49 · [farmer](artifacts/gameplay-review-2026-10-06/0045-farm.jpg), [trader](artifacts/gameplay-review-2026-10-06/0436-trader-cargo.jpg).** The large wire box, raw 0–100 need values, generic “Walking to work,” and route explanation are useful debugging evidence but weak character communication. “Hunger 100 / 100” has no plain-language severity explanation. Important cargo and destination details compete with implementation-oriented status.
 
 - **Recommendation:** lead with name, role, concrete current intent, and relevant cargo; explain needs in words, with exact values available as secondary detail. Use a less intrusive selection treatment. Preserve locked aimed selection and live updates.
@@ -225,7 +231,7 @@ Follow-up 2026-10-06: real worker stages, elapsed time and cancellation are impl
 
 ### R27 — Graphics distances expose inconsistent units and awkward tuning
 
-Follow-up 2026-10-06: meter labels, preview-on-drag/apply-on-release sliders and Reset distances are implemented. Native desktop and compact touch-preview checks passed; touch-device comfort and keyboard fine adjustment remain follow-up.
+Follow-up 2026-10-06: meter labels, preview-on-drag/apply-on-release sliders and Reset distances are implemented. Native desktop and compact touch-preview checks passed. Keyboard-selectable bars now support fine Left/Right and Home/End previews applied on release; physical touch-device comfort remains follow-up.
 
 **Observed / usability · 04:54 · [settings](artifacts/gameplay-review-2026-10-06/0454-settings.jpg).** Near detail is **512 m**, trees are **2184 blocks (1092 m)**, and shadows are **90 m**. The same kind of distance is presented differently, with only small plus/minus controls for large ranges. The panel explains general cost, but not what a novice should choose.
 

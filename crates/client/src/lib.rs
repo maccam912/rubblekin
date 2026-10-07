@@ -478,27 +478,23 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut terrain_materials: ResMut<Assets<terrain_material::TerrainMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    render_device: Res<bevy::render::renderer::RenderDevice>,
+    mut prepared: ResMut<terrain::PreparedTerrain>,
 ) {
     let start = std::time::Instant::now();
-    let center = session
-        .observer
-        .as_ref()
-        .map_or(session.body.position, |camera| camera.position.to_array());
-    let terrain = terrain::setup_terrain(
+    let terrain = terrain::install_terrain(
         &mut commands,
         &mut meshes,
         &mut materials,
         &mut terrain_materials,
         &mut images,
-        &world.0,
-        center,
-        graphics.near_radius_chunks(),
-        graphics.tree_distance,
-        render_device.limits().max_texture_dimension_2d,
+        std::mem::take(&mut *prepared),
     );
     commands.insert_resource(terrain);
-    info!("Terrain generated in {:.2}s", start.elapsed().as_secs_f32());
+    commands.remove_resource::<terrain::PreparedTerrain>();
+    info!(
+        "Terrain assets installed in {:.3}s",
+        start.elapsed().as_secs_f32()
+    );
     commands.spawn((
         GameEntity,
         DirectionalLight {

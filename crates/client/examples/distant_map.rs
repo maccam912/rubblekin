@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("World generated in {:.2?}", started.elapsed());
     let started = Instant::now();
     let side = terrain_albedo::atlas_side(max_side, false);
-    let image = terrain_albedo::distant_albedo(&world, side);
+    let image = terrain_albedo::prepare_albedo(&world, side, |_| Ok(()))?;
     let side = image.texture_descriptor.size.width;
     let data = image.data.as_ref().ok_or("missing atlas pixels")?;
     println!(

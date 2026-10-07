@@ -1,6 +1,12 @@
 //! Nearby editable voxels and distant terrain share the same geography.
 //! Geographic worlds stream a bounded local square; legacy saves retain their valley.
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use crate::{
     graphics::{GraphicsSettings, MAX_TREE_DISTANCE, MIN_TREE_DISTANCE},
@@ -72,25 +78,137 @@ struct Landscape {
 struct LandscapeJob {
     near_radius: i32,
     tree_distance: f32,
-    task: Task<(ChunkKey, Geometry, Geometry)>,
+    task: Task<Option<PreparedLandscapeUpdate>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Drop for LandscapeJob {
+    fn drop(&mut self) {
+        // A running CPU future cannot be interrupted by dropping its Task.
+        // Checkpoints stop obsolete large-square preparation promptly as well.
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
+struct PreparedLandscapeUpdate {
+    center: ChunkKey,
+    land: Geometry,
+    water: Geometry,
+    incoming: Vec<PreparedChunk>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PreparationStage {
+    Map(crate::terrain_albedo::PreparationStage),
+    Landscape,
+    Chunks { completed: usize, total: usize },
+}
+
+/// CPU data owned by one pending join. No entities or asset handles exist until
+/// that join is accepted; dropping a cancelled result releases all its work.
+#[derive(Resource, Default)]
+pub(crate) struct PreparedTerrain {
+    landscape: Option<PreparedLandscape>,
+    chunks: Vec<PreparedChunk>,
+    legacy_scenery: Option<(Mesh, Mesh)>,
+}
+
+struct PreparedLandscape {
+    atlas: Image,
+    center: ChunkKey,
+    near_radius: i32,
+    tree_distance: f32,
+    land: Geometry,
+    water: Geometry,
+}
+
+struct PreparedChunk {
+    key: ChunkKey,
+    geometry: ChunkGeometry,
+    water: Geometry,
+    detailed: bool,
+}
+
+pub(crate) fn prepare_terrain(
+    world: &World,
+    center: [f32; 3],
+    near_radius: i32,
+    tree_distance: f32,
+    max_texture_side: u32,
+    mut progress: impl FnMut(PreparationStage) -> Result<(), String>,
+) -> Result<PreparedTerrain, String> {
+    let mut prepared = PreparedTerrain::default();
+    let keys = if world.geography().is_some() {
+        let side = crate::terrain_albedo::atlas_side(max_texture_side, cfg!(target_os = "android"));
+        let started = std::time::Instant::now();
+        let atlas = crate::terrain_albedo::prepare_albedo(world, side, |stage| {
+            progress(PreparationStage::Map(stage))
+        })?;
+        info!(
+            "Distant terrain atlas: {side}x{side}, {:.1} MiB with mips, prepared in {:.2}s",
+            atlas.data.as_ref().map_or(0, Vec::len) as f64 / 1_048_576.0,
+            started.elapsed().as_secs_f32(),
+        );
+        progress(PreparationStage::Landscape)?;
+        let center = chunk_key(center);
+        let (land, water) = landscape_geometry(world, center, near_radius, tree_distance);
+        prepared.landscape = Some(PreparedLandscape {
+            atlas,
+            center,
+            near_radius,
+            tree_distance,
+            land,
+            water,
+        });
+        local_keys(center, near_radius, world)
+    } else {
+        progress(PreparationStage::Landscape)?;
+        prepared.legacy_scenery = Some((distant_mountains(world.seed), river_mesh(world)));
+        let first = (-WORLD_RADIUS).div_euclid(CHUNK_SIZE);
+        let last = (WORLD_RADIUS - 1).div_euclid(CHUNK_SIZE);
+        (first..=last)
+            .flat_map(|x| (first..=last).map(move |z| (x, z)))
+            .collect()
+    };
+    let started = std::time::Instant::now();
+    let total = keys.len();
+    for (completed, key) in keys.into_iter().enumerate() {
+        if completed % 32 == 0 {
+            progress(PreparationStage::Chunks { completed, total })?;
+        }
+        prepared.chunks.push(if prepared.landscape.is_some() {
+            prepare_placeholder(world, key)
+        } else {
+            PreparedChunk {
+                key,
+                geometry: chunk_geometry(world, key.0, key.1),
+                water: Geometry::default(),
+                detailed: true,
+            }
+        });
+    }
+    progress(PreparationStage::Chunks {
+        completed: total,
+        total,
+    })?;
+    info!(
+        "Initial terrain chunks: {total} prepared in {:.2}s",
+        started.elapsed().as_secs_f32(),
+    );
+    Ok(prepared)
 }
 
 /// Legacy decorative geometry is never added to a geographic world.
 #[derive(Component)]
 struct DistantScenery;
 
-#[allow(clippy::too_many_arguments)]
-pub fn setup_terrain(
+pub(crate) fn install_terrain(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     terrain_materials: &mut Assets<TerrainMaterial>,
     images: &mut Assets<Image>,
-    world: &World,
-    center: [f32; 3],
-    near_radius: i32,
-    tree_distance: f32,
-    max_texture_side: u32,
+    prepared: PreparedTerrain,
 ) -> TerrainScene {
     let opaque_material = terrain_materials.add(terrain_material(None));
     let glass_material = materials.add(StandardMaterial {
@@ -117,23 +235,21 @@ pub fn setup_terrain(
         pending_chunks: HashMap::new(),
         triangle_count: 0,
     };
-    if world.geography().is_some() {
-        let side = crate::terrain_albedo::atlas_side(max_texture_side, cfg!(target_os = "android"));
-        let started = std::time::Instant::now();
-        let image = crate::terrain_albedo::distant_albedo(world, side);
-        info!(
-            "Distant terrain atlas: {side}x{side}, {:.1} MiB with mips, generated in {:.2}s",
-            image.data.as_ref().map_or(0, Vec::len) as f64 / 1_048_576.0,
-            started.elapsed().as_secs_f32(),
-        );
-        let albedo = images.add(image);
+    if let Some(PreparedLandscape {
+        atlas,
+        center,
+        near_radius,
+        tree_distance,
+        land,
+        water,
+    }) = prepared.landscape
+    {
+        let albedo = images.add(atlas);
         scene.map_image = Some(albedo.clone());
         let mut map_water = terrain_material(Some(albedo.clone()));
         map_water.base.base_color = Color::srgb(0.23, 0.52, 0.59);
         let map_water_material = terrain_materials.add(map_water);
         let landscape_material = terrain_materials.add(terrain_material(Some(albedo)));
-        let center = chunk_key(center);
-        let (land, water) = landscape_geometry(world, center, near_radius, tree_distance);
         let triangles = (land.indices.len() + water.indices.len()) / 3;
         let terrain = meshes.add(land.into_mesh());
         let water = meshes.add(water.into_mesh());
@@ -158,15 +274,11 @@ pub fn setup_terrain(
             triangles,
         });
         scene.triangle_count += triangles;
-        move_local_square(&mut scene, center, near_radius, world, commands, meshes);
-    } else {
-        let first = (-WORLD_RADIUS).div_euclid(CHUNK_SIZE);
-        let last = (WORLD_RADIUS - 1).div_euclid(CHUNK_SIZE);
-        for cx in first..=last {
-            for cz in first..=last {
-                rebuild_one(&mut scene, (cx, cz), world, commands, meshes);
-            }
-        }
+    }
+    for chunk in prepared.chunks {
+        install_prepared_chunk(&mut scene, chunk, commands, meshes);
+    }
+    if let Some((mountains, river)) = prepared.legacy_scenery {
         let scenery_material = materials.add(StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 1.0,
@@ -176,14 +288,14 @@ pub fn setup_terrain(
         });
         commands.spawn((
             crate::GameEntity,
-            Mesh3d(meshes.add(distant_mountains(world.seed))),
+            Mesh3d(meshes.add(mountains)),
             MeshMaterial3d(scenery_material),
             DistantScenery,
             NotShadowCaster,
         ));
         commands.spawn((
             crate::GameEntity,
-            Mesh3d(meshes.add(river_mesh(world))),
+            Mesh3d(meshes.add(river)),
             MeshMaterial3d(scene.water_material.clone()),
             NotShadowCaster,
         ));
@@ -191,8 +303,42 @@ pub fn setup_terrain(
     scene
 }
 
-/// Only bounded uploads and job scheduling run on the frame thread. The coarse
-/// surface remains present while a detailed mesh or a new local square is built.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn setup_terrain(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    terrain_materials: &mut Assets<TerrainMaterial>,
+    images: &mut Assets<Image>,
+    world: &World,
+    center: [f32; 3],
+    near_radius: i32,
+    tree_distance: f32,
+    max_texture_side: u32,
+) -> TerrainScene {
+    let prepared = prepare_terrain(
+        world,
+        center,
+        near_radius,
+        tree_distance,
+        max_texture_side,
+        |_| Ok(()),
+    )
+    .unwrap();
+    install_terrain(
+        commands,
+        meshes,
+        materials,
+        terrain_materials,
+        images,
+        prepared,
+    )
+}
+
+/// Preparation stays on workers. The existing surface remains present until a
+/// complete landscape and its incoming placeholders can be installed together.
+/// Asset insertion/removal and GPU upload are still bulk operations.
 pub fn stream_terrain(
     world: Res<crate::VoxelWorld>,
     session: Res<crate::Session>,
@@ -221,36 +367,23 @@ pub fn stream_terrain(
         // A cancelled distance change must not install an obsolete cutout.
         scene.pending_landscape = None;
     }
-    if let Some((ready_center, land, water)) = scene
+    if let Some(prepared) = scene
         .pending_landscape
         .as_mut()
         .and_then(|job| check_ready(&mut job.task))
     {
         scene.pending_landscape = None;
-        // Install the cutout and its local replacement together: no empty ring
-        // can appear during rapid flight or a camera reset.
-        move_local_square(
-            &mut scene,
-            ready_center,
-            near_radius,
-            &world.0,
-            &mut commands,
-            &mut meshes,
-        );
-        let next_triangles = (land.indices.len() + water.indices.len()) / 3;
-        let landscape = scene.landscape.as_mut().unwrap();
-        let old_triangles = landscape.triangles;
-        landscape.center = ready_center;
-        landscape.near_radius = near_radius;
-        landscape.tree_distance = tree_distance;
-        landscape.triangles = next_triangles;
-        if let Some(mut mesh) = meshes.get_mut(&landscape.terrain) {
-            *mesh = land.into_mesh();
+        if let Some(prepared) = prepared {
+            install_landscape_update(
+                &mut scene,
+                prepared,
+                near_radius,
+                tree_distance,
+                &world.0,
+                &mut commands,
+                &mut meshes,
+            );
         }
-        if let Some(mut mesh) = meshes.get_mut(&landscape.water) {
-            *mesh = water.into_mesh();
-        }
-        scene.triangle_count = scene.triangle_count - old_triangles + next_triangles;
     }
     let landscape = scene.landscape.as_ref().unwrap();
     if scene.pending_landscape.is_none()
@@ -259,13 +392,22 @@ pub fn stream_terrain(
             || landscape.tree_distance != tree_distance)
     {
         let snapshot = world.0.clone();
+        let retained = scene.chunks.keys().copied().collect();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
         scene.pending_landscape = Some(LandscapeJob {
             near_radius,
             tree_distance,
+            cancelled,
             task: AsyncComputeTaskPool::get().spawn(async move {
-                let (land, water) =
-                    landscape_geometry(&snapshot, center, near_radius, tree_distance);
-                (center, land, water)
+                prepare_landscape_update(
+                    &snapshot,
+                    center,
+                    near_radius,
+                    tree_distance,
+                    &retained,
+                    &worker_cancelled,
+                )
             }),
         });
     }
@@ -280,25 +422,113 @@ pub fn stream_terrain(
             install_chunk(&mut scene, key, geometry, true, &mut commands, &mut meshes);
         }
     }
+    let available = DETAIL_JOBS.saturating_sub(scene.pending_chunks.len());
+    if available == 0 {
+        return;
+    }
     let mut needed: Vec<_> = scene
         .chunks
         .iter()
         .filter(|(key, chunk)| !chunk.detailed && !scene.pending_chunks.contains_key(key))
         .map(|(&key, _)| key)
         .collect();
-    needed.sort_unstable_by_key(|&(x, z)| {
-        (x as i64 - center.0 as i64).pow(2) + (z as i64 - center.1 as i64).pow(2)
-    });
-    for key in needed
-        .into_iter()
-        .take(DETAIL_JOBS.saturating_sub(scene.pending_chunks.len()))
-    {
+    keep_nearest_chunks(&mut needed, center, available);
+    for key in needed {
         let snapshot = world.0.clone();
         scene.pending_chunks.insert(
             key,
             AsyncComputeTaskPool::get()
                 .spawn(async move { chunk_geometry(&snapshot, key.0, key.1) }),
         );
+    }
+}
+
+fn prepare_landscape_update(
+    world: &World,
+    center: ChunkKey,
+    near_radius: i32,
+    tree_distance: f32,
+    retained: &HashSet<ChunkKey>,
+    cancelled: &AtomicBool,
+) -> Option<PreparedLandscapeUpdate> {
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
+    let (land, water) = landscape_geometry(world, center, near_radius, tree_distance);
+    let mut incoming = Vec::new();
+    for (index, key) in local_keys(center, near_radius, world)
+        .into_iter()
+        .enumerate()
+    {
+        if index % 32 == 0 && cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        if !retained.contains(&key) {
+            incoming.push(prepare_placeholder(world, key));
+        }
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(PreparedLandscapeUpdate {
+        center,
+        land,
+        water,
+        incoming,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_landscape_update(
+    scene: &mut TerrainScene,
+    prepared: PreparedLandscapeUpdate,
+    near_radius: i32,
+    tree_distance: f32,
+    world: &World,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+) {
+    let PreparedLandscapeUpdate {
+        center,
+        land,
+        water,
+        incoming,
+    } = prepared;
+    // Keep the old cutout and full local coverage until all replacements are
+    // ready, then switch together. Retained detail jobs and edits keep ownership
+    // of their chunks; generated placeholders never overwrite installed detail.
+    retain_local_square(scene, center, near_radius, world, commands, meshes);
+    for chunk in incoming {
+        if !scene.chunks.contains_key(&chunk.key) {
+            install_prepared_chunk(scene, chunk, commands, meshes);
+        }
+    }
+    let next_triangles = (land.indices.len() + water.indices.len()) / 3;
+    let landscape = scene.landscape.as_mut().unwrap();
+    let old_triangles = landscape.triangles;
+    landscape.center = center;
+    landscape.near_radius = near_radius;
+    landscape.tree_distance = tree_distance;
+    landscape.triangles = next_triangles;
+    if let Some(mut mesh) = meshes.get_mut(&landscape.terrain) {
+        *mesh = land.into_mesh();
+    }
+    if let Some(mut mesh) = meshes.get_mut(&landscape.water) {
+        *mesh = water.into_mesh();
+    }
+    scene.triangle_count = scene.triangle_count - old_triangles + next_triangles;
+}
+
+fn keep_nearest_chunks(keys: &mut Vec<ChunkKey>, center: ChunkKey, count: usize) {
+    if count == 0 {
+        keys.clear();
+    } else if keys.len() > count {
+        // Only one or two jobs can start; ordering the entire large near square
+        // every frame spends time without changing the chosen work.
+        keys.select_nth_unstable_by_key(count - 1, |&(x, z)| {
+            (x as i64 - center.0 as i64).pow(2) + (z as i64 - center.1 as i64).pow(2)
+        });
+        keys.truncate(count);
     }
 }
 
@@ -323,7 +553,7 @@ fn local_keys(center: ChunkKey, near_radius: i32, world: &World) -> Vec<ChunkKey
     keys
 }
 
-fn move_local_square(
+fn retain_local_square(
     scene: &mut TerrainScene,
     center: ChunkKey,
     near_radius: i32,
@@ -331,7 +561,6 @@ fn move_local_square(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) {
-    let wanted = local_keys(center, near_radius, world);
     let first = (-world.radius_cells()).div_euclid(CHUNK_SIZE);
     let last = (world.radius_cells() - 1).div_euclid(CHUNK_SIZE);
     let wanted_x = center.0.saturating_sub(near_radius).max(first)
@@ -355,57 +584,82 @@ fn move_local_square(
             meshes.remove(handle.id());
         }
     }
-    for key in wanted {
+}
+
+#[cfg(test)]
+fn move_local_square(
+    scene: &mut TerrainScene,
+    center: ChunkKey,
+    near_radius: i32,
+    world: &World,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+) {
+    retain_local_square(scene, center, near_radius, world, commands, meshes);
+    for key in local_keys(center, near_radius, world) {
         if scene.chunks.contains_key(&key) {
             continue;
         }
-        let mut terrain = Geometry::default();
-        let mut water = Geometry::default();
-        let surface = surface_tile(
-            world.geography().unwrap(),
-            [
-                key.0 as f32 * CHUNK_METERS,
-                key.1 as f32 * CHUNK_METERS,
-                CHUNK_METERS,
-            ],
-            8,
-            [None; 4],
-            &mut terrain,
-            &mut water,
-        );
-        add_chunk_tree_proxies(world, key, &surface, &mut terrain);
-        let x = key.0 as f32 * CHUNK_METERS;
-        let z = key.1 as f32 * CHUNK_METERS;
-        add_village_proxies(
-            world,
-            center,
-            ProxyClip::Inside([x, z, x + CHUNK_METERS, z + CHUNK_METERS]),
-            &mut terrain,
-        );
-        install_chunk(
-            scene,
-            key,
-            (terrain, Geometry::default()),
-            false,
-            commands,
-            meshes,
-        );
-        if !water.indices.is_empty() {
-            let triangles = water.indices.len() / 3;
-            let handle = meshes.add(water.into_mesh());
-            let entity = commands
-                .spawn((
-                    crate::GameEntity,
-                    Mesh3d(handle.clone()),
-                    MeshMaterial3d(scene.water_material.clone()),
-                    NotShadowCaster,
-                ))
-                .id();
-            let chunk = scene.chunks.get_mut(&key).unwrap();
-            chunk.water = Some((entity, handle));
-            chunk.triangles += triangles;
-            scene.triangle_count += triangles;
-        }
+        install_prepared_chunk(scene, prepare_placeholder(world, key), commands, meshes);
+    }
+}
+
+fn prepare_placeholder(world: &World, key: ChunkKey) -> PreparedChunk {
+    let mut terrain = Geometry::default();
+    let mut water = Geometry::default();
+    let x = key.0 as f32 * CHUNK_METERS;
+    let z = key.1 as f32 * CHUNK_METERS;
+    let surface = surface_tile(
+        world.geography().unwrap(),
+        [x, z, CHUNK_METERS],
+        8,
+        [None; 4],
+        &mut terrain,
+        &mut water,
+    );
+    add_chunk_tree_proxies(world, key, &surface, &mut terrain);
+    add_village_proxies(
+        world,
+        key,
+        ProxyClip::Inside([x, z, x + CHUNK_METERS, z + CHUNK_METERS]),
+        &mut terrain,
+    );
+    PreparedChunk {
+        key,
+        geometry: (terrain, Geometry::default()),
+        water,
+        detailed: false,
+    }
+}
+
+fn install_prepared_chunk(
+    scene: &mut TerrainScene,
+    prepared: PreparedChunk,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+) {
+    let PreparedChunk {
+        key,
+        geometry,
+        water,
+        detailed,
+    } = prepared;
+    install_chunk(scene, key, geometry, detailed, commands, meshes);
+    if !water.indices.is_empty() {
+        let triangles = water.indices.len() / 3;
+        let handle = meshes.add(water.into_mesh());
+        let entity = commands
+            .spawn((
+                crate::GameEntity,
+                Mesh3d(handle.clone()),
+                MeshMaterial3d(scene.water_material.clone()),
+                NotShadowCaster,
+            ))
+            .id();
+        let chunk = scene.chunks.get_mut(&key).unwrap();
+        chunk.water = Some((entity, handle));
+        chunk.triangles += triangles;
+        scene.triangle_count += triangles;
     }
 }
 
@@ -1767,6 +2021,296 @@ mod tests {
     use rubblekin_core::world::MAX_Y;
 
     #[test]
+    fn detail_slots_select_only_nearest_chunks_without_sorting_the_whole_queue() {
+        let center = (-14, 23);
+        let keys = vec![(80, -60), (-15, 23), (-14, 26), center, (0, 0), (-20, 23)];
+        for available in [0, 1, 2, 10] {
+            let mut selected = keys.clone();
+            keep_nearest_chunks(&mut selected, center, available);
+            assert_eq!(selected.len(), available.min(keys.len()));
+            let distance = |&(x, z): &ChunkKey| {
+                (x as i64 - center.0 as i64).pow(2) + (z as i64 - center.1 as i64).pow(2)
+            };
+            if let Some(farthest) = selected.iter().map(distance).max() {
+                assert!(
+                    keys.iter()
+                        .filter(|key| !selected.contains(key))
+                        .all(|key| distance(key) >= farthest)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_terrain_retains_device_cap_exact_coverage_and_cancellable_chunk_progress() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let center = world.spawn_position();
+        let mut progress = Vec::new();
+        let prepared = prepare_terrain(&world, center, 3, MIN_TREE_DISTANCE, 128, |stage| {
+            if let PreparationStage::Chunks { completed, total } = stage {
+                progress.push((completed, total));
+            }
+            Ok(())
+        })
+        .unwrap();
+        let landscape = prepared.landscape.as_ref().unwrap();
+        assert_eq!(
+            landscape.atlas.width(),
+            128,
+            "respect the actual device texture limit"
+        );
+        assert_eq!(landscape.center, chunk_key(center));
+        assert_eq!(landscape.near_radius, 3);
+        assert_eq!(
+            prepared
+                .chunks
+                .iter()
+                .map(|chunk| chunk.key)
+                .collect::<Vec<_>>(),
+            local_keys(chunk_key(center), 3, &world)
+        );
+        assert!(
+            prepared
+                .chunks
+                .iter()
+                .all(|chunk| !chunk.detailed && !chunk.geometry.0.positions.is_empty())
+        );
+        assert_eq!(progress, [(0, 49), (32, 49), (49, 49)]);
+
+        let mut last_chunk = 0;
+        let cancelled = prepare_terrain(&world, center, 125, MIN_TREE_DISTANCE, 1, |stage| {
+            if let PreparationStage::Chunks { completed, .. } = stage {
+                last_chunk = completed;
+                if completed >= 32 {
+                    return Err("cancel during near preparation".into());
+                }
+            }
+            Ok(())
+        });
+        assert!(matches!(cancelled, Err(error) if error == "cancel during near preparation"));
+        assert_eq!(
+            last_chunk, 32,
+            "cancellation avoids preparing the remaining 62,969 chunks"
+        );
+    }
+
+    #[test]
+    fn prepared_square_keeps_live_edits_and_detail_jobs_during_lateral_growth() {
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let mut world = World::generate(42, WorldGeneration::GeographyV3);
+        let center = chunk_key(world.spawn_position());
+        let mut ecs = bevy::prelude::World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut terrain_materials = Assets::<TerrainMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        let mut scene = setup_terrain(
+            &mut Commands::new(&mut queue, &ecs),
+            &mut meshes,
+            &mut materials,
+            &mut terrain_materials,
+            &mut images,
+            &world,
+            world.spawn_position(),
+            3,
+            MIN_TREE_DISTANCE,
+            1,
+        );
+        queue.apply(&mut ecs);
+        let original_keys = scene.chunks.keys().copied().collect::<HashSet<_>>();
+        let next_center = (center.0 + 4, center.1);
+        let prepared = prepare_landscape_update(
+            &world,
+            next_center,
+            6,
+            MIN_TREE_DISTANCE,
+            &original_keys,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(scene.landscape.as_ref().unwrap().center, center);
+        assert_eq!(
+            scene.chunks.keys().copied().collect::<HashSet<_>>(),
+            original_keys
+        );
+        assert!(
+            prepared
+                .incoming
+                .iter()
+                .all(|chunk| !original_keys.contains(&chunk.key))
+        );
+
+        // An accepted edit and a detail job occur after the worker's snapshot.
+        // Neither may be replaced by a coarse placeholder from that result.
+        let edit = BlockPos::new(
+            center.0 * CHUNK_SIZE + 2,
+            world.max_y() - 2,
+            center.1 * CHUNK_SIZE + 2,
+        );
+        world.set_block(edit, Block::Brick).unwrap();
+        rebuild_chunks(
+            &mut scene,
+            edit,
+            &world,
+            &mut Commands::new(&mut queue, &ecs),
+            &mut meshes,
+        );
+        queue.apply(&mut ecs);
+        let edited_entity = scene.chunks[&center].entity;
+        let edited_mesh = scene.chunks[&center].opaque.clone();
+        let edited_positions = meshes
+            .get(&edited_mesh)
+            .unwrap()
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .clone();
+        let retained_job = (center.0 + 1, center.1);
+        let expired_job = (center.0 - 3, center.1);
+        for key in [retained_job, expired_job] {
+            scene.pending_chunks.insert(
+                key,
+                AsyncComputeTaskPool::get().spawn(std::future::pending()),
+            );
+        }
+        let expired_mesh = scene.chunks[&expired_job].opaque.id();
+        install_landscape_update(
+            &mut scene,
+            prepared,
+            6,
+            MIN_TREE_DISTANCE,
+            &world,
+            &mut Commands::new(&mut queue, &ecs),
+            &mut meshes,
+        );
+        queue.apply(&mut ecs);
+        assert_eq!(scene.landscape.as_ref().unwrap().center, next_center);
+        assert_eq!(scene.landscape.as_ref().unwrap().near_radius, 6);
+        assert_eq!(
+            scene.chunks.keys().copied().collect::<HashSet<_>>(),
+            local_keys(next_center, 6, &world).into_iter().collect()
+        );
+        assert_eq!(scene.chunks[&center].entity, edited_entity);
+        assert_eq!(scene.chunks[&center].opaque.id(), edited_mesh.id());
+        assert!(scene.chunks[&center].detailed);
+        assert_eq!(
+            meshes
+                .get(&edited_mesh)
+                .unwrap()
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .unwrap(),
+            &edited_positions
+        );
+        assert!(scene.pending_chunks.contains_key(&retained_job));
+        assert!(!scene.pending_chunks.contains_key(&expired_job));
+        assert!(meshes.get(expired_mesh).is_none());
+        assert_eq!(
+            scene.triangle_count,
+            scene.landscape.as_ref().unwrap().triangles
+                + scene
+                    .chunks
+                    .values()
+                    .map(|chunk| chunk.triangles)
+                    .sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn rapid_distance_changes_cancel_old_preparation_and_leaving_cancels_the_current_worker() {
+        use crate::graphics::GraphicsQuality;
+        use rubblekin_core::protocol::SessionMode;
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let (_, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(SessionMode::Player),
+            "terrain test".into(),
+            GraphicsQuality::Balanced,
+            0.,
+            SessionMode::Player,
+        )
+        .unwrap();
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        session.body.position = world.spawn_position();
+        let center = chunk_key(session.body.position);
+        let mut app = App::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let scene = setup_terrain(
+            &mut Commands::new(&mut queue, app.world()),
+            &mut meshes,
+            &mut Assets::default(),
+            &mut Assets::default(),
+            &mut Assets::default(),
+            &world,
+            session.body.position,
+            3,
+            MIN_TREE_DISTANCE,
+            1,
+        );
+        queue.apply(app.world_mut());
+        app.insert_resource(crate::VoxelWorld(world))
+            .insert_resource(session)
+            .insert_resource(GraphicsSettings::new(GraphicsQuality::Balanced))
+            .insert_resource(scene)
+            .insert_resource(meshes)
+            .add_systems(Update, stream_terrain);
+        let mut previous = None::<Arc<AtomicBool>>;
+        for distance in [512., 1000., 48.] {
+            app.world_mut()
+                .resource_mut::<GraphicsSettings>()
+                .near_distance = distance;
+            app.update();
+            if let Some(cancelled) = previous {
+                assert!(cancelled.load(Ordering::Relaxed));
+            }
+            let scene = app.world().resource::<TerrainScene>();
+            assert_eq!(scene.landscape.as_ref().unwrap().near_radius, 3);
+            assert_eq!(scene.chunks.len(), 49, "keep full old coverage until ready");
+            previous = Some(scene.pending_landscape.as_ref().unwrap().cancelled.clone());
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app
+            .world()
+            .resource::<TerrainScene>()
+            .pending_landscape
+            .is_some()
+            && std::time::Instant::now() < deadline
+        {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let scene = app.world().resource::<TerrainScene>();
+        assert!(scene.pending_landscape.is_none());
+        assert_eq!(scene.landscape.as_ref().unwrap().near_radius, 6);
+        assert_eq!(
+            scene.chunks.keys().copied().collect::<HashSet<_>>(),
+            local_keys(center, 6, &app.world().resource::<crate::VoxelWorld>().0)
+                .into_iter()
+                .collect()
+        );
+        app.world_mut()
+            .resource_mut::<GraphicsSettings>()
+            .near_distance = 1000.;
+        app.update();
+        let cancelled = app
+            .world()
+            .resource::<TerrainScene>()
+            .pending_landscape
+            .as_ref()
+            .unwrap()
+            .cancelled
+            .clone();
+        drop(app.world_mut().remove_resource::<TerrainScene>());
+        assert!(
+            cancelled.load(Ordering::Relaxed),
+            "leaving signals a running CPU worker before its Task is dropped"
+        );
+        assert!(
+            !app.world().contains_resource::<TerrainScene>(),
+            "old work has no scene in which to install"
+        );
+    }
+
+    #[test]
     fn outer_ocean_covers_every_view_direction_without_filling_the_island() {
         let radius = rubblekin_core::geography::WORLD_SIZE * 0.5;
         for center in [(0, 0), (2047, -2048), (10_000, -18_000)] {
@@ -2301,7 +2845,7 @@ mod tests {
     }
 
     #[test]
-    fn changing_tree_range_replaces_an_obsolete_landscape_job_without_moving() {
+    fn changing_tree_range_rejects_a_completed_obsolete_landscape_without_moving() {
         use crate::graphics::GraphicsQuality;
         use rubblekin_core::protocol::SessionMode;
         AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
@@ -2334,7 +2878,15 @@ mod tests {
             pending_landscape: Some(LandscapeJob {
                 near_radius,
                 tree_distance: MIN_TREE_DISTANCE,
-                task: AsyncComputeTaskPool::get().spawn(std::future::pending()),
+                task: AsyncComputeTaskPool::get().spawn(async {
+                    Some(PreparedLandscapeUpdate {
+                        center: (999, 999),
+                        land: Geometry::default(),
+                        water: Geometry::default(),
+                        incoming: Vec::new(),
+                    })
+                }),
+                cancelled: Arc::new(AtomicBool::new(false)),
             }),
             pending_chunks: HashMap::new(),
             triangle_count: 0,
@@ -2349,8 +2901,31 @@ mod tests {
         .insert_resource(scene)
         .init_resource::<Assets<Mesh>>()
         .add_systems(Update, stream_terrain);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app
+            .world()
+            .resource::<TerrainScene>()
+            .pending_landscape
+            .as_ref()
+            .unwrap()
+            .task
+            .is_finished()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            app.world()
+                .resource::<TerrainScene>()
+                .pending_landscape
+                .as_ref()
+                .unwrap()
+                .task
+                .is_finished()
+        );
         app.update();
         let scene = app.world().resource::<TerrainScene>();
+        assert_eq!(scene.landscape.as_ref().unwrap().center, (0, 0));
         assert_eq!(
             scene.landscape.as_ref().unwrap().tree_distance,
             MIN_TREE_DISTANCE

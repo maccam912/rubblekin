@@ -20,6 +20,7 @@ pub(crate) struct WorldMap {
     zoom: f32,
     center: Vec2,
     drag: Option<Vec2>,
+    contacts: [Option<MapContact>; 2],
 }
 impl Default for WorldMap {
     fn default() -> Self {
@@ -31,9 +32,16 @@ impl Default for WorldMap {
             zoom: 1.,
             center: Vec2::splat(0.5),
             drag: None,
+            contacts: [None; 2],
         }
     }
 }
+#[derive(Clone, Copy)]
+struct MapContact {
+    id: u64,
+    pointer: Vec2,
+}
+
 impl WorldMap {
     fn view(&self) -> Rect {
         let half = 0.5 / self.zoom;
@@ -44,6 +52,88 @@ impl WorldMap {
         let view = self.view();
         view.contains(uv)
             .then_some((uv - view.min) / view.size() * side)
+    }
+    fn zoom_at(&mut self, pointer: Vec2, factor: f32) {
+        let anchor = self.view().min + pointer / self.zoom;
+        self.zoom = (self.zoom * factor).clamp(1., 8.);
+        self.center = anchor + (Vec2::splat(0.5) - pointer) / self.zoom;
+        self.center = self.view().center();
+    }
+    fn cancel_drag(&mut self) {
+        self.drag = None;
+        self.contacts = [None; 2];
+    }
+    fn action(&mut self, action: MapAction, player: Vec2) {
+        self.cancel_drag();
+        match action {
+            MapAction::Close => self.open = false,
+            MapAction::ZoomIn => self.zoom_at(Vec2::splat(0.5), 1.5),
+            MapAction::ZoomOut => self.zoom_at(Vec2::splat(0.5), 1. / 1.5),
+            MapAction::Center => {
+                self.center = player;
+                self.center = self.view().center();
+            }
+            MapAction::WholeWorld => {
+                self.zoom = 1.;
+                self.center = Vec2::splat(0.5);
+            }
+        }
+    }
+    fn finger(&mut self, id: u64, phase: TouchPhase, pointer: Vec2) {
+        if !pointer.is_finite() && matches!(phase, TouchPhase::Started | TouchPhase::Moved) {
+            return;
+        }
+        if phase == TouchPhase::Started {
+            if Rect::from_corners(Vec2::ZERO, Vec2::ONE).contains(pointer)
+                && !self
+                    .contacts
+                    .iter()
+                    .flatten()
+                    .any(|contact| contact.id == id)
+                && let Some(slot) = self.contacts.iter_mut().find(|slot| slot.is_none())
+            {
+                *slot = Some(MapContact { id, pointer });
+                self.drag = None;
+            }
+            return;
+        }
+        let Some(index) = self
+            .contacts
+            .iter()
+            .position(|slot| slot.is_some_and(|c| c.id == id))
+        else {
+            return;
+        };
+        if phase == TouchPhase::Canceled {
+            self.cancel_drag();
+            return;
+        }
+        if !pointer.is_finite() {
+            if phase == TouchPhase::Ended {
+                self.contacts[index] = None;
+            }
+            return;
+        }
+        let previous = self.contacts[index].unwrap().pointer;
+        self.contacts[index].as_mut().unwrap().pointer = pointer;
+        if let Some(other) = self.contacts[1 - index] {
+            let old_midpoint = (previous + other.pointer) * 0.5;
+            let midpoint = (pointer + other.pointer) * 0.5;
+            let anchor = self.view().min + old_midpoint / self.zoom;
+            let old_span = previous.distance(other.pointer);
+            let span = pointer.distance(other.pointer);
+            // Ignore the ill-conditioned pinch scale while contacts overlap.
+            if old_span > 0.02 && span > 0.02 {
+                self.zoom = (self.zoom * span / old_span).clamp(1., 8.);
+            }
+            self.center = anchor + (Vec2::splat(0.5) - midpoint) / self.zoom;
+        } else {
+            self.center -= (pointer - previous) / self.zoom;
+        }
+        self.center = self.view().center();
+        if phase == TouchPhase::Ended {
+            self.contacts[index] = None;
+        }
     }
 }
 
@@ -65,8 +155,14 @@ pub(super) struct MapPosition;
 pub(super) struct MapTownDistance(usize);
 #[derive(Component)]
 pub(super) struct MapScale;
-#[derive(Component)]
-pub(super) struct MapClose;
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MapAction {
+    Close,
+    ZoomIn,
+    ZoomOut,
+    Center,
+    WholeWorld,
+}
 #[derive(Component)]
 pub(super) struct MapSidebar;
 
@@ -83,7 +179,7 @@ fn label(value: impl Into<String>, font: &Handle<Font>, size: f32) -> impl Bundl
 fn layout(window: &Window) -> (f32, bool) {
     let compact = window.height() < 550.;
     (
-        (window.height() - if compact { 112. } else { 144. })
+        (window.height() - if compact { 144. } else { 184. })
             .min(window.width() - 300.)
             .max(64.),
         compact,
@@ -148,7 +244,7 @@ pub(crate) fn setup(
                 header
                     .spawn((
                         Button,
-                        MapClose,
+                        MapAction::Close,
                         Node {
                             padding: UiRect::axes(px(14), px(8)),
                             border_radius: BorderRadius::all(px(6)),
@@ -283,6 +379,32 @@ pub(crate) fn setup(
                         ));
                     });
                 });
+            root.spawn(Node {
+                column_gap: px(8),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|controls| {
+                for (action, text) in [
+                    (MapAction::ZoomOut, "Zoom -"),
+                    (MapAction::ZoomIn, "Zoom +"),
+                    (MapAction::Center, "Center on you"),
+                    (MapAction::WholeWorld, "Whole world"),
+                ] {
+                    controls
+                        .spawn((
+                            Button,
+                            action,
+                            Node {
+                                padding: UiRect::axes(px(12), px(6)),
+                                border_radius: BorderRadius::all(px(6)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.16, 0.29, 0.28)),
+                        ))
+                        .with_child(label(text, &font, 15.));
+                }
+            });
             root.spawn((MapScale, label("", &font, 14.)));
         });
 }
@@ -302,27 +424,45 @@ pub(crate) fn read(
     dialog: Res<crate::airships::PilotConversation>,
     mut native: MessageReader<MenuKey>,
     mut fingers: MessageReader<TouchInput>,
-    buttons: Query<&Interaction, (With<MapClose>, Changed<Interaction>)>,
-    close_targets: Query<(&ComputedNode, &UiGlobalTransform), With<MapClose>>,
+    buttons: Query<(&MapAction, &Interaction), Changed<Interaction>>,
+    targets: Query<(&MapAction, &ComputedNode, &UiGlobalTransform)>,
     canvas: Query<(&ComputedNode, &UiGlobalTransform), With<MapCanvas>>,
 ) {
     let was_open = map.open;
     map.just_closed = false;
     map.input_blocked = was_open;
-    let back = native
-        .read()
-        .any(|key| key.input.state.is_pressed() && key.input.logical_key == Key::BrowserBack);
-    let close_touch = fingers.read().any(|finger| {
-        was_open
-            && finger.phase == TouchPhase::Started
-            && close_targets.iter().any(|(node, transform)| {
-                node.contains_point(*transform, finger.position * window.scale_factor())
-            })
-    });
+    let mut back = false;
+    for key in native.read() {
+        back |= key.input.state.is_pressed()
+            && !key.input.repeat
+            && key.input.logical_key == Key::BrowserBack;
+    }
+    let events: Vec<_> = fingers.read().copied().collect();
     if !window.focused || touch.suspended {
-        map.drag = None;
+        map.cancel_drag();
         return;
     }
+    let touch_action = events.iter().find_map(|finger| {
+        (was_open && finger.phase == TouchPhase::Started)
+            .then(|| {
+                targets.iter().find_map(|(action, node, transform)| {
+                    node.contains_point(*transform, finger.position * window.scale_factor())
+                        .then_some(*action)
+                })
+            })
+            .flatten()
+    });
+    // Native touch and Bevy's emulated click can describe the same press.
+    let action = touch_action.or_else(|| {
+        // Bevy can synthesize a touch click at a stale mouse cursor position.
+        // Native touch hit testing owns these frames and active gestures.
+        if !events.is_empty() || map.contacts.iter().any(Option::is_some) {
+            return None;
+        }
+        buttons.iter().find_map(|(action, interaction)| {
+            (*interaction == Interaction::Pressed).then_some(*action)
+        })
+    });
     let requested = std::mem::take(&mut map.requested);
     let other_modal = console.input_blocked
         || dialog.open()
@@ -335,10 +475,7 @@ pub(crate) fn read(
         && (keys.just_pressed(KeyCode::KeyM)
             || keys.just_pressed(KeyCode::Escape)
             || back
-            || close_touch
-            || buttons
-                .iter()
-                .any(|interaction| *interaction == Interaction::Pressed))
+            || action == Some(MapAction::Close))
     {
         map.open = false;
     }
@@ -346,46 +483,51 @@ pub(crate) fn read(
     map.just_closed = was_open && !map.open;
     if was_open != map.open {
         touch.reset();
-        map.drag = None;
+        map.cancel_drag();
     }
     if !map.open || !was_open {
         return;
     }
-    if keys.just_pressed(KeyCode::KeyR) {
-        map.zoom = 1.;
-        map.center = Vec2::splat(0.5);
+    let player = map_uv(&world.0, position(&session));
+    if let Some(action) = action {
+        map.action(action, player);
+    } else if keys.just_pressed(KeyCode::KeyR) {
+        map.action(MapAction::WholeWorld, player);
+    } else if keys.just_pressed(KeyCode::KeyC) {
+        map.action(MapAction::Center, player);
     }
-    if keys.just_pressed(KeyCode::KeyC) {
-        map.center = map_uv(&world.0, position(&session));
+    let Some((node, transform)) = canvas.iter().next() else {
+        map.cancel_drag();
+        return;
+    };
+    let pointer = |position: Vec2| {
+        (position * window.scale_factor() - transform.translation) / node.size() + Vec2::splat(0.5)
+    };
+    let had_contacts = map.contacts.iter().any(Option::is_some);
+    if action.is_none() {
+        for finger in &events {
+            map.finger(finger.id, finger.phase, pointer(finger.position));
+        }
+    }
+    // Never apply synthetic mouse motion on top of a touch gesture.
+    if had_contacts || map.contacts.iter().any(Option::is_some) || !events.is_empty() {
+        map.drag = None;
+        return;
     }
     if let Some(cursor) = window.cursor_position() {
-        let over_map = canvas.iter().any(|(node, transform)| {
-            node.contains_point(*transform, cursor * window.scale_factor())
-        });
+        let pointer = pointer(cursor);
+        let over_map = Rect::from_corners(Vec2::ZERO, Vec2::ONE).contains(pointer);
         if over_map && wheel.delta.y != 0. {
-            // Zoom toward the cursor, preserving the land beneath it.
-            let view = map.view();
-            let pointer = canvas
-                .iter()
-                .next()
-                .map_or(Vec2::splat(0.5), |(node, transform)| {
-                    ((cursor * window.scale_factor() - transform.translation) / node.size()
-                        + Vec2::splat(0.5))
-                    .clamp(Vec2::ZERO, Vec2::ONE)
-                });
-            let anchor = view.min + pointer * view.size();
-            map.zoom = (map.zoom * (wheel.delta.y * 0.16).exp()).clamp(1., 8.);
-            map.center = anchor + (Vec2::splat(0.5) - pointer) / map.zoom;
+            map.zoom_at(pointer, (wheel.delta.y * 0.16).exp());
         }
         if over_map && mouse.just_pressed(MouseButton::Left) {
-            map.drag = Some(cursor);
+            map.drag = Some(pointer);
         }
         if mouse.pressed(MouseButton::Left) {
             if let Some(previous) = map.drag {
-                let (side, _) = layout(&window);
                 let zoom = map.zoom;
-                map.center -= (cursor - previous) / (side * zoom);
-                map.drag = Some(cursor);
+                map.center -= (pointer - previous) / zoom;
+                map.drag = Some(pointer);
             }
         } else {
             map.drag = None;
@@ -608,10 +750,10 @@ pub(crate) fn refresh(
                 format!("{meters:.0} m across")
             };
             text.0 = if compact {
-                format!("{span}  ·  Cyan: you  ·  Gold: towns  ·  M / Back: return")
+                format!("{span}  ·  Drag: pan  ·  Pinch: zoom  ·  Cyan: you  ·  Gold: towns")
             } else {
                 format!(
-                    "{span}  ·  Cyan: you  ·  Gold: towns  ·  Ring: spawn  |  Scroll: zoom  ·  Drag: pan  ·  C: center on you  ·  R: whole world"
+                    "{span}  ·  Cyan: you  ·  Gold: towns  ·  Ring: spawn  |  Scroll / pinch: zoom  ·  Drag: pan  ·  C: center on you  ·  R: whole world"
                 )
             };
         }
@@ -673,7 +815,16 @@ mod tests {
         let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
         let canvas = app
             .world_mut()
-            .spawn((MapCanvas, Node::default(), ImageNode::new(handle)))
+            .spawn((
+                MapCanvas,
+                Node::default(),
+                ImageNode::new(handle),
+                ComputedNode {
+                    size: Vec2::splat(400.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(300., 300.),
+            ))
             .id();
         let marker = app
             .world_mut()
@@ -689,7 +840,7 @@ mod tests {
         let close = app
             .world_mut()
             .spawn((
-                MapClose,
+                MapAction::Close,
                 Interaction::None,
                 Node::default(),
                 ComputedNode {
@@ -865,6 +1016,33 @@ mod tests {
     }
 
     #[test]
+    fn android_back_repeat_does_not_close_map_and_fresh_press_does() {
+        let mut fixture = fixture();
+        press(&mut fixture, KeyCode::KeyM);
+        clear_keys(&mut fixture);
+        for repeat in [true, false] {
+            fixture.app.world_mut().write_message(MenuKey {
+                input: KeyboardInput {
+                    key_code: KeyCode::Escape,
+                    logical_key: Key::BrowserBack,
+                    text: None,
+                    state: ButtonState::Pressed,
+                    repeat,
+                    window: fixture.window,
+                },
+                modifiers: ModifiersState::empty(),
+            });
+            fixture.app.update();
+            let map = fixture.app.world().resource::<WorldMap>();
+            assert_eq!(map.open, repeat);
+            assert!(map.input_blocked);
+            assert_eq!(map.just_closed, !repeat);
+        }
+        fixture.app.update();
+        assert!(!fixture.app.world().resource::<WorldMap>().input_blocked);
+    }
+
+    #[test]
     fn refresh_tracks_live_player_and_observer_positions_and_the_atlas_crop() {
         let mut fixture = fixture();
         {
@@ -938,6 +1116,319 @@ mod tests {
             Display::None,
             "a live camera outside the cropped map hides its marker"
         );
+    }
+
+    fn finger(fixture: &mut Fixture, id: u64, phase: TouchPhase, position: Vec2) {
+        fixture.app.world_mut().write_message(TouchInput {
+            id,
+            phase,
+            position,
+            window: fixture.window,
+            force: None,
+        });
+    }
+
+    #[test]
+    fn touch_pan_and_pinch_keep_land_under_the_fingers_at_two_times_ui_scale() {
+        let mut fixture = fixture();
+        fixture
+            .app
+            .world_mut()
+            .get_mut::<Window>(fixture.window)
+            .unwrap()
+            .resolution
+            .set_scale_factor_override(Some(2.));
+        fixture.app.world_mut().resource_mut::<WorldMap>().open = true;
+        fixture.app.world_mut().resource_mut::<WorldMap>().zoom = 2.;
+        // Canvas is [50, 250] logical pixels on each axis.
+        finger(&mut fixture, 7, TouchPhase::Started, Vec2::splat(150.));
+        fixture.app.update();
+        finger(&mut fixture, 7, TouchPhase::Moved, Vec2::new(170., 130.));
+        fixture.app.update();
+        assert!(
+            (fixture.app.world().resource::<WorldMap>().center - Vec2::new(0.45, 0.55)).length()
+                < 0.00001
+        );
+        finger(&mut fixture, 7, TouchPhase::Ended, Vec2::new(170., 130.));
+        fixture.app.update();
+        {
+            let mut map = fixture.app.world_mut().resource_mut::<WorldMap>();
+            map.center = Vec2::splat(0.5);
+            map.zoom = 1.;
+        }
+        finger(&mut fixture, 10, TouchPhase::Started, Vec2::new(130., 150.));
+        finger(&mut fixture, 11, TouchPhase::Started, Vec2::new(170., 150.));
+        fixture.app.update();
+        // Both move in one frame: the original 40px span doubles around its midpoint.
+        finger(&mut fixture, 10, TouchPhase::Moved, Vec2::new(110., 150.));
+        finger(&mut fixture, 11, TouchPhase::Moved, Vec2::new(190., 150.));
+        fixture.app.update();
+        let map = fixture.app.world().resource::<WorldMap>();
+        assert!((map.zoom - 2.).abs() < 0.00001);
+        assert!((map.center - Vec2::splat(0.5)).length() < 0.00001);
+        // Lifting either finger rebases naturally to the remaining contact.
+        finger(&mut fixture, 10, TouchPhase::Ended, Vec2::new(110., 150.));
+        finger(&mut fixture, 11, TouchPhase::Moved, Vec2::new(210., 150.));
+        fixture.app.update();
+        assert!(
+            (fixture.app.world().resource::<WorldMap>().center - Vec2::new(0.45, 0.5)).length()
+                < 0.00001
+        );
+    }
+
+    #[test]
+    fn touch_gestures_ignore_third_contacts_and_cancel_on_focus_loss_or_map_close() {
+        let mut fixture = fixture();
+        fixture.app.world_mut().resource_mut::<WorldMap>().open = true;
+        fixture.app.world_mut().resource_mut::<WorldMap>().zoom = 2.;
+        finger(&mut fixture, 1, TouchPhase::Started, Vec2::new(200., 300.));
+        finger(&mut fixture, 2, TouchPhase::Started, Vec2::new(400., 300.));
+        finger(&mut fixture, 3, TouchPhase::Started, Vec2::new(300., 200.));
+        finger(&mut fixture, 3, TouchPhase::Moved, Vec2::new(600., 400.));
+        fixture.app.update();
+        assert_eq!(fixture.app.world().resource::<WorldMap>().zoom, 2.);
+        assert_eq!(
+            fixture.app.world().resource::<WorldMap>().center,
+            Vec2::splat(0.5)
+        );
+        finger(&mut fixture, 1, TouchPhase::Canceled, Vec2::new(200., 300.));
+        fixture.app.update();
+        assert!(
+            fixture
+                .app
+                .world()
+                .resource::<WorldMap>()
+                .contacts
+                .iter()
+                .all(Option::is_none)
+        );
+        finger(&mut fixture, 2, TouchPhase::Moved, Vec2::new(440., 300.));
+        fixture.app.update();
+        assert_eq!(
+            fixture.app.world().resource::<WorldMap>().center,
+            Vec2::splat(0.5)
+        );
+        for close in [false, true] {
+            finger(&mut fixture, 4, TouchPhase::Started, Vec2::splat(300.));
+            fixture.app.update();
+            if close {
+                press(&mut fixture, KeyCode::Escape);
+            } else {
+                fixture
+                    .app
+                    .world_mut()
+                    .get_mut::<Window>(fixture.window)
+                    .unwrap()
+                    .focused = false;
+                fixture.app.update();
+                fixture
+                    .app
+                    .world_mut()
+                    .get_mut::<Window>(fixture.window)
+                    .unwrap()
+                    .focused = true;
+            }
+            assert!(
+                fixture
+                    .app
+                    .world()
+                    .resource::<WorldMap>()
+                    .contacts
+                    .iter()
+                    .all(Option::is_none)
+            );
+            finger(&mut fixture, 4, TouchPhase::Moved, Vec2::splat(450.));
+            clear_keys(&mut fixture);
+            assert_eq!(
+                fixture.app.world().resource::<WorldMap>().center,
+                Vec2::splat(0.5)
+            );
+        }
+    }
+
+    #[test]
+    fn short_touch_swipe_applies_its_release_position_without_a_move_event() {
+        let mut fixture = fixture();
+        fixture.app.world_mut().resource_mut::<WorldMap>().open = true;
+        fixture.app.world_mut().resource_mut::<WorldMap>().zoom = 2.;
+        finger(&mut fixture, 1, TouchPhase::Started, Vec2::splat(300.));
+        finger(&mut fixture, 1, TouchPhase::Ended, Vec2::new(340., 320.));
+        fixture.app.update();
+        let map = fixture.app.world().resource::<WorldMap>();
+        assert!((map.center - Vec2::new(0.45, 0.475)).length() < 0.00001);
+        assert!(map.contacts.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_canvas_finger_cannot_click_a_button_under_the_stale_mouse_cursor() {
+        let mut fixture = fixture();
+        fixture.app.world_mut().resource_mut::<WorldMap>().open = true;
+        fixture.app.world_mut().resource_mut::<WorldMap>().zoom = 2.;
+        let button = fixture
+            .app
+            .world_mut()
+            .spawn((
+                MapAction::ZoomIn,
+                Interaction::Pressed,
+                ComputedNode {
+                    size: Vec2::new(100., 40.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(700., 500.),
+            ))
+            .id();
+        fixture
+            .app
+            .world_mut()
+            .get_mut::<Window>(fixture.window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(700., 500.)));
+        finger(&mut fixture, 1, TouchPhase::Started, Vec2::splat(300.));
+        fixture.app.update();
+        assert_eq!(fixture.app.world().resource::<WorldMap>().zoom, 2.);
+        assert!(fixture.app.world().resource::<WorldMap>().contacts[0].is_some());
+        // Even another emulated press during a stationary owned gesture is ignored.
+        fixture
+            .app
+            .world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        fixture.app.update();
+        assert_eq!(fixture.app.world().resource::<WorldMap>().zoom, 2.);
+        finger(&mut fixture, 1, TouchPhase::Ended, Vec2::new(340., 320.));
+        fixture.app.update();
+        assert!(
+            (fixture.app.world().resource::<WorldMap>().center - Vec2::new(0.45, 0.475)).length()
+                < 0.00001
+        );
+    }
+
+    #[test]
+    fn mouse_drag_uses_actual_canvas_bounds_and_stops_after_release() {
+        let mut fixture = fixture();
+        fixture.app.world_mut().resource_mut::<WorldMap>().open = true;
+        fixture.app.world_mut().resource_mut::<WorldMap>().zoom = 2.;
+        fixture
+            .app
+            .world_mut()
+            .get_mut::<Window>(fixture.window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::splat(300.)));
+        fixture
+            .app
+            .world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        fixture.app.update();
+        fixture
+            .app
+            .world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        fixture
+            .app
+            .world_mut()
+            .get_mut::<Window>(fixture.window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(380., 340.)));
+        fixture.app.update();
+        assert!(
+            (fixture.app.world().resource::<WorldMap>().center - Vec2::new(0.4, 0.45)).length()
+                < 0.00001
+        );
+        fixture
+            .app
+            .world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        fixture
+            .app
+            .world_mut()
+            .get_mut::<Window>(fixture.window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::splat(450.)));
+        fixture.app.update();
+        assert!(
+            (fixture.app.world().resource::<WorldMap>().center - Vec2::new(0.4, 0.45)).length()
+                < 0.00001
+        );
+    }
+
+    #[test]
+    fn map_gestures_clamp_at_edges_and_reject_nonfinite_positions() {
+        let mut map = WorldMap {
+            zoom: 4.,
+            ..default()
+        };
+        map.finger(1, TouchPhase::Started, Vec2::splat(0.5));
+        map.finger(1, TouchPhase::Moved, Vec2::splat(f32::NAN));
+        assert_eq!(map.center, Vec2::splat(0.5));
+        map.finger(1, TouchPhase::Moved, Vec2::splat(10.));
+        assert_eq!(map.view().min, Vec2::ZERO);
+        map.zoom_at(Vec2::splat(0.5), 100.);
+        assert_eq!(map.zoom, 8.);
+        map.zoom_at(Vec2::splat(0.5), 0.001);
+        assert_eq!(map.zoom, 1.);
+        assert_eq!(map.view(), Rect::from_corners(Vec2::ZERO, Vec2::ONE));
+        map.finger(1, TouchPhase::Canceled, Vec2::splat(f32::NAN));
+        assert!(map.contacts.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn visible_map_actions_support_touch_without_double_applying_emulated_clicks() {
+        let mut fixture = fixture();
+        fixture.app.world_mut().resource_mut::<WorldMap>().open = true;
+        let button = fixture
+            .app
+            .world_mut()
+            .spawn((
+                MapAction::ZoomIn,
+                Interaction::Pressed,
+                ComputedNode {
+                    size: Vec2::new(100., 40.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(700., 500.),
+            ))
+            .id();
+        finger(&mut fixture, 3, TouchPhase::Started, Vec2::new(700., 500.));
+        fixture.app.update();
+        assert_eq!(fixture.app.world().resource::<WorldMap>().zoom, 1.5);
+        fixture
+            .app
+            .world_mut()
+            .entity_mut(button)
+            .insert(Interaction::None);
+        fixture.app.update();
+        for (action, zoom) in [
+            (MapAction::ZoomIn, 2.25),
+            (MapAction::ZoomOut, 1.5),
+            (MapAction::WholeWorld, 1.),
+        ] {
+            fixture.app.world_mut().entity_mut(button).insert(action);
+            finger(&mut fixture, 3, TouchPhase::Started, Vec2::new(700., 500.));
+            fixture.app.update();
+            assert_eq!(fixture.app.world().resource::<WorldMap>().zoom, zoom);
+        }
+        fixture.app.world_mut().resource_mut::<WorldMap>().zoom = 4.;
+        fixture
+            .app
+            .world_mut()
+            .resource_mut::<Session>()
+            .body
+            .position = [20., 0., -20.];
+        fixture
+            .app
+            .world_mut()
+            .entity_mut(button)
+            .insert(MapAction::Center);
+        finger(&mut fixture, 3, TouchPhase::Started, Vec2::new(700., 500.));
+        fixture.app.update();
+        assert_eq!(
+            fixture.app.world().resource::<WorldMap>().center,
+            Vec2::new(0.625, 0.375)
+        );
+        assert!(fixture.app.world().resource::<WorldMap>().input_blocked);
     }
 
     #[test]

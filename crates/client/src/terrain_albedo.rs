@@ -53,26 +53,54 @@ pub fn atlas_side(max_texture_side: u32, mobile: bool) -> u32 {
     requested.min(1 << supported.ilog2())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreparationStage {
+    Ground,
+    Trees,
+    WaterAndRoads,
+    Mips,
+}
+
+#[cfg(test)]
 pub fn distant_albedo(world: &World, side: u32) -> Image {
+    prepare_albedo(world, side, |_| Ok(())).expect("uncancelled atlas preparation")
+}
+
+/// The callback reports real preparation phases and permits a join worker to
+/// cancel between bounded groups of rows, without allocating renderer assets.
+pub(crate) fn prepare_albedo(
+    world: &World,
+    side: u32,
+    mut progress: impl FnMut(PreparationStage) -> Result<(), String>,
+) -> Result<Image, String> {
+    progress(PreparationStage::Ground)?;
     let (side, mut data) = if let Some(geo) = world.geography() {
         let grid = MapGrid::new(side);
         let palette = biome_palette();
         let mut data = Vec::with_capacity(mip_byte_len(side));
         for z in 0..side {
+            if z % 64 == 0 {
+                progress(PreparationStage::Ground)?;
+            }
             for x in 0..side {
                 let [mx, mz] = grid.center(x, z);
                 let sample = geo.sample(mx, mz);
                 data.extend_from_slice(&map_color(sample, map_relief(geo, mx, mz), &palette));
             }
         }
-        paint_trees(world, grid, &mut data);
+        paint_trees_with_progress(world, grid, &mut data, &mut || {
+            progress(PreparationStage::Trees)
+        })?;
+        progress(PreparationStage::WaterAndRoads)?;
         paint_rivers(geo, grid, &mut data);
+        progress(PreparationStage::WaterAndRoads)?;
         paint_settlements(world, grid, &mut data);
         (side, data)
     } else {
         (1, vec![255; 4])
     };
-    let levels = append_mips(&mut data, side);
+    let levels =
+        append_mips_with_progress(&mut data, side, &mut || progress(PreparationStage::Mips))?;
     // Image::new validates only a base level, so initialize explicitly with the
     // complete level-ordered mip chain. This adds one third to the base size.
     let mut image = Image::new_uninit(
@@ -90,7 +118,7 @@ pub fn distant_albedo(world: &World, side: u32) -> Image {
     image.data = Some(data);
     image.texture_descriptor.mip_level_count = levels;
     image.sampler = ImageSampler::linear();
-    image
+    Ok(image)
 }
 
 fn biome_index(biome: Biome) -> usize {
@@ -128,7 +156,17 @@ fn biome_palette() -> [Vec3; 11] {
 
 /// Enumerate the same candidates used by editable and medium-LOD trees once.
 /// Rasterize a small crown-colored dot; no mesh or per-tree asset is allocated.
+#[cfg(test)]
 fn paint_trees(world: &World, grid: MapGrid, data: &mut [u8]) {
+    paint_trees_with_progress(world, grid, data, &mut || Ok(())).unwrap();
+}
+
+fn paint_trees_with_progress(
+    world: &World,
+    grid: MapGrid,
+    data: &mut [u8],
+    progress: &mut impl FnMut() -> Result<(), String>,
+) -> Result<(), String> {
     let first = (-world.radius_cells()).div_euclid(TREE_GRID_CELLS);
     let last = (world.radius_cells() - 1).div_euclid(TREE_GRID_CELLS);
     let refined = matches!(
@@ -136,6 +174,9 @@ fn paint_trees(world: &World, grid: MapGrid, data: &mut [u8]) {
         WorldGeneration::GeographyV2 | WorldGeneration::GeographyV3
     );
     for gz in first..=last {
+        if (gz - first) % 64 == 0 {
+            progress()?;
+        }
         for gx in first..=last {
             if let Some(tree) = world.tree_at(gx, gz) {
                 let color = rgba_bytes(if refined {
@@ -147,6 +188,7 @@ fn paint_trees(world: &World, grid: MapGrid, data: &mut [u8]) {
             }
         }
     }
+    Ok(())
 }
 
 fn paint_tree(
@@ -421,7 +463,17 @@ fn mip_byte_len(mut side: u32) -> usize {
 
 /// Box-filter in linear light: directly averaging sRGB bytes darkens small
 /// bright roads, coastlines, and snow. Store levels largest to smallest.
-fn append_mips(data: &mut Vec<u8>, mut side: u32) -> u32 {
+#[cfg(test)]
+fn append_mips(data: &mut Vec<u8>, side: u32) -> u32 {
+    append_mips_with_progress(data, side, &mut || Ok(())).unwrap()
+}
+
+fn append_mips_with_progress(
+    data: &mut Vec<u8>,
+    mut side: u32,
+    progress: &mut impl FnMut() -> Result<(), String>,
+) -> Result<u32, String> {
+    progress()?;
     data.reserve(mip_byte_len(side) - data.len());
     let lookup: [f32; 256] = std::array::from_fn(|i| linear_rgb([i as f32 / 255.0; 4]).x);
     let mut offset = 0;
@@ -431,6 +483,9 @@ fn append_mips(data: &mut Vec<u8>, mut side: u32) -> u32 {
         let next_offset = data.len();
         data.resize(next_offset + (next_side * next_side * 4) as usize, 255);
         for z in 0..next_side {
+            if z % 64 == 0 {
+                progress()?;
+            }
             for x in 0..next_side {
                 let corners = [
                     offset + ((z * 2 * side + x * 2) * 4) as usize,
@@ -456,7 +511,7 @@ fn append_mips(data: &mut Vec<u8>, mut side: u32) -> u32 {
         side = next_side;
         levels += 1;
     }
-    levels
+    Ok(levels)
 }
 
 #[cfg(test)]
@@ -472,6 +527,29 @@ mod tests {
 
     fn black_map(grid: MapGrid) -> Vec<u8> {
         [0, 0, 0, 255].repeat((grid.side * grid.side) as usize)
+    }
+
+    #[test]
+    fn atlas_preparation_can_cancel_during_ground_trees_and_mip_rows() {
+        let world = World::generate(42, WorldGeneration::GeographyV2);
+        for target in [
+            PreparationStage::Ground,
+            PreparationStage::Trees,
+            PreparationStage::Mips,
+        ] {
+            let mut callbacks = 0;
+            let result = prepare_albedo(&world, 256, |stage| {
+                if stage == target {
+                    callbacks += 1;
+                    if callbacks == 3 {
+                        return Err("cancelled atlas".into());
+                    }
+                }
+                Ok(())
+            });
+            assert!(matches!(result, Err(error) if error == "cancelled atlas"));
+            assert_eq!(callbacks, 3, "{target:?} checks while the phase is running");
+        }
     }
 
     #[test]

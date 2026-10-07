@@ -5,7 +5,7 @@ use crate::{
     network::{Connection, ConnectionStage},
     observer::ObserverCamera,
     prediction::Prediction,
-    terrain::TerrainScene,
+    terrain::{PreparationStage, PreparedTerrain, TerrainScene},
 };
 use bevy::{
     input::{
@@ -53,16 +53,35 @@ enum JoinStage {
     OpeningLocalWorld,
     Network(ConnectionStage),
     PreparingLandscape,
+    PreparingTerrain(PreparationStage),
 }
 
 impl JoinStage {
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::OpeningLocalWorld => "Opening your local world…",
-            Self::Network(ConnectionStage::ResolvingAddress) => "Looking up the server…",
-            Self::Network(ConnectionStage::Connecting) => "Connecting to the server…",
-            Self::Network(ConnectionStage::AwaitingWelcome) => "Waiting for the server's world…",
-            Self::PreparingLandscape => "Preparing the landscape…",
+            Self::OpeningLocalWorld => "Opening your local world…".into(),
+            Self::Network(ConnectionStage::ResolvingAddress) => "Looking up the server…".into(),
+            Self::Network(ConnectionStage::Connecting) => "Connecting to the server…".into(),
+            Self::Network(ConnectionStage::AwaitingWelcome) => {
+                "Waiting for the server's world…".into()
+            }
+            Self::PreparingLandscape => "Preparing the landscape…".into(),
+            Self::PreparingTerrain(PreparationStage::Map(stage)) => {
+                use crate::terrain_albedo::PreparationStage;
+                match stage {
+                    PreparationStage::Ground => "Painting the world map…",
+                    PreparationStage::Trees => "Painting the forests…",
+                    PreparationStage::WaterAndRoads => "Painting rivers and settlements…",
+                    PreparationStage::Mips => "Preparing map detail levels…",
+                }
+                .into()
+            }
+            Self::PreparingTerrain(PreparationStage::Landscape) => {
+                "Preparing distant terrain…".into()
+            }
+            Self::PreparingTerrain(PreparationStage::Chunks { completed, total }) => {
+                format!("Preparing nearby terrain… {completed} / {total}")
+            }
         }
     }
 }
@@ -77,7 +96,7 @@ struct PendingJoin {
 impl PendingJoin {
     fn status(&self) -> String {
         let label = if self.cancelled.load(Ordering::Relaxed) {
-            "Cancelling… waiting for the current step to finish."
+            "Cancelling… waiting for the current step to finish.".into()
         } else {
             self.stage
                 .lock()
@@ -93,6 +112,7 @@ struct Joined {
     world: GameWorld,
     session: Session,
     server: Option<ServerHandle>,
+    terrain: Option<PreparedTerrain>,
 }
 
 impl JoinScreen {
@@ -143,7 +163,7 @@ impl JoinScreen {
         } else {
             JoinStage::Network(ConnectionStage::ResolvingAddress)
         }));
-        self.status = stage.lock().unwrap().label().into();
+        self.status = stage.lock().unwrap().label();
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_stage = stage.clone();
         let worker_cancelled = cancelled.clone();
@@ -204,6 +224,7 @@ impl JoinScreen {
                 world,
                 session,
                 server,
+                terrain: None,
             })
         });
         self.pending = Some(PendingJoin {
@@ -478,10 +499,12 @@ pub fn interact(
         }
     }
     if menu.pending.is_some() {
-        let back = keyboard.read().any(|key| {
-            key.input.state.is_pressed()
-                && matches!(key.input.logical_key, Key::Escape | Key::BrowserBack)
-        });
+        let mut back = false;
+        for key in keyboard.read() {
+            back |= key.input.state.is_pressed()
+                && !key.input.repeat
+                && matches!(key.input.logical_key, Key::Escape | Key::BrowserBack);
+        }
         ime.clear();
         if back
             || keys.just_pressed(KeyCode::Escape)
@@ -968,12 +991,15 @@ fn text_edit(event: &KeyboardInput, shortcut: bool, shift: bool) -> Option<TextE
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn poll_connection(
     mut commands: Commands,
     mut menu: ResMut<JoinScreen>,
     mut focus: ResMut<InputFocus>,
     time: Res<Time>,
     touch: Option<Res<crate::touch::TouchControls>>,
+    graphics: Option<Res<GraphicsSettings>>,
+    render_device: Option<Res<bevy::render::renderer::RenderDevice>>,
 ) {
     let Some(pending) = &menu.pending else {
         return;
@@ -1006,6 +1032,41 @@ pub fn poll_connection(
     }
     match result {
         Ok(mut joined) => {
+            if joined.terrain.is_none() {
+                // CLI auto-join starts before the renderer. Capture its actual
+                // limits now, when the first worker has finished and rendering
+                // is initialized. Headless tests have no GPU and need one texel.
+                let max_texture_side = render_device
+                    .as_ref()
+                    .map_or(1, |device| device.limits().max_texture_dimension_2d);
+                let fallback = GraphicsSettings::new(menu.graphics);
+                let graphics = graphics.as_deref().unwrap_or(&fallback);
+                let near_radius = graphics.near_radius_chunks();
+                let tree_distance = graphics.tree_distance;
+                let stage = pending.stage.clone();
+                let cancelled = pending.cancelled.clone();
+                menu.pending = Some(PendingJoin {
+                    worker: std::thread::spawn(move || {
+                        prepare_joined(
+                            joined,
+                            near_radius,
+                            tree_distance,
+                            max_texture_side,
+                            |progress| {
+                                if cancelled.load(Ordering::Relaxed) {
+                                    return Err("Join cancelled".into());
+                                }
+                                *stage.lock().unwrap_or_else(|error| error.into_inner()) =
+                                    JoinStage::PreparingTerrain(progress);
+                                Ok(())
+                            },
+                        )
+                    }),
+                    ..pending
+                });
+                menu.status = menu.pending.as_ref().unwrap().status();
+                return;
+            }
             joined.session.status_until = time.elapsed_secs_f64() + 12.0;
             joined.session.airship_clock = crate::airships::AirshipClock::new(
                 joined.session.world_time,
@@ -1024,12 +1085,38 @@ pub fn poll_connection(
             commands.insert_resource(joined.connection);
             commands.insert_resource(VoxelWorld(joined.world));
             commands.insert_resource(joined.session);
+            commands.insert_resource(joined.terrain.take().unwrap());
             focus.clear();
         }
         Err(error) => {
             menu.status = format!("Could not join: {error}\nCheck the address and try again.")
         }
     }
+}
+
+fn prepare_joined(
+    mut joined: Joined,
+    near_radius: i32,
+    tree_distance: f32,
+    max_texture_side: u32,
+    progress: impl FnMut(PreparationStage) -> Result<(), String>,
+) -> Result<Joined, String> {
+    let center = joined
+        .session
+        .observer
+        .as_ref()
+        .map_or(joined.session.body.position, |camera| {
+            camera.position.to_array()
+        });
+    joined.terrain = Some(crate::terrain::prepare_terrain(
+        &joined.world,
+        center,
+        near_radius,
+        tree_distance,
+        max_texture_side,
+        progress,
+    )?);
+    Ok(joined)
 }
 
 pub(crate) fn session_from_welcome(
@@ -1193,6 +1280,7 @@ pub fn leave_world(
     commands.remove_resource::<Session>();
     commands.remove_resource::<VoxelWorld>();
     commands.remove_resource::<TerrainScene>();
+    commands.remove_resource::<PreparedTerrain>();
     commands.insert_resource(Avatars::default());
     menu.local_server.take();
     if !cfg!(target_os = "android") {
@@ -1547,7 +1635,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn cancelling_a_completed_local_join_never_enters_world_and_allows_retry() {
+    fn cancelling_completed_terrain_preparation_never_enters_world_and_allows_retry() {
         let path = std::env::temp_dir().join(format!(
             "rubblekin-cancel-{}-{}.json",
             std::process::id(),
@@ -1575,16 +1663,40 @@ pub(crate) mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(menu.pending.as_ref().unwrap().worker.is_finished());
-        // The user cancels after success is produced but before the render
-        // thread accepts it. This late result must never create a session.
-        menu.cancel();
         let mut app = App::new();
         app.insert_resource(menu)
             .init_resource::<InputFocus>()
             .init_resource::<Time>()
             .add_systems(Update, poll_connection);
+        // Accept the network/world result and start the terrain worker. Even
+        // after all terrain is ready, a late cancel must prevent installation.
+        app.update();
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while !app
+            .world()
+            .resource::<JoinScreen>()
+            .pending
+            .as_ref()
+            .unwrap()
+            .worker
+            .is_finished()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            app.world()
+                .resource::<JoinScreen>()
+                .pending
+                .as_ref()
+                .unwrap()
+                .worker
+                .is_finished()
+        );
+        app.world_mut().resource_mut::<JoinScreen>().cancel();
         app.update();
         assert!(!app.world().contains_resource::<Session>());
+        assert!(!app.world().contains_resource::<PreparedTerrain>());
         assert!(app.world().resource::<JoinScreen>().pending.is_some());
         let deadline = Instant::now() + std::time::Duration::from_secs(5);
         while app.world().resource::<JoinScreen>().pending.is_some() && Instant::now() < deadline {
@@ -1611,6 +1723,92 @@ pub(crate) mod tests {
         drop(app);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("json.lock"));
+    }
+
+    #[test]
+    fn cancelling_the_atlas_worker_keeps_the_menu_responsive_and_releases_the_local_save() {
+        let path = std::env::temp_dir().join(format!(
+            "rubblekin-cancel-atlas-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut menu = JoinScreen::new(
+            "remote.example:7878".into(),
+            "Tester".into(),
+            ServerConfig {
+                bind_addr: "127.0.0.1:0".into(),
+                save_path: path.clone(),
+                seed: 42,
+                generation: rubblekin_core::world::WorldGeneration::GeographyV3,
+                allow_admin: true,
+            },
+            GraphicsQuality::default(),
+            SessionMode::Observer,
+        );
+        menu.start(true);
+        let mut app = App::new();
+        app.insert_resource(menu)
+            .init_resource::<InputFocus>()
+            .init_resource::<Time>()
+            .add_systems(Update, poll_connection);
+        let deadline = Instant::now() + std::time::Duration::from_secs(60);
+        let mut reached_atlas = false;
+        while Instant::now() < deadline {
+            app.update();
+            let menu = app.world().resource::<JoinScreen>();
+            reached_atlas = menu.status.contains("Painting the forests");
+            if reached_atlas {
+                break;
+            }
+            assert!(!app.world().contains_resource::<Session>());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            reached_atlas,
+            "the actual second worker must report its atlas phase"
+        );
+        assert!(
+            app.world()
+                .resource::<JoinScreen>()
+                .status
+                .contains("Painting the forests")
+        );
+        app.world_mut().resource_mut::<JoinScreen>().cancel();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while app.world().resource::<JoinScreen>().pending.is_some() && Instant::now() < deadline {
+            app.update();
+            assert!(!app.world().contains_resource::<Session>());
+            assert!(!app.world().contains_resource::<PreparedTerrain>());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.world().resource::<JoinScreen>().pending.is_none());
+        assert!(
+            app.world()
+                .resource::<JoinScreen>()
+                .status
+                .contains("Join cancelled")
+        );
+        // Retry the same save: only worker-side server shutdown can release
+        // its writer lock. No result or prepared assets from the old join may win.
+        app.world_mut().resource_mut::<JoinScreen>().start(true);
+        let deadline = Instant::now() + std::time::Duration::from_secs(60);
+        while !app.world().contains_resource::<Session>() && Instant::now() < deadline {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            app.world().contains_resource::<Session>(),
+            "{}",
+            app.world().resource::<JoinScreen>().status
+        );
+        assert!(app.world().contains_resource::<PreparedTerrain>());
+        assert!(app.world().resource::<Session>().observer.is_some());
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("lock"));
     }
 
     #[test]

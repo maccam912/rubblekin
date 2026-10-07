@@ -444,9 +444,12 @@ pub(super) fn read(
     let was_open = conversation.open();
     conversation.just_closed = false;
     conversation.input_blocked = was_open;
-    let back = native
-        .read()
-        .any(|key| key.input.state.is_pressed() && key.input.logical_key == Key::BrowserBack);
+    let mut back = false;
+    for key in native.read() {
+        back |= key.input.state.is_pressed()
+            && !key.input.repeat
+            && key.input.logical_key == Key::BrowserBack;
+    }
     if pause.is_some_and(|menu| menu.open || menu.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
         || map.is_some_and(|map| map.open || map.input_blocked)

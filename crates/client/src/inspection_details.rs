@@ -1,6 +1,7 @@
 //! Read current inspection details from replicated state and editable terrain.
 use crate::{GameWorld, Session, inspection::InspectTarget};
 use rubblekin_core::{
+    protocol::{ResidentAction, ResidentRole},
     settlement::{FieldPlot, Village},
     village_assets::BuildingKind,
     world::{Block, BlockPos, CELL_SIZE},
@@ -22,13 +23,12 @@ pub(crate) fn text(world: &GameWorld, session: &Session) -> String {
 fn npc_text(session: &Session) -> String {
     let npc = &session.npc;
     let mut value = format!(
-        "{} · {}{}\n\nHunger   {:.0} / 100\nEnergy    {:.0} / 100\nBerries gathered   {}\n\n{}",
+        "{} · Forager\n{}{}\nBerries gathered   {}\n\n{}\n\n{}",
         npc.name,
         npc.action.label(),
         if npc.forced { " [override]" } else { "" },
-        npc.hunger,
-        npc.energy,
         npc.berries,
+        needs_text(npc.hunger, npc.energy),
         npc.reason,
     );
     if session.can_admin && session.observer.is_none() {
@@ -50,16 +50,56 @@ fn resident_text(world: &GameWorld, session: &Session, id: u64) -> String {
         |cargo| format!("Carrying {:.0} {}", cargo.amount, cargo.kind.name()),
     );
     format!(
-        "{} · {}\n{}\n\n{}\nHunger   {:.0} / 100\nEnergy    {:.0} / 100\n{}\n\n{}",
+        "{} · {}\n{}\n{}\n\n{}\n{}\n\n{}",
         resident.name,
         resident.role.label(),
-        village,
-        resident.action.label(),
-        resident.hunger,
-        resident.energy,
+        resident_activity(resident.action, resident.role),
         cargo,
+        village,
         resident.reason,
+        needs_text(resident.hunger, resident.energy),
     )
+}
+
+fn resident_activity(action: ResidentAction, role: ResidentRole) -> &'static str {
+    match action {
+        // Walking also covers boarding, leaving an airship, and returning to an
+        // interrupted job. The authoritative reason below supplies that detail.
+        ResidentAction::Walking => "Walking to the next stop",
+        ResidentAction::Working => match role {
+            ResidentRole::Farmer => "Working in the field",
+            ResidentRole::Woodcutter => "Gathering timber",
+            ResidentRole::Quarrier => "Quarrying resources",
+            ResidentRole::Miner => "Mining resources",
+            ResidentRole::Trader => "Working",
+        },
+        _ => action.label(),
+    }
+}
+
+fn needs_text(hunger: f32, energy: f32) -> String {
+    // These are descriptive display bands, not additional simulation states.
+    // Village residents seek food at hunger >= 60 and rest at energy <= 30;
+    // hunger grows as food is needed, while energy falls as rest is needed.
+    let hunger_label = if hunger >= 85. {
+        "Very hungry"
+    } else if hunger >= 60. {
+        "Hungry"
+    } else if hunger >= 30. {
+        "Getting hungry"
+    } else {
+        "Well fed"
+    };
+    let energy_label = if energy <= 10. {
+        "Exhausted"
+    } else if energy <= 30. {
+        "Tired"
+    } else if energy < 85. {
+        "Somewhat tired"
+    } else {
+        "Rested"
+    };
+    format!("{hunger_label} · {energy_label}\nHunger {hunger:.0}/100 · Energy {energy:.0}/100")
 }
 
 fn player_text(session: &Session, id: u64) -> String {
@@ -277,5 +317,102 @@ mod tests {
         session.inspected = Some(InspectTarget::Npc);
         session.can_admin = true;
         assert!(!text(&world, &session).contains("F6"));
+    }
+
+    #[test]
+    fn needs_words_explain_opposite_scales_and_preserve_numeric_details() {
+        for (hunger, energy, expected) in [
+            (0., 100., "Well fed · Rested"),
+            (29., 85., "Well fed · Rested"),
+            (30., 84., "Getting hungry · Somewhat tired"),
+            (59., 31., "Getting hungry · Somewhat tired"),
+            (60., 30., "Hungry · Tired"),
+            (84., 11., "Hungry · Tired"),
+            (85., 10., "Very hungry · Exhausted"),
+            (100., 0., "Very hungry · Exhausted"),
+        ] {
+            let text = needs_text(hunger, energy);
+            assert!(text.starts_with(expected), "{text}");
+            assert!(text.contains(&format!("Hunger {hunger:.0}/100 · Energy {energy:.0}/100")));
+        }
+    }
+
+    #[test]
+    fn fixed_resident_inspection_leads_with_activity_cargo_and_live_authoritative_reason() {
+        use rubblekin_core::{
+            protocol::{ResidentSnapshot, ResourceCargo},
+            settlement::ResourceKind,
+        };
+        let (world, mut session) = session();
+        let home = &world.settlements().unwrap().villages[0];
+        session.residents.push(ResidentSnapshot {
+            id: 7,
+            village_id: home.id,
+            name: "Juniper".into(),
+            position: [0.; 3],
+            role: ResidentRole::Farmer,
+            action: ResidentAction::Harvesting,
+            target: None,
+            carrying: Some(ResourceCargo {
+                kind: ResourceKind::Food,
+                amount: 4.,
+            }),
+            hunger: 75.,
+            energy: 20.,
+            reason: "Gathering ripe crops before carrying them to storage".into(),
+            ride: None,
+            deck_position: None,
+        });
+        session.inspected = Some(InspectTarget::Resident(7));
+        let details = text(&world, &session);
+        assert!(
+            details.starts_with("Juniper · Farmer\nHarvesting crops\nCarrying 4 Food"),
+            "{details}"
+        );
+        assert!(details.contains(&home.name));
+        assert!(details.contains(&session.residents[0].reason));
+        assert!(details.contains("Hungry · Tired\nHunger 75/100 · Energy 20/100"));
+        {
+            let resident = &mut session.residents[0];
+            resident.action = ResidentAction::Walking;
+            resident.reason = "Arrived by airship; walking to the trade destination".into();
+            resident.carrying = None;
+            resident.hunger = 25.;
+            resident.energy = 90.;
+        }
+        let updated = text(&world, &session);
+        assert!(updated.contains("Walking to the next stop\nCarrying nothing"));
+        assert!(!updated.contains("Walking to work"));
+        assert!(updated.contains(&session.residents[0].reason));
+        assert!(updated.contains("Well fed · Rested\nHunger 25/100 · Energy 90/100"));
+        assert_eq!(session.inspected, Some(InspectTarget::Resident(7)));
+    }
+
+    #[test]
+    fn moss_keeps_decision_scores_override_and_permission_gated_admin_controls() {
+        let (world, mut session) = session();
+        session.inspected = Some(InspectTarget::Npc);
+        session.npc.reason = "Forage score 60, rest score 25, wander threshold 25; Foraging".into();
+        session.npc.berries = 12;
+        let normal = text(&world, &session);
+        assert!(
+            normal.starts_with("Moss · Forager\nForaging\nBerries gathered   12"),
+            "{normal}"
+        );
+        assert!(normal.contains(&session.npc.reason));
+        assert!(!normal.contains("F6"));
+        session.can_admin = true;
+        assert!(
+            !text(&world, &session).contains("F6"),
+            "observer stays read-only"
+        );
+        session.observer = None;
+        session.npc.forced = true;
+        session.npc.reason = "Admin override: Foraging (clear override to restore autonomy)".into();
+        let overridden = text(&world, &session);
+        assert!(overridden.contains("Foraging [override]"));
+        assert!(overridden.contains(&session.npc.reason));
+        assert!(overridden.contains("F6 forage · F7 rest"));
+        assert!(overridden.contains("F8 autonomous"));
     }
 }
