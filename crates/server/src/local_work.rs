@@ -1,7 +1,7 @@
 //! Two short, physical village activities. Unfinished work belongs only to its
 //! connection; completed effects and wages join the existing durable ledger.
 use rubblekin_core::{
-    economy::{PlayerEconomy, WorkKind, WorkOffer, WorkProgress, WorkSite},
+    economy::{PlayerEconomy, WORK_REACH, WorkKind, WorkOffer, WorkProgress, WorkSite},
     physics::EYE_HEIGHT,
     village_assets::BuildingKind,
     world::{Block, BlockPos, CELL_SIZE, World},
@@ -10,7 +10,6 @@ use rubblekin_core::{
 use crate::{player_economy::MAX_COINS, villages::VillageLife};
 
 const WORK_SECONDS: f32 = 6.0;
-const WORK_REACH: f32 = 2.5;
 const MOVE_LIMIT: f32 = 0.8;
 
 pub(crate) struct ActiveWork {
@@ -54,8 +53,12 @@ fn site_target(
                             cell.z as f32 * CELL_SIZE + 0.25,
                         ]
                     };
-                    distance_squared(feet(a), position)
-                        .total_cmp(&distance_squared(feet(b), position))
+                    let missing_soil =
+                        |cell| !matches!(world.block(cell), Block::Dirt | Block::Grass);
+                    missing_soil(*a).cmp(&missing_soil(*b)).then_with(|| {
+                        distance_squared(feet(a), position)
+                            .total_cmp(&distance_squared(feet(b), position))
+                    })
                 })
                 .ok_or("That field has no planting soil.")?
         }
@@ -339,6 +342,49 @@ mod tests {
         let mut damaged = world.clone();
         damaged.set_block(active.anchor, Block::Stone).unwrap();
         assert!(advance(&damaged, &life, &mut active, position, 106.0).is_err());
+    }
+
+    #[test]
+    fn field_work_uses_nearby_intact_soil_but_keeps_its_started_anchor() {
+        let world = world();
+        let life = VillageLife::new(world);
+        let (site, position) = field();
+        let (nearest, _, _) = site_target(world, site, position).unwrap();
+        let mut damaged = world.clone();
+        damaged.set_block(nearest, Block::Air).unwrap();
+
+        let (nearby, anchor) = offer(&damaged, &life, site, position).unwrap();
+        assert_ne!(anchor, nearest);
+        assert!(matches!(damaged.block(anchor), Block::Dirt | Block::Grass));
+        assert!(nearby.unavailable_reason.is_none());
+        let mut active = start(&damaged, &life, site, position, 0.0).unwrap();
+        assert!(!advance(&damaged, &life, &mut active, position, 5.0).unwrap());
+        damaged.set_block(active.anchor, Block::Air).unwrap();
+        assert!(
+            offer(&damaged, &life, site, position)
+                .unwrap()
+                .0
+                .unavailable_reason
+                .is_none()
+        );
+        assert!(
+            advance(&damaged, &life, &mut active, position, 6.0)
+                .unwrap_err()
+                .contains("intact planting soil")
+        );
+
+        for soil in world.settlements().unwrap().villages[0].fields[0].plant_positions() {
+            damaged.set_block(soil, Block::Air).unwrap();
+        }
+        let (unavailable, fallback) = offer(&damaged, &life, site, position).unwrap();
+        assert_eq!(fallback, nearest);
+        assert!(
+            unavailable
+                .unavailable_reason
+                .unwrap()
+                .contains("intact planting soil")
+        );
+        assert!(start(&damaged, &life, site, position, 0.0).is_err());
     }
 
     #[test]

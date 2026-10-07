@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const CARGO_CAPACITY: u32 = 24;
 pub const DELIVERY_AMOUNT: u32 = 6;
 pub const MARKET_REACH: f32 = 3.0;
+pub const WORK_REACH: f32 = 2.5;
 
 pub fn can_reach_market(position: [f32; 3], market: [f32; 3]) -> bool {
     position

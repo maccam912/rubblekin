@@ -1133,10 +1133,24 @@ fn value_noise(x: f32, z: f32, seed: u32) -> f32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn geography_v4_buildings_lanes_and_tree_identity_stay_frozen() {
+    // The released generator differs at these two seed-42 anchors between
+    // macOS arm64 and Linux amd64: ground is within 0.000122 m of a 0.5 m
+    // boundary, so floor() selects adjacent tree-base cells. Record that
+    // measured ambiguity explicitly; every other integer remains exact.
+    // A general epsilon cutoff would itself introduce a new rounding boundary.
+    fn golden_tree_y(tree: GeneratedTree) -> i32 {
+        let upper = match (tree.base.x, tree.base.z) {
+            (-11_151, -14_201) => 1_372,
+            (3_061, 9_727) => 1_762,
+            _ => return tree.base.y,
+        };
+        assert!((upper - 1..=upper).contains(&tree.base.y));
+        upper
+    }
+
+    fn world_identity(generation: WorldGeneration) -> u64 {
         use crate::village_assets::{block_at, dimensions};
-        let world = World::generate(42, WorldGeneration::GeographyV4);
+        let world = World::generate(42, generation);
         let mut signature = 0xcbf29ce484222325_u64;
         let mut add = |n: u32| {
             for b in n.to_le_bytes() {
@@ -1178,7 +1192,7 @@ mod tests {
                 if let Some(t) = world.tree_at(x, z) {
                     for n in [
                         t.base.x,
-                        t.base.y,
+                        golden_tree_y(t),
                         t.base.z,
                         t.trunk_height,
                         t.crown_radius,
@@ -1189,7 +1203,48 @@ mod tests {
                 }
             }
         }
-        assert_eq!(signature, 14_720_953_615_095_536_853);
+        for site in &world.settlements().unwrap().roadside_landmarks {
+            let b = &site.building;
+            for n in [
+                b.origin.x,
+                b.origin.y,
+                b.origin.z,
+                i32::from(b.rotation),
+                b.kind as i32,
+            ] {
+                add(n as u32);
+            }
+            let [w, h, d] = dimensions(b.kind);
+            for x in 0..w {
+                for y in 0..h {
+                    for z in 0..d {
+                        add(block_at(b.kind, x, y, z).unwrap() as u32);
+                    }
+                }
+            }
+            for p in &site.approach.points {
+                for n in p {
+                    add(n.to_bits());
+                }
+            }
+        }
+        signature
+    }
+
+    #[test]
+    fn geography_v4_buildings_lanes_and_tree_identity_stay_frozen() {
+        assert_eq!(
+            world_identity(WorldGeneration::GeographyV4),
+            12_027_093_260_194_524_862
+        );
+    }
+
+    #[test]
+    fn geography_v5_buildings_lanes_trees_and_roadside_identity_stay_frozen() {
+        assert_eq!(
+            world_identity(WorldGeneration::GeographyV5),
+            5_569_002_593_533_730_321
+        );
     }
 
     #[test]

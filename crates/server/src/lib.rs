@@ -184,6 +184,8 @@ struct Connection {
     player: Option<PlayerSnapshot>,
     profile_id: Option<String>,
     last_market_request: Option<Instant>,
+    last_market_view: Option<Instant>,
+    last_work_view: Option<Instant>,
     active_work: Option<local_work::ActiveWork>,
     last_work_action_id: Option<u64>,
     connected_at: Instant,
@@ -211,6 +213,8 @@ impl Connection {
             player: None,
             profile_id: None,
             last_market_request: None,
+            last_market_view: None,
+            last_work_view: None,
             active_work: None,
             last_work_action_id: None,
             connected_at: now,
@@ -1054,13 +1058,15 @@ fn handle_market(
             .player
             .as_ref()
             .ok_or("Only players can use markets.")?;
-        if connection
-            .last_market_request
-            .is_some_and(|last| last.elapsed() < Duration::from_millis(100))
-        {
+        let last_request = if action == MarketAction::View {
+            &mut connection.last_market_view
+        } else {
+            &mut connection.last_market_request
+        };
+        if last_request.is_some_and(|last| last.elapsed() < Duration::from_millis(100)) {
             return Err("Please wait a moment before the next market request.".into());
         }
-        connection.last_market_request = Some(Instant::now());
+        *last_request = Some(Instant::now());
         if let Some(village) = village_id {
             player_economy::near_market(&sim.world, village, player.body.position)?;
         }
@@ -1169,16 +1175,18 @@ fn handle_work(
             }
             connection.last_work_action_id = Some(request_id);
         }
-        // Cancelling never spends a durable transaction or waits on a view's
-        // rate limit. Starting/querying shares the existing market request cap.
+        // Passive views cannot block a deliberate action. Starts share the
+        // market mutation cap; cancelling remains immediate.
         if action != WorkAction::Cancel {
-            if connection
-                .last_market_request
-                .is_some_and(|last| last.elapsed() < Duration::from_millis(100))
-            {
+            let last_request = if action == WorkAction::View {
+                &mut connection.last_work_view
+            } else {
+                &mut connection.last_market_request
+            };
+            if last_request.is_some_and(|last| last.elapsed() < Duration::from_millis(100)) {
                 return Err("Please wait a moment before the next work request.".into());
             }
-            connection.last_market_request = Some(Instant::now());
+            *last_request = Some(Instant::now());
         }
         match action {
             WorkAction::View => Ok(String::new()),
@@ -1359,6 +1367,120 @@ fn validate_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passive_work_and_market_views_do_not_spend_the_action_rate_limit() {
+        use rubblekin_core::economy::{WorkKind, WorkSite};
+
+        let world = World::generate(42, WorldGeneration::GeographyV5);
+        let village = &world.settlements().unwrap().villages[0];
+        let soil = village.fields[0].plant_positions().next().unwrap();
+        let site = WorkSite {
+            village_id: village.id,
+            kind: WorkKind::TendField,
+            index: 0,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut connection = Connection::new(listener.accept().unwrap().0).unwrap();
+        let player = PlayerSnapshot {
+            id: 1,
+            name: "Worker".into(),
+            body: Body::new([
+                soil.x as f32 * 0.5 + 0.25,
+                (soil.y + 1) as f32 * 0.5,
+                soil.z as f32 * 0.5 + 0.25,
+            ]),
+            yaw: 0.0,
+            last_input_sequence: 0,
+            movement_epoch: 0,
+            ride: None,
+            deck_position: None,
+        };
+        let profile = "00000000000000000000000000000001".to_owned();
+        let saved = player_economy::SavedPlayer::new(&player);
+        connection.mode = Some(SessionMode::Player);
+        connection.player = Some(player);
+        connection.profile_id = Some(profile.clone());
+        let mut connections = BTreeMap::from([(1, connection)]);
+        let mut sim = Simulation {
+            npc: npc::Forager::new(&world),
+            villages: villages::VillageLife::new(&world),
+            world,
+            profiles: BTreeMap::from([(profile, saved)]),
+            world_time: 0.0,
+        };
+        let mut budget = 1;
+        handle_market(
+            1,
+            100,
+            None,
+            0,
+            MarketAction::View,
+            &mut connections,
+            &mut sim,
+            &ServerConfig::default(),
+            &mut budget,
+        )
+        .unwrap();
+        handle_work(1, 101, WorkAction::View, &mut connections, &sim);
+        assert!(connections[&1].last_market_view.is_some());
+        assert!(connections[&1].last_work_view.is_some());
+        assert!(connections[&1].last_market_request.is_none());
+        assert!(connections[&1].last_work_action_id.is_none());
+        // Future timestamps keep the limit closed without timing assumptions
+        // on slow CI machines. Both reads remain capped independently.
+        let blocked_until = Instant::now() + Duration::from_secs(60);
+        connections.get_mut(&1).unwrap().last_work_view = Some(blocked_until);
+        connections.get_mut(&1).unwrap().last_market_view = Some(blocked_until);
+        handle_work(1, 102, WorkAction::View, &mut connections, &sim);
+        let reply: ServerMessage =
+            serde_json::from_slice(connections[&1].outgoing.back().unwrap()).unwrap();
+        assert!(matches!(
+            reply,
+            ServerMessage::WorkState {
+                accepted: false,
+                ..
+            }
+        ));
+        handle_market(
+            1,
+            103,
+            None,
+            0,
+            MarketAction::View,
+            &mut connections,
+            &mut sim,
+            &ServerConfig::default(),
+            &mut budget,
+        )
+        .unwrap();
+        let replies = &connections[&1].outgoing;
+        let reply: ServerMessage = serde_json::from_slice(&replies[replies.len() - 2]).unwrap();
+        assert!(matches!(
+            reply,
+            ServerMessage::MarketState {
+                accepted: false,
+                ..
+            }
+        ));
+
+        handle_work(1, 1, WorkAction::Start { site }, &mut connections, &sim);
+        assert!(connections[&1].active_work.is_some());
+        connections.get_mut(&1).unwrap().last_market_request = Some(blocked_until);
+        handle_work(1, 2, WorkAction::Cancel, &mut connections, &sim);
+        assert!(connections[&1].active_work.is_none());
+        handle_work(1, 3, WorkAction::Start { site }, &mut connections, &sim);
+        let reply: ServerMessage =
+            serde_json::from_slice(connections[&1].outgoing.back().unwrap()).unwrap();
+        assert!(
+            matches!(reply, ServerMessage::WorkState { accepted: false, notice, .. }
+            if notice.contains("wait a moment"))
+        );
+        assert!(connections[&1].active_work.is_none());
+        assert_eq!(connections[&1].last_work_action_id, Some(3));
+        assert_eq!(budget, 1);
+    }
 
     #[test]
     fn a_full_server_spawns_every_player_in_distinct_clear_space() {
