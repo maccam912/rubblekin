@@ -1,12 +1,13 @@
 use crate::{
     airships::AirshipRide,
+    economy::{MarketAction, MarketView, PlayerEconomy},
     physics::{Body, MoveInput},
     settlement::ResourceKind,
     world::{Block, BlockEdit, BlockPos, WorldGeneration},
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -25,6 +26,8 @@ pub enum ClientMessage {
         name: String,
         #[serde(default)]
         mode: SessionMode,
+        #[serde(default)]
+        profile_id: Option<String>,
     },
     Input {
         sequence: u64,
@@ -48,6 +51,12 @@ pub enum ClientMessage {
     },
     AdminCommand {
         command: String,
+    },
+    Market {
+        request_id: u64,
+        village_id: Option<u32>,
+        revision: u64,
+        action: MarketAction,
     },
 }
 
@@ -97,6 +106,13 @@ pub enum ServerMessage {
     },
     AdminCommandResult {
         text: String,
+    },
+    MarketState {
+        request_id: u64,
+        ledger: PlayerEconomy,
+        market: Option<MarketView>,
+        notice: String,
+        accepted: bool,
     },
 }
 

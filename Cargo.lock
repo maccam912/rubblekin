@@ -5211,6 +5211,7 @@ name = "rubblekin_client"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "getrandom 0.3.4",
  "jni",
  "rubblekin_core",
  "rubblekin_server",

@@ -378,6 +378,7 @@ pub fn read(
         Option<Res<crate::airships::PilotConversation>>,
         Option<Res<crate::admin_console::AdminConsole>>,
         Option<ResMut<crate::world_map::WorldMap>>,
+        Option<Res<crate::market::MarketPanel>>,
     ),
     input: (
         Res<ButtonInput<KeyCode>>,
@@ -410,7 +411,7 @@ pub fn read(
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
 ) {
     let (keys, mouse, wheel) = input;
-    let (conversation, console, mut map) = modals;
+    let (conversation, console, mut map, market) = modals;
     pause.just_closed = false;
     // Drain the full frame: short-circuiting would replay later Back events on
     // the next frame and could reopen the menu immediately after closing it.
@@ -447,6 +448,7 @@ pub fn read(
     }
     let was_open = pause.open;
     if console.is_some_and(|console| console.input_blocked)
+        || market.is_some_and(|market| market.open || market.input_blocked)
         || map
             .as_ref()
             .is_some_and(|map| map.open || map.input_blocked)

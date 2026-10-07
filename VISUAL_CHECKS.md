@@ -14,7 +14,7 @@ qa_run="$(mktemp -d "${TMPDIR:-/tmp}/rubblekin-visual.XXXXXX")"
 mkdir -p "$qa_run/artifacts"
 cd "$qa_run"
 "$qa_repo/target/debug/rubblekin" --local --bind 127.0.0.1:17889 \
-  --seed 42 --save "$qa_run/world.json" --balanced \
+  --seed 42 --generation v3 --save "$qa_run/world.json" --balanced \
   --screenshot "$qa_run/artifacts/initial.png"
 ```
 
@@ -29,7 +29,7 @@ The separate working directory isolates `graphics.json`, saves and F12 captures.
 This fixed seed has a direct route between **Pinevale (5)** and **Willowbank (9)**. The read-only helper below prints village/port coordinates and routes once, then the scheduled fleet at each simulation time supplied on stdin:
 
 ```sh
-printf '0\n180\n360\n' | "$qa_repo/target/debug/examples/airships" 42
+printf '0\n180\n360\n' | "$qa_repo/target/debug/examples/airships" 42 v3
 ```
 
 Use the existing local admin console to `teleport X Y Z` to Pinevale's `port_position`, then walk to the Willowbank berth and board physically. If another character occupies the exact point, wait or choose nearby clear space. Keep the pilot dialog open across departure and arrival: the live destination and countdown should agree with the aboard HUD. Pause and other panels do not stop the timetable.
@@ -41,3 +41,13 @@ The helper uses authoritative `f64` simulation seconds, not wall-clock time or t
 ## Evidence to keep
 
 Record the commit, OS/GPU, generation/seed, exact graphics distances, window size, route/direction, simulation time when known, and whether this was a fresh start or reload. Keep the small set of useful screenshots and the relevant log next to those notes. Record actual observations and incomplete checks separately. Screenshots do not measure frame-time distributions, and this route does not establish Android lifecycle or other-device performance.
+
+## Market and regional building content
+
+Use a fresh path with `--generation v4 --name ContentTester` for this content route. Keep `player-profiles.json` beside this isolated client data; repeat with the same character name to check saved coins, cargo, contract, and location. Existing V3 saves also have market/delivery actions, but retain their original buildings.
+
+At seed 42 Pinemead, the market entrance is `(2823.75,205.5,-1920.25)`. Open B/Cargo nearby, accept a delivery, and verify the six sealed units reduce the origin stock. Walk/ride to the named destination, deliver for 12 coins, then buy/sell an ordinary good. Check insufficient coins, full cargo, and remote actions remain unavailable. Leave/reopen the same save and verify progress and position. Admin coordinate staging checks market transactions but does not establish a full physical delivery journey.
+
+For regional assets, visit Willowmead’s windmill entrance `(-4303.25,197.5,5728.25)`, Willowvale’s lookout `(-1355.75,226.0,-5679.75)`, and Fernwood’s timber houses around `(-12287.75,38.5,-3839.75)`. Verify clear approaches, interiors, stairs up/down, full silhouettes before detailed terrain arrives, and matching map/inspection labels. Windmill sails are stationary. A source-derived asset sheet can be regenerated with `cargo run --locked -p rubblekin_core --example village_asset_catalog -- /tmp/village-assets.svg`.
+
+Repeat the market in an 840×400 `--touch --low` desktop preview: Cargo/Market should be direct, content must scroll, and Start/Buy/Sell/Delivery/Close should remain large and reachable. This layout preview does not establish physical Android behavior.

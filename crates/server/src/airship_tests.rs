@@ -14,6 +14,7 @@ impl Fixture {
         let world = World::generate(42, WorldGeneration::GeographyV3);
         let network = AirshipNetwork::new(&world);
         let sim = Simulation {
+            profiles: Default::default(),
             npc: npc::Forager::new(&world),
             villages: villages::VillageLife::new(&world),
             world,

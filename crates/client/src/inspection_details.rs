@@ -116,7 +116,7 @@ fn player_text(session: &Session, id: u64) -> String {
 
 fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> String {
     let block = world.block(position);
-    let mut value = format!(
+    let details = format!(
         "{} block\n\nCell {}, {}, {}\n0.5 m × 0.5 m × 0.5 m",
         block.name(),
         position.x,
@@ -124,9 +124,9 @@ fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> Strin
         position.z,
     );
     if block == Block::Air {
-        value.push_str("\n\nThe inspected block was removed.");
-        return value;
+        return format!("{details}\n\nThe inspected block was removed.");
     }
+    let mut value = details.clone();
     if let Some((village, building)) = world.settlements().and_then(|plan| {
         plan.villages.iter().find_map(|village| {
             village.buildings.iter().find_map(|building| {
@@ -137,7 +137,17 @@ fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> Strin
             })
         })
     }) {
-        value.push_str(&format!("\n\n{:?}\n{}", building.kind, village.name));
+        value = format!(
+            "{}\n{} · {}\n\n{}\n\n{}",
+            building_name(building.kind),
+            village.name,
+            village.kind.name(),
+            building_description(building.kind),
+            details
+        );
+        if building.kind == BuildingKind::Market && session.observer.is_none() {
+            value.push_str("\n\nStand at the entrance, then press B or tap Cargo to trade or take delivery work.");
+        }
         if matches!(
             building.kind,
             BuildingKind::Storehouse | BuildingKind::Market
@@ -150,6 +160,42 @@ fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> Strin
         }
     }
     value
+}
+
+fn building_name(kind: BuildingKind) -> &'static str {
+    match kind {
+        BuildingKind::Cottage => "Cottage",
+        BuildingKind::Workshop => "Workshop",
+        BuildingKind::Storehouse => "Storehouse",
+        BuildingKind::Market => "Market",
+        BuildingKind::TimberCabin => "Timber cabin",
+        BuildingKind::MasonryCottage => "Masonry cottage",
+        BuildingKind::UplandHouse => "Upland house",
+        BuildingKind::Windmill => "Windmill",
+        BuildingKind::Lookout => "Lookout",
+    }
+}
+
+fn building_description(kind: BuildingKind) -> &'static str {
+    match kind {
+        BuildingKind::Cottage => "A compact furnished home with a hearth and a brick roof.",
+        BuildingKind::Workshop => "Covered workbenches and a stone work surface serve the village.",
+        BuildingKind::Storehouse => {
+            "Village storage, with timber bins beside an open central aisle."
+        }
+        BuildingKind::Market => "Open stalls for village trade and paid deliveries.",
+        BuildingKind::TimberCabin => "Timber walls and a low wooden roof frame a furnished home.",
+        BuildingKind::MasonryCottage => {
+            "Stone corners and a low hipped roof frame a furnished home."
+        }
+        BuildingKind::UplandHouse => {
+            "A steep brick roof and high gable windows distinguish this home."
+        }
+        BuildingKind::Windmill => {
+            "A tall village landmark with four fixed sails and a ground-floor room."
+        }
+        BuildingKind::Lookout => "Stairs lead to a raised, covered viewing deck.",
+    }
 }
 
 fn farm_text(world: &GameWorld, session: &Session, id: u32, index: usize) -> String {
@@ -258,6 +304,102 @@ mod tests {
             SessionMode::Observer,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn regional_building_inspection_leads_with_the_actual_place_and_preserves_selected_cell() {
+        let (_, mut session) = session();
+        let mut world = GameWorld::generate(42, WorldGeneration::GeographyV4);
+        let sites: Vec<_> = world
+            .settlements()
+            .unwrap()
+            .villages
+            .iter()
+            .flat_map(|village| {
+                village
+                    .buildings
+                    .iter()
+                    .map(|building| (village.name.clone(), building.kind, building.origin))
+            })
+            .collect();
+        let mut landmarks = 0;
+        let mut regional_homes = 0;
+        for (name, kind, position) in &sites {
+            if !matches!(
+                kind,
+                BuildingKind::TimberCabin
+                    | BuildingKind::MasonryCottage
+                    | BuildingKind::UplandHouse
+                    | BuildingKind::Windmill
+                    | BuildingKind::Lookout
+            ) {
+                continue;
+            }
+            session.inspected = Some(InspectTarget::Block(*position));
+            let details = text(&world, &session);
+            assert!(
+                details.starts_with(&format!("{}\n{}", building_name(*kind), name)),
+                "{details}"
+            );
+            assert!(details.contains(&format!(
+                "Cell {}, {}, {}",
+                position.x, position.y, position.z
+            )));
+            assert!(details.contains(&format!("{} block", world.block(*position).name())));
+            assert!(!details.contains("Nothing under"));
+            if kind.is_landmark() {
+                landmarks += 1;
+            } else {
+                regional_homes += 1;
+            }
+        }
+        assert!(landmarks > 0 && regional_homes > 0);
+        let position = sites
+            .iter()
+            .find(|(_, kind, _)| kind.is_landmark())
+            .unwrap()
+            .2;
+        session.inspected = Some(InspectTarget::Block(position));
+        world.set_block(position, Block::Air).unwrap();
+        let removed = text(&world, &session);
+        assert!(removed.contains("inspected block was removed"));
+        assert!(!removed.contains("viewing deck") && !removed.contains("four fixed sails"));
+    }
+
+    #[test]
+    fn market_inspection_keeps_live_stores_and_only_offers_controls_to_a_player() {
+        let (world, mut session) = session();
+        let village = &world.settlements().unwrap().villages[0];
+        let market = village
+            .buildings
+            .iter()
+            .find(|building| building.kind == BuildingKind::Market)
+            .unwrap();
+        session.inspected = Some(InspectTarget::Block(market.origin));
+        session.villages.push(VillageSnapshot {
+            id: village.id,
+            food: 13.,
+            timber: 2.,
+            stone: 3.,
+            clay: 4.,
+            iron: 5.,
+            crop_growth: 0.,
+            population: 6,
+            housing_capacity: 6,
+            food_reserve: 10.,
+            capacity_for_growth: false,
+        });
+        let observer = text(&world, &session);
+        assert!(observer.starts_with("Market\n"));
+        assert!(observer.contains("Food 13"));
+        assert!(!observer.contains("press B"));
+        session.observer = None;
+        session.villages[0].food = 21.;
+        let player = text(&world, &session);
+        assert!(player.contains("Food 21") && !player.contains("Food 13"));
+        assert!(
+            player.contains("Stand at the entrance") && player.contains("press B or tap Cargo")
+        );
     }
 
     #[test]

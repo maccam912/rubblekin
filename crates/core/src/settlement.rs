@@ -12,6 +12,9 @@ const SITE_SPACING: f32 = 1_600.0;
 const MAX_VILLAGES: usize = 10;
 const CATCHMENT_STEP: f32 = 32.0;
 const CATCHMENT_RADIUS: i32 = 12;
+// Optional landmarks need room for their silhouette and a clear approach view.
+// This remains versioned content: V3 contains none of these building kinds.
+const LANDMARK_TREE_APRON: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResourceKind {
@@ -227,6 +230,46 @@ struct Candidate {
 }
 
 impl SettlementPlan {
+    /// V4 is additive to the frozen V3 plan: retain IDs, working plots, routes
+    /// and door levels, then choose regional homes and one optional landmark.
+    pub(crate) fn add_regional_buildings(&mut self, world: &World) {
+        let g = world.geography().expect("settlements require geography");
+        for village in &mut self.villages {
+            let h = hash(village.id as i32, 0, world.seed.wrapping_add(419));
+            let regional = if village.center[1] > 220.0 {
+                BuildingKind::UplandHouse
+            } else {
+                match village.kind {
+                    VillageKind::Timber => BuildingKind::TimberCabin,
+                    VillageKind::Quarry | VillageKind::Mining => BuildingKind::MasonryCottage,
+                    VillageKind::Farming => match h % 3 {
+                        0 => BuildingKind::TimberCabin,
+                        1 => BuildingKind::MasonryCottage,
+                        _ => BuildingKind::UplandHouse,
+                    },
+                }
+            };
+            for (index, home) in village.buildings.iter_mut().take(6).enumerate() {
+                // Most homes share regional architecture; an occasional old
+                // cottage keeps each street from becoming a repeated stamp.
+                if index as u32 != h % 6 {
+                    home.kind = regional;
+                }
+            }
+            let kind = if village.kind == VillageKind::Farming {
+                BuildingKind::Windmill
+            } else {
+                BuildingKind::Lookout
+            };
+            if let Some((plot, lane)) = landmark_site(g, village, &self.trails, kind, h) {
+                village.buildings.push(plot);
+                village.lanes.push(lane);
+            }
+        }
+        self.buckets.clear();
+        self.build_index();
+    }
+
     pub fn generate(world: &World) -> Self {
         let geography = world.geography().expect("settlements require geography");
         let resources = generate_deposits(geography, world.seed);
@@ -468,12 +511,17 @@ impl SettlementPlan {
         for (vi, v) in self.villages.iter().enumerate() {
             for (bi, b) in v.buildings.iter().enumerate() {
                 let [w, _, d] = b.dimensions();
+                let tree_margin = if b.kind.is_landmark() {
+                    LANDMARK_TREE_APRON + 3.0
+                } else {
+                    4.0
+                };
                 bounds.push((
                     Feature::Building(vi, bi),
-                    b.origin.x as f32 * CELL_SIZE - 4.0,
-                    b.origin.z as f32 * CELL_SIZE - 4.0,
-                    (b.origin.x + w) as f32 * CELL_SIZE + 4.0,
-                    (b.origin.z + d) as f32 * CELL_SIZE + 4.0,
+                    b.origin.x as f32 * CELL_SIZE - tree_margin,
+                    b.origin.z as f32 * CELL_SIZE - tree_margin,
+                    (b.origin.x + w) as f32 * CELL_SIZE + tree_margin,
+                    (b.origin.z + d) as f32 * CELL_SIZE + tree_margin,
                 ));
             }
             for (fi, f) in v.fields.iter().enumerate() {
@@ -521,10 +569,15 @@ impl SettlementPlan {
             Feature::Building(vi, bi) => {
                 let b = &self.villages[vi].buildings[bi];
                 let [w, _, d] = b.dimensions();
-                x >= b.origin.x as f32 * CELL_SIZE - radius - 1.5
-                    && x <= (b.origin.x + w) as f32 * CELL_SIZE + radius + 1.5
-                    && z >= b.origin.z as f32 * CELL_SIZE - radius - 1.5
-                    && z <= (b.origin.z + d) as f32 * CELL_SIZE + radius + 1.5
+                let apron = if b.kind.is_landmark() {
+                    LANDMARK_TREE_APRON
+                } else {
+                    1.5
+                };
+                x >= b.origin.x as f32 * CELL_SIZE - radius - apron
+                    && x <= (b.origin.x + w) as f32 * CELL_SIZE + radius + apron
+                    && z >= b.origin.z as f32 * CELL_SIZE - radius - apron
+                    && z <= (b.origin.z + d) as f32 * CELL_SIZE + radius + apron
             }
             Feature::Field(vi, fi) => {
                 let p = &self.villages[vi].fields[fi];
@@ -1095,10 +1148,108 @@ fn lane_height(
 ) -> f32 {
     let mut height = profile[0] + (x - center[0]) * profile[1] + (z - center[2]) * profile[2];
     for building in buildings {
+        if building.kind.is_landmark() {
+            continue;
+        }
         let entry = building.entrance();
         height = height.max(entry[1] - distance2(x, z, entry[0], entry[2]).sqrt() * 0.25);
     }
     (height / CELL_SIZE).round() * CELL_SIZE
+}
+
+fn landmark_site(
+    g: &Geography,
+    village: &Village,
+    trails: &[Trail],
+    kind: BuildingKind,
+    seed: u32,
+) -> Option<(BuildingPlot, Trail)> {
+    let clear = |x: f32, z: f32, margin: f32| {
+        village.buildings.iter().all(|b| {
+            let [w, _, d] = b.dimensions();
+            x < b.origin.x as f32 * CELL_SIZE - margin
+                || x > (b.origin.x + w) as f32 * CELL_SIZE + margin
+                || z < b.origin.z as f32 * CELL_SIZE - margin
+                || z > (b.origin.z + d) as f32 * CELL_SIZE + margin
+        }) && village.fields.iter().all(|f| {
+            x < f.origin.x as f32 * CELL_SIZE - margin
+                || x > (f.origin.x + f.width) as f32 * CELL_SIZE + margin
+                || z < f.origin.z as f32 * CELL_SIZE - margin
+                || z > (f.origin.z + f.depth) as f32 * CELL_SIZE + margin
+        })
+    };
+    for radius in [64.0, 80.0, 96.0, 112.0] {
+        for direction in 0..24 {
+            let angle = (direction as f32 + (seed % 24) as f32) * std::f32::consts::TAU / 24.0;
+            let x = village.center[0] + angle.cos() * radius;
+            let z = village.center[2] + angle.sin() * radius;
+            // Existing airship approaches use offsets up to 24 m beside trails.
+            // Leave another 21 m for the deck, ramps and this building's eaves.
+            if !clear(x, z, 12.0)
+                || trails.iter().any(|t| {
+                    t.points
+                        .windows(2)
+                        .any(|p| segment_distance(x, z, p[0], p[1]).0 < 45.0)
+                })
+            {
+                continue;
+            }
+            let rotation = if angle.cos().abs() > angle.sin().abs() {
+                if angle.cos() > 0.0 { 3 } else { 1 }
+            } else if angle.sin() > 0.0 {
+                0
+            } else {
+                2
+            };
+            let Some(mut plot) = place_building(g, kind, x, z, rotation) else {
+                continue;
+            };
+            let entrance = plot.entrance();
+            let floor = village.lane_height(entrance[0], entrance[2]);
+            let natural_floor = (plot.origin.y + 1) as f32 * CELL_SIZE;
+            if !(0.0..=3.0).contains(&(floor - natural_floor)) {
+                continue;
+            }
+            plot.origin.y = (floor / CELL_SIZE).round() as i32 - 1;
+            let entry = plot.entrance();
+            let Some(anchor) = village
+                .lanes
+                .iter()
+                .flat_map(|l| &l.points)
+                .filter(|p| clear(p[0], p[2], 1.5))
+                .min_by(|a, b| {
+                    distance2(a[0], a[2], entry[0], entry[2])
+                        .total_cmp(&distance2(b[0], b[2], entry[0], entry[2]))
+                })
+            else {
+                continue;
+            };
+            let points = local_path(
+                g,
+                &village.buildings,
+                village.center,
+                village.ground_profile,
+                &[*anchor, entry],
+            );
+            if points
+                .iter()
+                .any(|p| !clear(p[0], p[2], 1.5) || g.sample(p[0], p[2]).water.is_some())
+            {
+                continue;
+            }
+            return Some((
+                plot,
+                Trail {
+                    from: village.id,
+                    to: village.id,
+                    points,
+                    width: 2.5,
+                    terrain_heights: Vec::new(),
+                },
+            ));
+        }
+    }
+    None
 }
 fn local_path(
     g: &Geography,

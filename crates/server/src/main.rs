@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use rubblekin_core::world::WorldGeneration;
 use rubblekin_server::{ServerConfig, spawn};
 
 fn main() -> io::Result<()> {
@@ -21,6 +22,18 @@ fn main() -> io::Result<()> {
         match argument.as_str() {
             "--bind" => config.bind_addr = value(&mut args, "--bind")?,
             "--save" => config.save_path = PathBuf::from(value(&mut args, "--save")?),
+            "--generation" => {
+                config.generation = match value(&mut args, "--generation")?.as_str() {
+                    "v3" => WorldGeneration::GeographyV3,
+                    "v4" => WorldGeneration::GeographyV4,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--generation requires v3 or v4",
+                        ));
+                    }
+                };
+            }
             "--seed" => {
                 config.seed = value(&mut args, "--seed")?.parse().map_err(|_| {
                     io::Error::new(
@@ -32,7 +45,7 @@ fn main() -> io::Result<()> {
             "--allow-admin" => config.allow_admin = true,
             "--help" | "-h" => {
                 println!(
-                    "rubblekin-server [--bind 0.0.0.0:7878] [--save saves/world.json] [--seed 42] [--allow-admin]\n\n--allow-admin grants developer controls to EVERY connected player and allows read-only observer sessions. Use only on a trusted development server.\nExisting saves retain their seed and generation. New save paths generate inhabited villages and natural resources. The world keeps simulating without players; server downtime is not replayed."
+                    "rubblekin-server [--bind 0.0.0.0:7878] [--save saves/world.json] [--seed 42] [--generation v3|v4] [--allow-admin]\n\n--allow-admin grants developer controls to EVERY connected player and allows read-only observer sessions. Use only on a trusted development server.\nExisting saves retain their seed and generation. New save paths default to v4 villages; --generation v3 reproduces the earlier terrain. The world keeps simulating without players; server downtime is not replayed."
                 );
                 return Ok(());
             }

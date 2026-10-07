@@ -1,6 +1,6 @@
 //! Inspect the generated fleet without a client or save changes.
 //! Feed simulation times (seconds) on stdin after the initial `ready` JSON line.
-//! Example: printf '0\n180\n' | cargo run -p rubblekin_core --example airships -- 42
+//! Example: printf '0\n180\n' | cargo run -p rubblekin_core --example airships -- 42 v4
 use std::io::{self, BufRead, Write};
 
 use rubblekin_core::{
@@ -11,14 +11,22 @@ use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() > 1 || args.first().is_some_and(|arg| arg == "--help") {
+    if args.first().is_some_and(|arg| arg == "--help") {
         println!(
-            "airships [SEED]\nReads simulation times in seconds from stdin; prints one JSON line per time.\nUses unedited GeographyV3. Does not connect, move players, or modify saves."
+            "airships [SEED] [v3|v4]\nReads simulation times in seconds from stdin; prints one JSON line per time.\nUses unedited GeographyV4 by default. Does not connect, move players, or modify saves."
         );
         return Ok(());
     }
+    if args.len() > 2 {
+        return Err("Usage: airships [SEED] [v3|v4]".into());
+    }
     let seed = args.first().map_or(Ok(42), |arg| arg.parse::<u32>())?;
-    let world = World::generate(seed, WorldGeneration::GeographyV3);
+    let generation = match args.get(1).map(String::as_str) {
+        None | Some("v4") => WorldGeneration::GeographyV4,
+        Some("v3") => WorldGeneration::GeographyV3,
+        _ => return Err("Generation must be v3 or v4".into()),
+    };
+    let world = World::generate(seed, generation);
     let network = AirshipNetwork::try_new(&world)?;
     let villages = &world
         .settlements()
@@ -31,9 +39,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         json!({
             "ready": true,
             "seed": seed,
-            "generation": "GeographyV3",
+            "generation": generation,
             "villages": villages.iter().map(|v| json!({
                 "id": v.id, "name": v.name, "position": v.center,
+                "market_position": v.market,
                 "port_position": network.port(v.id).map(|port| port.position),
             })).collect::<Vec<_>>(),
             "routes": network.routes().iter().map(|route| json!({

@@ -6,6 +6,7 @@ mod airships;
 mod navigation;
 mod npc;
 mod persistence;
+mod player_economy;
 mod villages;
 
 #[cfg(test)]
@@ -33,6 +34,7 @@ use std::{
 use persistence::{MAX_EDITS, Simulation};
 use rubblekin_core::{
     airships::{AirshipNetwork, deck_position, initial_deck_position, pilot_position},
+    economy::{MarketAction, PlayerEconomy},
     physics::{
         Body, EYE_HEIGHT, MoveInput, PLAYER_HEIGHT, PLAYER_RADIUS, character_position_is_clear,
         move_character_with_airships,
@@ -67,7 +69,7 @@ impl Default for ServerConfig {
             bind_addr: "127.0.0.1:7878".into(),
             save_path: "saves/world.json".into(),
             seed: 42,
-            generation: WorldGeneration::GeographyV3,
+            generation: WorldGeneration::GeographyV4,
             allow_admin: false,
         }
     }
@@ -179,6 +181,8 @@ struct Connection {
     queued_bytes: usize,
     mode: Option<SessionMode>,
     player: Option<PlayerSnapshot>,
+    profile_id: Option<String>,
+    last_market_request: Option<Instant>,
     connected_at: Instant,
     closing_at: Option<Instant>,
     last_input: Instant,
@@ -202,6 +206,8 @@ impl Connection {
             queued_bytes: 0,
             mode: None,
             player: None,
+            profile_id: None,
+            last_market_request: None,
             connected_at: now,
             closing_at: None,
             last_input: now,
@@ -364,6 +370,7 @@ fn run(
             }
         }
         let mut edit_budget = 16;
+        checkpoint_players(&connections, &mut sim);
         for (id, message) in inbox {
             if connections
                 .get(&id)
@@ -387,6 +394,7 @@ fn run(
         for connection in connections.values_mut() {
             connection.input_credit = connection.input_credit.min(MAX_INPUT_CREDIT);
         }
+        save_disconnected_players(&connections, &mut sim, config)?;
         connections.retain(|_, client| !client.dead);
         let next_world_time = sim.world_time + DT as f64;
         sim.villages.sync_airship_riders(&airships, next_world_time);
@@ -449,6 +457,7 @@ fn run(
             &passenger_seats,
         );
         sim.world_time = next_world_time;
+        checkpoint_players(&connections, &mut sim);
         let state = ServerMessage::State {
             players: players(&connections),
             npc: sim.npc.snapshot.clone(),
@@ -466,6 +475,7 @@ fn run(
                 connection.dead = true;
             }
         }
+        save_disconnected_players(&connections, &mut sim, config)?;
         connections.retain(|_, client| !client.dead);
         // Deliberately no unbounded catch-up loop when the server is overloaded.
         if let Some(remaining) = TICK.checked_sub(tick_started.elapsed()) {
@@ -481,6 +491,31 @@ fn players(connections: &BTreeMap<u64, Connection>) -> Vec<PlayerSnapshot> {
         .filter(|c| !c.dead)
         .filter_map(|c| c.player.clone())
         .collect()
+}
+
+fn checkpoint_players(connections: &BTreeMap<u64, Connection>, sim: &mut Simulation) {
+    for connection in connections.values() {
+        if let (Some(id), Some(player)) = (&connection.profile_id, &connection.player)
+            && let Some(saved) = sim.profiles.get_mut(id)
+        {
+            saved.checkpoint(player);
+        }
+    }
+}
+
+fn save_disconnected_players(
+    connections: &BTreeMap<u64, Connection>,
+    sim: &mut Simulation,
+    config: &ServerConfig,
+) -> io::Result<()> {
+    if connections
+        .values()
+        .any(|c| c.dead && c.profile_id.is_some() && c.player.is_some())
+    {
+        checkpoint_players(connections, sim);
+        sim.save(&config.save_path)?;
+    }
+    Ok(())
 }
 
 fn character_obstacles(
@@ -585,6 +620,7 @@ fn handle_message(
         version,
         name,
         mode,
+        profile_id,
     } = message
     {
         let connection = connections.get_mut(&id).unwrap();
@@ -602,6 +638,30 @@ fn handle_message(
             connection.close_with_notice("Admin observation is disabled on this server".into());
             return Ok(());
         }
+        let profile_id = profile_id.filter(|_| mode == SessionMode::Player);
+        if let Some(profile) = &profile_id {
+            let reason = if !player_economy::valid_profile_id(profile) {
+                Some("Invalid guest profile. Reopen the game to try again.")
+            } else if connections
+                .values()
+                .any(|c| !c.dead && c.profile_id.as_ref() == Some(profile))
+            {
+                Some("This guest profile is already playing. Leave the other session first.")
+            } else if !sim.profiles.contains_key(profile)
+                && sim.profiles.len() >= player_economy::MAX_PROFILES
+            {
+                Some("This world has reached its saved guest limit.")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                connections
+                    .get_mut(&id)
+                    .unwrap()
+                    .close_with_notice(reason.into());
+                return Ok(());
+            }
+        }
         let name: String = name
             .chars()
             .filter(|ch| !ch.is_control())
@@ -612,31 +672,52 @@ fn handle_message(
         } else {
             name
         };
-        let spawn = if mode == SessionMode::Player {
+        let player = if mode == SessionMode::Player {
             let obstacles = character_obstacles(connections, sim, Some(id), airships);
-            let Some(position) = free_player_spawn(&sim.world, &obstacles) else {
-                connections.get_mut(&id).unwrap().close_with_notice(
-                    "There is no free space near spawn. Try again after someone moves.".into(),
-                );
-                return Ok(());
-            };
-            Some(position)
+            if let Some(saved) = profile_id
+                .as_ref()
+                .and_then(|profile| sim.profiles.get(profile))
+            {
+                let Some(player) =
+                    saved.restore(&sim.world, airships, sim.world_time, &obstacles, id, name)
+                else {
+                    connections.get_mut(&id).unwrap().close_with_notice(
+                        "Your saved location is blocked. Clear nearby space before rejoining; your cargo is safe.".into());
+                    return Ok(());
+                };
+                Some(player)
+            } else {
+                let Some(position) = free_player_spawn(&sim.world, &obstacles) else {
+                    connections.get_mut(&id).unwrap().close_with_notice(
+                        "There is no free space near spawn. Try again after someone moves.".into(),
+                    );
+                    return Ok(());
+                };
+                Some(PlayerSnapshot {
+                    id,
+                    name,
+                    body: Body::new(position),
+                    yaw: 0.0,
+                    last_input_sequence: 0,
+                    movement_epoch: 0,
+                    ride: None,
+                    deck_position: None,
+                })
+            }
         } else {
             None
         };
         let connection = connections.get_mut(&id).unwrap();
         connection.mode = Some(mode);
-        if mode == SessionMode::Player {
-            connection.player = Some(PlayerSnapshot {
-                id,
-                name,
-                body: Body::new(spawn.unwrap()),
-                yaw: 0.0,
-                last_input_sequence: 0,
-                movement_epoch: 0,
-                ride: None,
-                deck_position: None,
-            });
+        connection.player = player;
+        connection.profile_id = profile_id.clone();
+        if let (Some(profile), Some(player)) = (&profile_id, &connection.player) {
+            sim.profiles
+                .entry(profile.clone())
+                .or_insert_with(|| player_economy::SavedPlayer::new(player))
+                .checkpoint(player);
+            checkpoint_players(connections, sim);
+            sim.save(&config.save_path)?;
         }
         let welcome = ServerMessage::Welcome {
             version: PROTOCOL_VERSION,
@@ -653,6 +734,9 @@ fn handle_message(
             can_admin: config.allow_admin && mode == SessionMode::Player,
         };
         connections.get_mut(&id).unwrap().send(&welcome);
+        if profile_id.is_some() {
+            send_market_state(connections, sim, id, 0, None, String::new(), true);
+        }
         return Ok(());
     }
     if connections.get(&id).is_none_or(|c| c.mode.is_none()) {
@@ -672,7 +756,8 @@ fn handle_message(
             }
             ClientMessage::Input { .. }
             | ClientMessage::Admin { .. }
-            | ClientMessage::TalkToPilot { .. } => {
+            | ClientMessage::TalkToPilot { .. }
+            | ClientMessage::Market { .. } => {
                 connections
                     .get_mut(&id)
                     .unwrap()
@@ -695,6 +780,24 @@ fn handle_message(
         }
     }
     match message {
+        ClientMessage::Market {
+            request_id,
+            village_id,
+            revision,
+            action,
+        } => {
+            handle_market(
+                id,
+                request_id,
+                village_id,
+                revision,
+                action,
+                connections,
+                sim,
+                config,
+                edit_budget,
+            )?;
+        }
         ClientMessage::Input {
             sequence,
             movement_epoch,
@@ -884,6 +987,111 @@ fn handle_message(
         ClientMessage::Ping => connections.get_mut(&id).unwrap().send(&ServerMessage::Pong),
         ClientMessage::Hello { .. } => unreachable!(),
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_market_state(
+    connections: &mut BTreeMap<u64, Connection>,
+    sim: &Simulation,
+    id: u64,
+    request_id: u64,
+    village_id: Option<u32>,
+    notice: String,
+    accepted: bool,
+) {
+    let connection = connections.get_mut(&id).unwrap();
+    let ledger = connection
+        .profile_id
+        .as_ref()
+        .and_then(|profile| sim.profiles.get(profile))
+        .map_or_else(PlayerEconomy::default, |saved| saved.ledger.clone());
+    let market = village_id.and_then(|village| {
+        let player = connection.player.as_ref()?;
+        player_economy::near_market(&sim.world, village, player.body.position).ok()?;
+        player_economy::market_view(&sim.world, &sim.villages, village).ok()
+    });
+    connection.send(&ServerMessage::MarketState {
+        request_id,
+        ledger,
+        market,
+        notice,
+        accepted,
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_market(
+    id: u64,
+    request_id: u64,
+    village_id: Option<u32>,
+    revision: u64,
+    action: MarketAction,
+    connections: &mut BTreeMap<u64, Connection>,
+    sim: &mut Simulation,
+    config: &ServerConfig,
+    budget: &mut usize,
+) -> io::Result<()> {
+    let result = (|| -> Result<String, String> {
+        let connection = connections.get_mut(&id).unwrap();
+        let profile = connection
+            .profile_id
+            .as_ref()
+            .ok_or("Rejoin with a saved guest profile to use markets.")?
+            .clone();
+        let player = connection
+            .player
+            .as_ref()
+            .ok_or("Only players can use markets.")?;
+        if connection
+            .last_market_request
+            .is_some_and(|last| last.elapsed() < Duration::from_millis(100))
+        {
+            return Err("Please wait a moment before the next market request.".into());
+        }
+        connection.last_market_request = Some(Instant::now());
+        if let Some(village) = village_id {
+            player_economy::near_market(&sim.world, village, player.body.position)?;
+        }
+        if action == MarketAction::View {
+            return Ok(String::new());
+        }
+        let village = village_id.ok_or("Walk to a village market first.")?;
+        let ledger = &sim.profiles[&profile].ledger;
+        if ledger.revision != revision {
+            return Err(
+                "Your cargo changed. Check the refreshed market before trying again.".into(),
+            );
+        }
+        if *budget == 0 {
+            return Err("The market is busy. Try again in a moment.".into());
+        }
+        *budget -= 1;
+        player_economy::transact(
+            &sim.world,
+            &mut sim.villages,
+            &mut sim.profiles.get_mut(&profile).unwrap().ledger,
+            village,
+            &action,
+        )
+    })();
+    if result.is_ok() && action != MarketAction::View {
+        checkpoint_players(connections, sim);
+        sim.save(&config.save_path)?;
+    }
+    let (notice, accepted) = match result {
+        Ok(notice) => (notice, true),
+        Err(error) => (error, false),
+    };
+    send_market_state(
+        connections,
+        sim,
+        id,
+        request_id,
+        village_id,
+        notice,
+        accepted,
+    );
     Ok(())
 }
 

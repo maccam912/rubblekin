@@ -2,6 +2,7 @@
 pub mod admin_commands;
 mod airship_landings;
 pub mod airships;
+pub mod economy;
 pub mod geography;
 pub mod physics;
 pub mod protocol;

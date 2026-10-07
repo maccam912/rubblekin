@@ -10,6 +10,7 @@ use bevy::{
     prelude::*,
     window::PrimaryWindow,
 };
+use rubblekin_core::{settlement::Village, village_assets::BuildingKind};
 
 #[derive(Resource)]
 pub(crate) struct WorldMap {
@@ -192,6 +193,70 @@ fn position(session: &Session) -> [f32; 3] {
         .map_or(session.body.position, |camera| camera.position.to_array())
 }
 
+fn landmark_badge(town: &Village) -> &'static str {
+    let windmill = town
+        .buildings
+        .iter()
+        .any(|building| building.kind == BuildingKind::Windmill);
+    let lookout = town
+        .buildings
+        .iter()
+        .any(|building| building.kind == BuildingKind::Lookout);
+    match (windmill, lookout) {
+        (true, true) => " [W L]",
+        (true, false) => " [W]",
+        (false, true) => " [L]",
+        _ => "",
+    }
+}
+
+fn town_description(town: &Village) -> String {
+    let homes = [
+        (BuildingKind::Cottage, "Cottages"),
+        (BuildingKind::TimberCabin, "Timber cabins"),
+        (BuildingKind::MasonryCottage, "Stone cottages"),
+        (BuildingKind::UplandHouse, "Upland homes"),
+    ]
+    .into_iter()
+    .map(|(kind, label)| {
+        (
+            town.buildings
+                .iter()
+                .filter(|building| building.kind == kind)
+                .count(),
+            label,
+        )
+    })
+    .filter(|(count, _)| *count > 0)
+    .max_by_key(|(count, _)| *count)
+    .map(|(_, label)| label);
+    let specialty = town.kind.name().trim_end_matches(" village");
+    homes.map_or_else(
+        || specialty.into(),
+        |homes| format!("{specialty} · {homes}"),
+    )
+}
+
+fn town_row(town: &Village, index: usize, you: [f32; 3], detailed: bool) -> String {
+    let distance = Vec2::new(town.center[0] - you[0], town.center[2] - you[2]).length();
+    let distance = if distance >= 1000. {
+        format!("{:.1} km", distance / 1000.)
+    } else {
+        format!("{distance:.0} m")
+    };
+    let mut text = format!(
+        "{}. {} · {}{}",
+        index + 1,
+        town.name,
+        distance,
+        landmark_badge(town)
+    );
+    if detailed {
+        text.push_str(&format!("\n{}", town_description(town)));
+    }
+    text
+}
+
 pub(crate) fn setup(
     mut commands: Commands,
     mut map: ResMut<WorldMap>,
@@ -362,7 +427,11 @@ pub(crate) fn setup(
                         },
                     ))
                     .with_children(|sidebar| {
-                        sidebar.spawn(label("TOWNS", &font, 20.));
+                        if towns.iter().any(|town| !landmark_badge(town).is_empty()) {
+                            sidebar.spawn(label("TOWNS · W: windmill · L: lookout", &font, 14.));
+                        } else {
+                            sidebar.spawn(label("TOWNS", &font, 20.));
+                        }
                         if towns.is_empty() {
                             sidebar.spawn(label("No towns in this world.", &font, 16.));
                         }
@@ -419,15 +488,19 @@ pub(crate) fn read(
     session: Res<Session>,
     world: Res<VoxelWorld>,
     mut touch: ResMut<TouchControls>,
-    pause: Res<crate::pause::PauseMenu>,
-    console: Res<crate::admin_console::AdminConsole>,
-    dialog: Res<crate::airships::PilotConversation>,
+    modals: (
+        Res<crate::pause::PauseMenu>,
+        Res<crate::admin_console::AdminConsole>,
+        Res<crate::airships::PilotConversation>,
+        Option<Res<crate::market::MarketPanel>>,
+    ),
     mut native: MessageReader<MenuKey>,
     mut fingers: MessageReader<TouchInput>,
     buttons: Query<(&MapAction, &Interaction), Changed<Interaction>>,
     targets: Query<(&MapAction, &ComputedNode, &UiGlobalTransform)>,
     canvas: Query<(&ComputedNode, &UiGlobalTransform), With<MapCanvas>>,
 ) {
+    let (pause, console, dialog, market) = modals;
     let was_open = map.open;
     map.just_closed = false;
     map.input_blocked = was_open;
@@ -468,7 +541,8 @@ pub(crate) fn read(
         || dialog.open()
         || dialog.input_blocked
         || pause.open
-        || pause.input_blocked;
+        || pause.input_blocked
+        || market.is_some_and(|market| market.open || market.input_blocked);
     if !was_open && (requested || (!other_modal && keys.just_pressed(KeyCode::KeyM))) {
         map.open = true;
     } else if was_open
@@ -732,14 +806,9 @@ pub(crate) fn refresh(
                 16.
             })
             .into();
-            let town = &towns[index.0];
-            let delta = Vec2::new(town.center[0] - you[0], town.center[2] - you[2]);
-            let distance = if delta.length() >= 1000. {
-                format!("{:.1} km", delta.length() / 1000.)
-            } else {
-                format!("{:.0} m", delta.length())
-            };
-            text.0 = format!("{}. {}  ·  {}", index.0 + 1, town.name, distance);
+            // Keep a single line per town on landscape phones. Taller maps
+            // have room for local architecture and the village's specialty.
+            text.0 = town_row(&towns[index.0], index.0, you, side >= 520.);
         }
         if scale.is_some() {
             let meters =
@@ -766,6 +835,51 @@ mod tests {
     use bevy::input::{ButtonState, keyboard::KeyboardInput};
     use rubblekin_core::protocol::SessionMode;
     use winit::keyboard::ModifiersState;
+
+    #[test]
+    fn town_details_describe_generated_homes_and_only_badge_existing_landmarks() {
+        use rubblekin_core::world::{World, WorldGeneration};
+        let older = World::generate(42, WorldGeneration::GeographyV3);
+        assert!(
+            older
+                .settlements()
+                .unwrap()
+                .villages
+                .iter()
+                .all(|town| landmark_badge(town).is_empty())
+        );
+        assert!(town_description(&older.settlements().unwrap().villages[0]).contains("Cottages"));
+        let world = World::generate(42, WorldGeneration::GeographyV4);
+        let towns = &world.settlements().unwrap().villages;
+        assert!(towns.iter().any(|town| landmark_badge(town) == " [W]"));
+        assert!(towns.iter().any(|town| landmark_badge(town) == " [L]"));
+        for (index, town) in towns.iter().enumerate() {
+            let compact = town_row(town, index, town.center, false);
+            assert!(compact.contains(&town.name) && compact.contains("0 m"));
+            assert!(
+                !compact.contains('\n'),
+                "compact town rows must stay one line"
+            );
+            let detailed = town_row(town, index, town.center, true);
+            assert!(detailed.contains(town.kind.name().trim_end_matches(" village")));
+            assert!(
+                detailed.contains("Upland homes")
+                    || detailed.contains("Stone cottages")
+                    || detailed.contains("Timber cabins")
+            );
+            for (kind, badge) in [(BuildingKind::Windmill, "W"), (BuildingKind::Lookout, "L")] {
+                assert_eq!(
+                    landmark_badge(town).contains(badge),
+                    town.buildings.iter().any(|building| building.kind == kind)
+                );
+            }
+        }
+        let mut no_landmark = towns[0].clone();
+        no_landmark
+            .buildings
+            .retain(|building| !building.kind.is_landmark());
+        assert!(landmark_badge(&no_landmark).is_empty());
+    }
 
     struct Fixture {
         app: App,

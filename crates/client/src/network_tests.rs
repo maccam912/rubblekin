@@ -47,6 +47,7 @@ fn cancelled_handshake_reports_real_stages_and_closes_its_socket() {
         &address,
         "Tester".into(),
         SessionMode::Player,
+        None,
         |stage| {
             if stages.last() != Some(&stage) {
                 stages.push(stage);
@@ -91,7 +92,7 @@ fn preserves_delta_for_mode(mode: SessionMode) {
             .unwrap();
         assert!(matches!(
             serde_json::from_str::<ClientMessage>(&hello).unwrap(),
-            ClientMessage::Hello { version: PROTOCOL_VERSION, mode: actual, ref name }
+            ClientMessage::Hello { version: PROTOCOL_VERSION, mode: actual, ref name, profile_id: None }
                 if actual == mode && name == "Joiner"
         ));
 

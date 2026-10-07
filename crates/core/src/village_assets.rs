@@ -8,12 +8,26 @@
 use crate::world::Block;
 use serde::{Deserialize, Serialize};
 
+#[path = "village_assets_regional.rs"]
+mod regional;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BuildingKind {
     Cottage,
     Workshop,
     Storehouse,
     Market,
+    TimberCabin,
+    MasonryCottage,
+    UplandHouse,
+    Windmill,
+    Lookout,
+}
+
+impl BuildingKind {
+    pub const fn is_landmark(self) -> bool {
+        matches!(self, Self::Windmill | Self::Lookout)
+    }
 }
 
 /// Width, height, and depth in voxel cells, including eaves and chimneys.
@@ -23,6 +37,10 @@ pub const fn dimensions(kind: BuildingKind) -> [i32; 3] {
         BuildingKind::Workshop => [18, 13, 14],
         BuildingKind::Storehouse => [16, 13, 18],
         BuildingKind::Market => [16, 11, 12],
+        BuildingKind::TimberCabin | BuildingKind::MasonryCottage => [14, 14, 16],
+        BuildingKind::UplandHouse => [14, 18, 16],
+        BuildingKind::Windmill => [24, 34, 22],
+        BuildingKind::Lookout => [18, 22, 24],
     }
 }
 
@@ -41,6 +59,11 @@ pub fn block_at(kind: BuildingKind, x: i32, y: i32, z: i32) -> Option<Block> {
         BuildingKind::Workshop => workshop(x, y, z, width, depth),
         BuildingKind::Storehouse => storehouse(x, y, z, width, depth),
         BuildingKind::Market => market(x, y, z, width, depth),
+        BuildingKind::TimberCabin | BuildingKind::MasonryCottage | BuildingKind::UplandHouse => {
+            regional::house(kind, x, y, z, width, depth)
+        }
+        BuildingKind::Windmill => regional::windmill(x, y, z),
+        BuildingKind::Lookout => regional::lookout(x, y, z),
     })
 }
 
@@ -245,6 +268,42 @@ mod tests {
         BuildingKind::Storehouse,
         BuildingKind::Market,
     ];
+
+    #[test]
+    fn geography_v3_building_signature_stays_frozen() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let mut signature = 0xcbf29ce484222325_u64;
+        let mut add = |n: u32| {
+            for b in n.to_le_bytes() {
+                signature ^= u64::from(b);
+                signature = signature.wrapping_mul(0x100000001b3);
+            }
+        };
+        for village in &world.settlements().unwrap().villages {
+            add(village.id);
+            for b in &village.buildings {
+                for n in [b.origin.x, b.origin.y, b.origin.z, i32::from(b.rotation)] {
+                    add(n as u32);
+                }
+                let [w, h, d] = dimensions(b.kind);
+                for x in 0..w {
+                    for y in 0..h {
+                        for z in 0..d {
+                            add(block_at(b.kind, x, y, z).unwrap() as u32);
+                        }
+                    }
+                }
+            }
+            for route in &village.resident_routes {
+                for p in &route.path {
+                    for n in p {
+                        add(n.to_bits());
+                    }
+                }
+            }
+        }
+        assert_eq!(signature, 4_310_952_318_501_764_209);
+    }
 
     #[test]
     fn assets_are_bounded_small_and_leave_character_sized_entrances() {

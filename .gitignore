@@ -3,6 +3,9 @@
 /saves/
 /graphics.json
 /graphics.json.tmp
+player-profiles.json
+.player-profiles.json.lock
+.player-profiles.json.*.tmp
 
 # Keep only the curated screenshots linked from the project documentation.
 /artifacts/*
@@ -21,6 +24,8 @@
 !/artifacts/terrain-readable-ground.png
 !/artifacts/distant-textured-forest.png
 !/artifacts/village-assets.svg
+!/artifacts/player-market.png
+!/artifacts/village-windmill.png
 !/artifacts/villages-map.png
 !/artifacts/villages-native.png
 !/artifacts/villages-overview.png

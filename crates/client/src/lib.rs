@@ -11,11 +11,13 @@ mod graphics;
 mod inspection;
 mod inspection_details;
 mod join;
+mod market;
 mod network;
 mod observer;
 mod pause;
 mod platform;
 mod prediction;
+mod profile;
 mod terrain;
 mod terrain_albedo;
 mod terrain_material;
@@ -207,6 +209,7 @@ struct Options {
     exit_after: Option<f32>,
     graphics: Option<GraphicsQuality>,
     seed: Option<u32>,
+    generation: Option<rubblekin_core::world::WorldGeneration>,
     observe: bool,
     touch: bool,
 }
@@ -234,6 +237,13 @@ fn options() -> Result<Options, String> {
                         .map_err(|_| "Invalid seed")?,
                 )
             }
+            "--generation" => {
+                result.generation = Some(match args.next().as_deref() {
+                    Some("v3") => rubblekin_core::world::WorldGeneration::GeographyV3,
+                    Some("v4") => rubblekin_core::world::WorldGeneration::GeographyV4,
+                    _ => return Err("--generation needs v3 or v4 (new local worlds only)".into()),
+                });
+            }
             "--screenshot" => {
                 result.screenshot = Some(args.next().ok_or("--screenshot needs a path")?)
             }
@@ -253,7 +263,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your display name\n  --seed NUMBER         Seed for a new world (default 42)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nG talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4   Generator for a new local world (default v4)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 material | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / village market | G talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -325,7 +335,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .save
                 .unwrap_or_else(|| PathBuf::from("saves/villages.json")),
             seed: options.seed.unwrap_or(42),
-            generation: rubblekin_core::world::WorldGeneration::GeographyV3,
+            generation: options
+                .generation
+                .unwrap_or(rubblekin_core::world::WorldGeneration::GeographyV4),
             allow_admin: true,
         },
         graphics.quality,
@@ -361,6 +373,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .init_resource::<world_map::WorldMap>()
         .init_resource::<admin_console::AdminConsole>()
         .init_resource::<airships::PilotConversation>()
+        .init_resource::<market::MarketPanel>()
         .insert_resource(capture::Capture::new(screenshot, options.exit_after))
         .init_resource::<Avatars>()
         .insert_resource(touch::TouchControls::new(
@@ -396,6 +409,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     airships::setup,
                     admin_console::setup,
                     world_map::setup,
+                    market::setup,
                 )
                     .chain()
                     .run_if(resource_added::<Session>),
@@ -404,6 +418,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     (
                         receive_network,
                         admin_console::read,
+                        market::read,
                         airships::read,
                         pause::read,
                         world_map::read,
@@ -427,6 +442,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         airships::refresh,
                         admin_console::refresh,
                         world_map::refresh,
+                        market::refresh,
                         join::leave_world,
                     )
                         .chain(),
@@ -548,6 +564,7 @@ fn receive_network(
     time: Res<Time>,
     mut conversation: ResMut<airships::PilotConversation>,
     mut console: Option<ResMut<admin_console::AdminConsole>>,
+    mut market: Option<ResMut<market::MarketPanel>>,
     mut follows: Query<&mut CameraFollow, With<GameCamera>>,
 ) {
     let mut latest_authoritative = None;
@@ -596,6 +613,21 @@ fn receive_network(
                 session.status_until = time.elapsed_secs_f64() + 5.0;
             }
             ServerMessage::PilotDialog { ship_id, text } => conversation.reply(ship_id, text),
+            ServerMessage::MarketState {
+                request_id,
+                ledger,
+                market: view,
+                notice,
+                accepted,
+            } => {
+                if let Some(panel) = &mut market {
+                    panel.reply(request_id, ledger, view, notice.clone(), accepted);
+                }
+                if !notice.is_empty() {
+                    session.status = notice;
+                    session.status_until = time.elapsed_secs_f64() + 5.0;
+                }
+            }
             ServerMessage::AdminCommandResult { text } => {
                 session.status = if text.contains('\n') {
                     "Command help is displayed in the admin panel.".into()
@@ -667,11 +699,12 @@ fn controls(
         Option<Res<world_map::WorldMap>>,
         Option<Res<admin_console::AdminConsole>>,
         Option<Res<airships::PilotConversation>>,
+        Option<Res<market::MarketPanel>>,
     ),
     diagnostics: Res<DiagnosticsStore>,
     touch: Res<touch::TouchControls>,
 ) {
-    let (pause, map, console, conversation) = modals;
+    let (pause, map, console, conversation, market) = modals;
     let dt = time.delta_secs().min(MAX_INPUT_DT);
     let observing = session.observer.is_some();
     let blocked = pause
@@ -686,14 +719,18 @@ fn controls(
             .is_some_and(|console| console.input_blocked)
         || map
             .as_ref()
-            .is_some_and(|map| map.open || map.input_blocked);
+            .is_some_and(|map| map.open || map.input_blocked)
+        || market
+            .as_ref()
+            .is_some_and(|panel| panel.open || panel.input_blocked);
     let resumed = pause.as_ref().is_some_and(|menu| menu.just_closed)
         || conversation
             .as_ref()
             .is_some_and(|dialog| dialog.just_closed);
     let resumed = resumed
         || console.as_ref().is_some_and(|console| console.just_closed)
-        || map.as_ref().is_some_and(|map| map.just_closed);
+        || map.as_ref().is_some_and(|map| map.just_closed)
+        || market.as_ref().is_some_and(|panel| panel.just_closed);
     if touch.enabled {
         session.captured =
             window.focused && !blocked && !touch.menu_open && connection.error.is_none();
@@ -1003,11 +1040,13 @@ fn edit_blocks(
     map: Option<Res<world_map::WorldMap>>,
     conversation: Option<Res<airships::PilotConversation>>,
     console: Option<Res<admin_console::AdminConsole>>,
+    market: Option<Res<market::MarketPanel>>,
 ) {
     if pause.is_some_and(|menu| menu.open || menu.input_blocked)
         || map.is_some_and(|map| map.open || map.input_blocked)
         || conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
+        || market.is_some_and(|panel| panel.open || panel.input_blocked)
         || session.ride.is_some()
     {
         session.target = None;

@@ -22,6 +22,8 @@ use bevy::{
 };
 use rubblekin_core::{
     geography::{Biome, Geography, SEA_LEVEL},
+    settlement::BuildingPlot,
+    village_assets::{self, BuildingKind},
     world::{
         Block, BlockPos, CELL_SIZE, CHUNK_SIZE, GeneratedTree, TreeKind, WATER_LEVEL, WORLD_RADIUS,
         World, WorldGeneration, berry_patch_positions,
@@ -997,6 +999,9 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
                 }
                 _ => {}
             }
+            if add_regional_building_proxy(building, geometry, clip) {
+                continue;
+            }
             let walls = (size.y * 0.58).min(3.5);
             proxy_cuboid(
                 geometry,
@@ -1020,6 +1025,164 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
             }
         }
     }
+}
+
+/// V4 landmarks must keep their recognizable silhouette while detailed cells
+/// stream in: an open lookout and windmill sails cannot use a cottage-shaped box.
+fn add_regional_building_proxy(
+    building: &BuildingPlot,
+    geometry: &mut Geometry,
+    clip: ProxyClip,
+) -> bool {
+    let kind = building.kind;
+    if !matches!(
+        kind,
+        BuildingKind::TimberCabin
+            | BuildingKind::MasonryCottage
+            | BuildingKind::UplandHouse
+            | BuildingKind::Windmill
+            | BuildingKind::Lookout
+    ) {
+        return false;
+    }
+    let [w, _, d] = village_assets::dimensions(kind).map(|n| n as f32);
+    let base = Vec3::new(
+        building.origin.x as f32,
+        building.origin.y as f32,
+        building.origin.z as f32,
+    ) * CELL_SIZE;
+    let mut part = |min: [f32; 3], size: [f32; 3], block: Block| {
+        let [x, y, z] = std::array::from_fn::<_, 3, _>(|i| min[i] + size[i] * 0.5);
+        let [x, z] = match building.rotation % 4 {
+            0 => [x, z],
+            1 => [d - z, x],
+            2 => [w - x, d - z],
+            _ => [z, w - x],
+        };
+        let size = if building.rotation.is_multiple_of(2) {
+            size
+        } else {
+            [size[2], size[1], size[0]]
+        };
+        proxy_cuboid(
+            geometry,
+            base + Vec3::new(x, y, z) * CELL_SIZE,
+            Vec3::from_array(size) * CELL_SIZE,
+            block.color(),
+            clip,
+        );
+    };
+    match kind {
+        BuildingKind::TimberCabin | BuildingKind::MasonryCottage | BuildingKind::UplandHouse => {
+            let wall = if kind == BuildingKind::TimberCabin {
+                Block::Wood
+            } else {
+                Block::Sand
+            };
+            let roof = match kind {
+                BuildingKind::TimberCabin => Block::Wood,
+                BuildingKind::MasonryCottage => Block::Stone,
+                _ => Block::Brick,
+            };
+            part([1.0, 0.0, 1.0], [w - 2.0, 7.0, d - 2.0], wall);
+            let tiers = if kind == BuildingKind::UplandHouse {
+                7
+            } else {
+                4
+            };
+            for tier in 0..tiers {
+                let inset = if tiers == 7 {
+                    tier as f32
+                } else {
+                    tier as f32 * 2.0
+                };
+                let zi = if kind == BuildingKind::MasonryCottage {
+                    inset
+                } else {
+                    0.0
+                };
+                part(
+                    [inset, 7.0 + tier as f32, zi],
+                    [w - inset * 2.0, 1.0, d - zi * 2.0],
+                    roof,
+                );
+            }
+            let height = village_assets::dimensions(kind)[1] as f32;
+            part(
+                [w - 5.0, 7.0, d - 5.0],
+                [2.0, height - 7.0, 2.0],
+                Block::Brick,
+            );
+        }
+        BuildingKind::Windmill => {
+            part([8.0, 0.0, 6.0], [8.0, 21.0, 10.0], Block::Sand);
+            for tier in 0..5 {
+                let inset = tier as f32;
+                part(
+                    [7.0 + inset, 21.0 + inset, 5.0],
+                    [10.0 - inset * 2.0, 1.0, 12.0],
+                    Block::Wood,
+                );
+            }
+            // Horizontal runs preserve the exact sail outline, including the
+            // clipped cloth tips, without a separate low-detail asset recipe.
+            for y in 11..34 {
+                let mut x = 0;
+                while x < 24 {
+                    let block = village_assets::block_at(kind, x, y, 2).unwrap();
+                    let start = x;
+                    while x < 24 && village_assets::block_at(kind, x, y, 2) == Some(block) {
+                        x += 1;
+                    }
+                    if block.is_solid() {
+                        part(
+                            [start as f32, y as f32, 2.0],
+                            [(x - start) as f32, 1.0, 2.0],
+                            block,
+                        );
+                    }
+                }
+            }
+        }
+        BuildingKind::Lookout => {
+            part([1.0, 0.0, 1.0], [16.0, 6.0, 22.0], Block::Stone);
+            for x in [2.0, 15.0] {
+                for z in [2.0, 21.0] {
+                    part([x, 6.0, z], [1.0, 13.0, 1.0], Block::Wood);
+                }
+            }
+            for step in 0..6 {
+                part(
+                    [3.0, 1.0 + step as f32, 4.0 + step as f32 * 2.0],
+                    [3.0, 1.0, 2.0],
+                    Block::Wood,
+                );
+                part(
+                    [11.0, 7.0 + step as f32, 14.0 - step as f32 * 2.0],
+                    [3.0, 1.0, 2.0],
+                    Block::Wood,
+                );
+            }
+            part([3.0, 6.0, 16.0], [11.0, 1.0, 4.0], Block::Wood);
+            part([1.0, 13.0, 1.0], [16.0, 1.0, 22.0], Block::Wood);
+            for x in [1.0, 16.0] {
+                part([x, 14.0, 1.0], [1.0, 2.0, 22.0], Block::Wood);
+            }
+            for z in [1.0, 22.0] {
+                part([1.0, 14.0, z], [16.0, 2.0, 1.0], Block::Wood);
+            }
+            for tier in 0..3 {
+                let inset = tier as f32 * 3.0;
+                part(
+                    [1.0 + inset, 19.0 + tier as f32, 1.0],
+                    [16.0 - inset * 2.0, 1.0, 22.0],
+                    Block::Brick,
+                );
+            }
+        }
+        _ => unreachable!(),
+    }
+    true
 }
 
 fn lod_tree_cells(center: ChunkKey, distance: f32) -> Vec<(i32, i32)> {
@@ -1163,6 +1326,7 @@ fn placeholder_ground_height(geography: &Geography, x: f32, z: f32) -> f32 {
 fn tree_leaf_color(world: &World, kind: TreeKind) -> [f32; 4] {
     if world.generation() == WorldGeneration::GeographyV2
         || world.generation() == WorldGeneration::GeographyV3
+        || world.generation() == WorldGeneration::GeographyV4
     {
         kind.leaf_color()
     } else {
@@ -1788,6 +1952,7 @@ fn add_meadow_details(
     let (density, flower_density, foliage, height_scale) = if world.generation()
         == WorldGeneration::GeographyV2
         || world.generation() == WorldGeneration::GeographyV3
+        || world.generation() == WorldGeneration::GeographyV4
     {
         match biome {
             Some(Biome::Shrubland) => (0.01, 0.0, [0.60, 0.58, 0.33, 1.0], 0.85),
@@ -3276,6 +3441,64 @@ mod tests {
             installed.indices().unwrap(),
             &Indices::U32(detailed_indices)
         );
+    }
+
+    #[test]
+    fn regional_building_proxies_preserve_rotated_bounds_and_chunk_clipping() {
+        for kind in [
+            BuildingKind::TimberCabin,
+            BuildingKind::MasonryCottage,
+            BuildingKind::UplandHouse,
+            BuildingKind::Windmill,
+            BuildingKind::Lookout,
+        ] {
+            for rotation in 0..4 {
+                let building = BuildingPlot {
+                    kind,
+                    origin: BlockPos::new(-7, 20, 5),
+                    rotation,
+                };
+                let [w, h, d] = building.dimensions();
+                let x0 = building.origin.x as f32 * CELL_SIZE;
+                let z0 = building.origin.z as f32 * CELL_SIZE;
+                let x1 = x0 + w as f32 * CELL_SIZE;
+                let z1 = z0 + d as f32 * CELL_SIZE;
+                for bounds in [
+                    [x0, z0, x1, z1],
+                    [x0, z0, (x0 + x1) * 0.5, z1],
+                    [(x0 + x1) * 0.5, z0, x1, z1],
+                ] {
+                    let mut geometry = Geometry::default();
+                    assert!(add_regional_building_proxy(
+                        &building,
+                        &mut geometry,
+                        ProxyClip::Inside(bounds)
+                    ));
+                    assert!(
+                        !geometry.positions.is_empty(),
+                        "{kind:?} rotation{rotation}"
+                    );
+                    assert!(
+                        geometry.positions.iter().all(|[x, y, z]| *x >= bounds[0]
+                            && *x <= bounds[2]
+                            && *z >= bounds[1]
+                            && *z <= bounds[3]
+                            && *y >= 10.0
+                            && *y <= 10.0 + h as f32 * CELL_SIZE),
+                        "{kind:?} rotation{rotation} proxy escaped bounds"
+                    );
+                    let top = geometry
+                        .positions
+                        .iter()
+                        .map(|p| p[1])
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    assert!(
+                        top >= 10.0 + h as f32 * CELL_SIZE * 0.75,
+                        "landmark silhouette lost its height"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

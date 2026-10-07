@@ -9,6 +9,7 @@ use bevy::{
 use rubblekin_core::{
     geography::{Biome, GRID_SIDE, GRID_SPACING, GeoSample, Geography, WORLD_SIZE},
     settlement::Trail,
+    village_assets::BuildingKind,
     world::{CELL_SIZE, GeneratedTree, World, WorldGeneration},
 };
 
@@ -171,7 +172,7 @@ fn paint_trees_with_progress(
     let last = (world.radius_cells() - 1).div_euclid(TREE_GRID_CELLS);
     let refined = matches!(
         world.generation(),
-        WorldGeneration::GeographyV2 | WorldGeneration::GeographyV3
+        WorldGeneration::GeographyV2 | WorldGeneration::GeographyV3 | WorldGeneration::GeographyV4
     );
     for gz in first..=last {
         if (gz - first) % 64 == 0 {
@@ -359,7 +360,11 @@ fn paint_settlements(world: &World, grid: MapGrid, data: &mut [u8]) {
                     building.origin.z as f32 * CELL_SIZE,
                 ],
                 [width as f32 * CELL_SIZE, depth as f32 * CELL_SIZE],
-                ROOF_COLOR,
+                match building.kind {
+                    BuildingKind::TimberCabin | BuildingKind::Windmill => [128, 101, 72, 255],
+                    BuildingKind::MasonryCottage => [139, 142, 133, 255],
+                    _ => ROOF_COLOR,
+                },
             );
         }
     }

@@ -420,6 +420,7 @@ pub(super) fn read(
         Option<Res<PauseMenu>>,
         Option<Res<crate::admin_console::AdminConsole>>,
         Option<Res<crate::world_map::WorldMap>>,
+        Option<Res<crate::market::MarketPanel>>,
     ),
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -441,7 +442,7 @@ pub(super) fn read(
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<DialogRoot>>,
 ) {
     let (mut fingers, touches) = touch_input;
-    let (pause, console, map) = modals;
+    let (pause, console, map, market) = modals;
     let was_open = conversation.open();
     conversation.just_closed = false;
     conversation.input_blocked = was_open;
@@ -454,6 +455,7 @@ pub(super) fn read(
     if pause.is_some_and(|menu| menu.open || menu.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
         || map.is_some_and(|map| map.open || map.input_blocked)
+        || market.is_some_and(|market| market.open || market.input_blocked)
         || !windows.iter().any(|window| window.focused)
     {
         conversation.scroll_finger = None;
@@ -596,6 +598,7 @@ pub(super) fn refresh(
     touch: Res<TouchControls>,
     pause: Res<PauseMenu>,
     map: Option<Res<crate::world_map::WorldMap>>,
+    market: Option<Res<crate::market::MarketPanel>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut roots: Query<&mut Node, (With<DialogRoot>, Without<TravelHint>)>,
     mut buttons: Query<(&Action, &mut Node), (Without<DialogRoot>, Without<TravelHint>)>,
@@ -606,7 +609,7 @@ pub(super) fn refresh(
         Query<&mut Text, Without<DialogText>>,
     )>,
 ) {
-    let map_open = map.is_some_and(|map| map.open);
+    let map_open = map.is_some_and(|map| map.open) || market.is_some_and(|market| market.open);
     let open = conversation.open() && !pause.open && !map_open;
     for mut node in &mut roots {
         node.display = if open { Display::Flex } else { Display::None };

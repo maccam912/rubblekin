@@ -43,6 +43,7 @@ pub struct JoinScreen {
     config: ServerConfig,
     graphics: GraphicsQuality,
     mode: SessionMode,
+    profile_path: std::path::PathBuf,
     pending: Option<PendingJoin>,
     next_action: Option<Action>,
     local_server: Option<ServerHandle>,
@@ -123,13 +124,29 @@ impl JoinScreen {
         graphics: GraphicsQuality,
         mode: SessionMode,
     ) -> Self {
+        #[cfg(not(test))]
+        let profile_path = std::path::PathBuf::from(crate::profile::PROFILE_FILE);
+        #[cfg(test)]
+        let profile_path = {
+            // Parallel join fixtures must not write or contend over real guest data.
+            static NEXT_PROFILE: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
+            std::env::temp_dir()
+                .join(format!(
+                    "rubblekin-join-profile-{}-{}",
+                    std::process::id(),
+                    NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+                ))
+                .join(crate::profile::PROFILE_FILE)
+        };
         Self {
             address,
             name,
             config,
             graphics,
             mode,
-            status: "Join a shared world, or explore your local island.".into(),
+            profile_path,
+            status: "Join a shared world, or explore your local island. Your character name keeps its own trading progress here.".into(),
             pending: None,
             next_action: None,
             local_server: None,
@@ -170,6 +187,7 @@ impl JoinScreen {
         let config = self.config.clone();
         let mode = self.mode;
         let graphics = self.graphics;
+        let profile_path = self.profile_path.clone();
         let worker = std::thread::spawn(move || {
             let report = |stage| {
                 if worker_cancelled.load(Ordering::Relaxed) {
@@ -189,6 +207,20 @@ impl JoinScreen {
                 JoinStage::Network(ConnectionStage::ResolvingAddress)
             })
             .map_err(|error| error.to_string())?;
+            let profile_id = if mode == SessionMode::Player {
+                let scope = if local {
+                    crate::profile::local_scope(&config.save_path)
+                        .map_err(|error| error.to_string())?
+                } else {
+                    crate::profile::remote_scope(&address)
+                };
+                Some(
+                    crate::profile::identity(&profile_path, &scope, &name)
+                        .map_err(|error| error.to_string())?,
+                )
+            } else {
+                None
+            };
             let server = if local {
                 Some(spawn(config).map_err(|error| error.to_string())?)
             } else {
@@ -208,7 +240,7 @@ impl JoinScreen {
                 address
             };
             let (connection, welcome) =
-                Connection::connect_with_progress(&address, name, mode, |stage| {
+                Connection::connect_with_progress(&address, name, mode, profile_id, |stage| {
                     report(JoinStage::Network(stage))
                 })
                 .map_err(|error| error.to_string())?;
@@ -247,7 +279,7 @@ impl JoinScreen {
 fn validate_name(name: &str) -> Result<String, &'static str> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 24 || name.chars().any(char::is_control) {
-        return Err("Enter a display name of 1–24 characters.");
+        return Err("Enter a character name of 1–24 characters.");
     }
     Ok(name.into())
 }
@@ -351,7 +383,7 @@ pub fn setup(
             panel.spawn((MenuContent, Node { flex_direction: FlexDirection::Column, row_gap: px(16), column_gap: px(24), ..default() },)).with_children(|content| {
                 content.spawn((MenuColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(if touch { 8 } else { 12 }), min_width: px(0), ..default() },)).with_children(|fields| {
                     fields.spawn((Text::new("Choose your server"), TextFont::from_font_size(if touch { 20. } else { 24. }).with_font(font.clone()), TextColor(ink())));
-                    for (field, label, value, max) in [(Field::Address, "SERVER ADDRESS", menu.address.as_str(), 260), (Field::Name, "DISPLAY NAME", menu.name.as_str(), 24)] {
+                    for (field, label, value, max) in [(Field::Address, "SERVER ADDRESS", menu.address.as_str(), 260), (Field::Name, "CHARACTER NAME", menu.name.as_str(), 24)] {
                         fields.spawn((Text::new(label), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
                         fields.spawn((
                             field, Interaction::default(),
@@ -1237,6 +1269,7 @@ pub fn leave_world(
     mut pause: Option<ResMut<crate::pause::PauseMenu>>,
     mut console: Option<ResMut<crate::admin_console::AdminConsole>>,
     mut map: Option<ResMut<crate::world_map::WorldMap>>,
+    mut market: Option<ResMut<crate::market::MarketPanel>>,
 ) {
     let menu_leave = pause.as_ref().is_some_and(|pause| pause.leave);
     let leave = touch.as_mut().is_some_and(|touch| {
@@ -1273,6 +1306,9 @@ pub fn leave_world(
     }
     if let Some(map) = map.as_mut() {
         **map = crate::world_map::WorldMap::default();
+    }
+    if let Some(market) = market.as_mut() {
+        market.clear();
     }
     if let Some(touch) = touch.as_mut() {
         touch.reset();
@@ -1522,7 +1558,7 @@ pub(crate) mod tests {
         menu.name = " ".into();
         menu.start(false);
         assert!(menu.pending.is_none());
-        assert!(menu.status.contains("display name"));
+        assert!(menu.status.contains("character name"));
     }
 
     #[test]

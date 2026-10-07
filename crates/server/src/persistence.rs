@@ -10,9 +10,13 @@ use rubblekin_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{npc::Forager, villages::VillageLife};
+use crate::{
+    npc::Forager,
+    player_economy::{Profiles, validate_profiles},
+    villages::VillageLife,
+};
 
-const SAVE_VERSION: u32 = 3;
+const SAVE_VERSION: u32 = 4;
 pub(crate) const MAX_EDITS: usize = 100_000;
 
 /// The sidecar remains on disk, but its OS lock is released on close or crash.
@@ -53,6 +57,8 @@ struct Save {
     world_time: f64,
     #[serde(default)]
     villages: Option<VillageLife>,
+    #[serde(default)]
+    profiles: Option<Profiles>,
 }
 
 pub(crate) struct Simulation {
@@ -60,6 +66,7 @@ pub(crate) struct Simulation {
     pub npc: Forager,
     pub world_time: f64,
     pub villages: VillageLife,
+    pub profiles: Profiles,
 }
 
 impl Simulation {
@@ -71,6 +78,7 @@ impl Simulation {
                 return Ok(Self {
                     npc: Forager::new(&world),
                     villages: VillageLife::new(&world),
+                    profiles: Profiles::default(),
                     world,
                     world_time: 0.0,
                 });
@@ -86,7 +94,7 @@ impl Simulation {
                 path.display()
             ))
         })?;
-        if ![1, 2, SAVE_VERSION].contains(&save.version) {
+        if ![1, 2, 3, SAVE_VERSION].contains(&save.version) {
             return Err(invalid(format!(
                 "Unsupported save version {}",
                 save.version
@@ -101,8 +109,8 @@ impl Simulation {
         }
         let generation = match (save.version, save.generation) {
             (1, None | Some(WorldGeneration::ValleyV1)) => WorldGeneration::ValleyV1,
-            (2, Some(generation)) if generation != WorldGeneration::GeographyV3 => generation,
-            (3, Some(generation)) => generation,
+            (2, Some(generation)) if !generation.has_settlements() => generation,
+            (3 | 4, Some(generation)) => generation,
             _ => {
                 return Err(invalid(
                     "Save has an invalid or missing terrain generation version",
@@ -113,7 +121,7 @@ impl Simulation {
             World::from_generation_edits(save.seed, generation, &save.edits).map_err(invalid)?;
         let villages = match save.villages {
             Some(villages) => villages,
-            None if generation != WorldGeneration::GeographyV3 => VillageLife::default(),
+            None if !generation.has_settlements() => VillageLife::default(),
             None => {
                 return Err(invalid(
                     "Village world is missing its saved residents and economy",
@@ -131,11 +139,26 @@ impl Simulation {
                 "Save contains an invalid airship journey; original left untouched",
             ));
         }
+        let profiles = match save.profiles {
+            Some(profiles) => profiles,
+            None if save.version < 4 => Profiles::default(),
+            None => {
+                return Err(invalid(
+                    "Save is missing its player progress; original left untouched",
+                ));
+            }
+        };
+        if !validate_profiles(&profiles, &world, &airships) {
+            return Err(invalid(
+                "Save contains invalid player progress; original left untouched",
+            ));
+        }
         Ok(Self {
             world,
             npc: save.npc,
             world_time: save.world_time,
             villages,
+            profiles,
         })
     }
 
@@ -169,6 +192,7 @@ impl Simulation {
                 npc: self.npc.clone(),
                 world_time: self.world_time,
                 villages: Some(self.villages.clone()),
+                profiles: Some(self.profiles.clone()),
             };
             write_save(&mut file, &save)?;
             file.sync_all()?;
@@ -202,6 +226,76 @@ mod tests {
     use super::*;
     use rubblekin_core::world::{Block, BlockPos};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn old_saves_gain_empty_profiles_but_current_missing_or_invalid_progress_fails_untouched() {
+        use crate::player_economy::SavedPlayer;
+        use rubblekin_core::economy::PlayerEconomy;
+        let path = TestPath::new();
+        let mut sim = Simulation::load(&path.0, 42, WorldGeneration::ValleyV1).unwrap();
+        sim.save(&path.0).unwrap();
+        let original: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        for version in [1, 2, 3] {
+            let mut old = original.clone();
+            old["version"] = version.into();
+            old.as_object_mut().unwrap().remove("profiles");
+            fs::write(&path.0, serde_json::to_vec(&old).unwrap()).unwrap();
+            let loaded = Simulation::load(&path.0, 99, WorldGeneration::GeographyV4).unwrap();
+            assert!(loaded.profiles.is_empty());
+            assert_eq!(loaded.world.seed, 42);
+            assert_eq!(loaded.world.generation(), WorldGeneration::ValleyV1);
+        }
+        let profile = "0123456789abcdef0123456789abcdef";
+        sim.profiles.insert(
+            profile.into(),
+            SavedPlayer {
+                ledger: PlayerEconomy {
+                    coins: 12,
+                    cargo: [1, 2, 3, 4, 5],
+                    ..Default::default()
+                },
+                position: sim.world.spawn_position(),
+                yaw: 0.0,
+                ride: None,
+                deck_position: None,
+            },
+        );
+        sim.save(&path.0).unwrap();
+        let valid: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        assert_eq!(
+            Simulation::load(&path.0, 0, WorldGeneration::GeographyV4)
+                .unwrap()
+                .profiles[profile]
+                .ledger,
+            sim.profiles[profile].ledger
+        );
+        for mutation in 0..5 {
+            let mut invalid = valid.clone();
+            match mutation {
+                0 => {
+                    invalid.as_object_mut().unwrap().remove("profiles");
+                }
+                1 => invalid["profiles"][profile]["ledger"]["coins"] = u64::MAX.into(),
+                2 => {
+                    invalid["profiles"][profile]["ledger"]["cargo"] =
+                        serde_json::json!([24, 1, 0, 0, 0])
+                }
+                3 => {
+                    invalid["profiles"][profile]["position"] = serde_json::json!([1_000_000, 0, 0])
+                }
+                4 => invalid["profiles"][profile]["deck_position"] = serde_json::json!([0, 0, 0]),
+                _ => unreachable!(),
+            }
+            let bytes = serde_json::to_vec(&invalid).unwrap();
+            fs::write(&path.0, &bytes).unwrap();
+            assert!(
+                Simulation::load(&path.0, 0, WorldGeneration::GeographyV4).is_err(),
+                "mutation={mutation}"
+            );
+            assert_eq!(fs::read(&path.0).unwrap(), bytes);
+        }
+    }
 
     static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
 
@@ -247,6 +341,7 @@ mod tests {
             npc: Forager::new(&world),
             world_time: 0.0,
             villages: Some(VillageLife::default()),
+            profiles: Some(Profiles::default()),
         };
         // This entire save fits in the buffer. Serialization succeeds before
         // the explicit final flush tries to write it; dropping BufWriter alone
@@ -267,6 +362,7 @@ mod tests {
         let npc = Forager::new(&world);
         let npc_position = npc.snapshot.position;
         let sim = Simulation {
+            profiles: Default::default(),
             world,
             npc,
             world_time: 1234.0,
@@ -276,6 +372,7 @@ mod tests {
         let mut old: serde_json::Value =
             serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
         old["version"] = 1.into();
+        old.as_object_mut().unwrap().remove("profiles");
         old.as_object_mut().unwrap().remove("generation");
         old["npc"].as_object_mut().unwrap().remove("home");
         fs::write(&path.0, serde_json::to_vec(&old).unwrap()).unwrap();
@@ -290,7 +387,7 @@ mod tests {
         loaded.save(&path.0).unwrap();
         let updated: serde_json::Value =
             serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        assert_eq!(updated["version"], 3);
+        assert_eq!(updated["version"], 4);
         let again = Simulation::load(&path.0, 999, WorldGeneration::GeographyV2).unwrap();
         assert_eq!(again.world.generation(), WorldGeneration::ValleyV1);
         assert_eq!(again.world.edits(), sim.world.edits());
@@ -313,6 +410,7 @@ mod tests {
         world.set_block(cut, Block::Air).unwrap();
         world.set_block(placed, Block::Brick).unwrap();
         let sim = Simulation {
+            profiles: Default::default(),
             npc: Forager::new(&world),
             world,
             world_time: 217.5,
@@ -343,11 +441,12 @@ mod tests {
         assert_eq!(loaded.world.block(placed), Block::Brick);
         loaded.save(&path.0).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        assert_eq!(saved["version"], 3);
+        assert_eq!(saved["version"], 4);
         assert_eq!(saved["generation"], "GeographyV1");
         // An actual pre-village version-2 save has no village state field.
         let mut pre_villages = saved;
         pre_villages["version"] = 2.into();
+        pre_villages.as_object_mut().unwrap().remove("profiles");
         pre_villages.as_object_mut().unwrap().remove("villages");
         fs::write(&path.0, serde_json::to_vec(&pre_villages).unwrap()).unwrap();
         let legacy = Simulation::load(&path.0, 999, WorldGeneration::GeographyV3).unwrap();
@@ -370,7 +469,7 @@ mod tests {
         sim.world_time = 412.5;
         sim.save(&path.0).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        assert_eq!(saved["version"], 3);
+        assert_eq!(saved["version"], 4);
         assert_eq!(saved["generation"], "GeographyV2");
 
         let loaded = Simulation::load(&path.0, 999, WorldGeneration::ValleyV1).unwrap();
@@ -389,6 +488,7 @@ mod tests {
         let path = TestPath::new();
         let world = World::new(42);
         let sim = Simulation {
+            profiles: Default::default(),
             npc: Forager::new(&world),
             world,
             world_time: 0.0,

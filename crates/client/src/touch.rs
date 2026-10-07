@@ -26,6 +26,7 @@ pub struct TouchControls {
     pub(crate) flight: bool,
     pub(crate) inspect: bool,
     pub(crate) talk: bool,
+    pub(crate) market: bool,
     pub(crate) help: bool,
     pub(crate) selected: Option<usize>,
     pub(crate) zoom: f32,
@@ -48,6 +49,7 @@ enum Action {
     Flight,
     Inspect,
     Talk,
+    Market,
     Menu,
     Material(usize),
     ZoomIn,
@@ -84,6 +86,7 @@ impl Layout {
                 matches!(
                     region.action,
                     Action::Talk
+                        | Action::Market
                         | Action::Sprint
                         | Action::Jump
                         | Action::Menu
@@ -138,6 +141,14 @@ impl Layout {
             "Inspect".into(),
         );
         if !observing {
+            add(
+                Action::Market,
+                size.x - s(88.0),
+                s(70.0),
+                72.0,
+                48.0,
+                "Cargo".into(),
+            );
             add(
                 Action::Talk,
                 size.x - s(328.0),
@@ -273,6 +284,7 @@ impl TouchControls {
         self.flight = false;
         self.inspect = false;
         self.talk = false;
+        self.market = false;
         self.help = false;
         self.selected = None;
         self.zoom = 0.0;
@@ -287,6 +299,7 @@ impl TouchControls {
             Action::Build => self.build = true,
             Action::Flight => self.flight = true,
             Action::Talk => self.talk = true,
+            Action::Market => self.market = true,
             Action::Inspect => {
                 self.inspect = true;
                 self.menu_open = false;
@@ -429,6 +442,7 @@ pub fn read(
     conversation: Option<Res<crate::airships::PilotConversation>>,
     console: Option<Res<crate::admin_console::AdminConsole>>,
     map: Option<Res<crate::world_map::WorldMap>>,
+    market: Option<Res<crate::market::MarketPanel>>,
     mouse: Res<ButtonInput<MouseButton>>,
     window: Single<(Entity, &Window), With<PrimaryWindow>>,
     session: Option<Res<Session>>,
@@ -473,6 +487,7 @@ pub fn read(
     if conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
         || map.is_some_and(|map| map.open || map.input_blocked)
+        || market.is_some_and(|market| market.open || market.input_blocked)
     {
         controls.reset();
         events.clear();
@@ -602,6 +617,7 @@ pub fn setup(
         Action::Flight,
         Action::Inspect,
         Action::Talk,
+        Action::Market,
         Action::Menu,
         Action::ZoomIn,
         Action::ZoomOut,
@@ -634,13 +650,15 @@ pub fn setup(
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn refresh(
     window: Single<&Window, With<PrimaryWindow>>,
     controls: Res<TouchControls>,
     session: Res<Session>,
+    world: Res<crate::VoxelWorld>,
     conversation: Option<Res<crate::airships::PilotConversation>>,
     map: Option<Res<crate::world_map::WorldMap>>,
+    market: Option<Res<crate::market::MarketPanel>>,
     mut nodes: Query<
         (
             &mut Node,
@@ -665,6 +683,7 @@ pub fn refresh(
             || controls.menu_open
             || conversation.as_ref().is_some_and(|dialog| dialog.open())
             || map.as_ref().is_some_and(|map| map.open)
+            || market.as_ref().is_some_and(|market| market.open)
         {
             continue;
         }
@@ -692,7 +711,13 @@ pub fn refresh(
             if let Some(children) = children {
                 for child in children.iter() {
                     if let Ok((mut text, mut font)) = labels.get_mut(child) {
-                        text.0.clone_from(&region.label);
+                        if button.0 == Action::Market
+                            && crate::market::nearby_market(&session, &world).is_some()
+                        {
+                            text.0 = "Market".into();
+                        } else {
+                            text.0.clone_from(&region.label);
+                        }
                         font.font_size = bevy::text::FontSize::Px(14.0 * layout.scale);
                     }
                 }
@@ -974,6 +999,7 @@ mod tests {
             ))
             .init_resource::<crate::pause::PauseMenu>()
             .init_resource::<crate::world_map::WorldMap>()
+            .init_resource::<crate::market::MarketPanel>()
             .insert_resource(session)
             .insert_resource(connection)
             .insert_resource(time)
@@ -1121,9 +1147,17 @@ mod tests {
             matches!(read_message(&mut peer), ClientMessage::Input { input, .. }
             if input.direction == [0.0; 2])
         );
-        // Opening the map drops contacts; closing cannot reuse held fingers.
-        for open in [true, false] {
-            {
+        // Opening either panel drops contacts; closing cannot reuse held fingers.
+        for (market_panel, open) in [(false, true), (false, false), (true, true), (true, false)] {
+            *app.world_mut().resource_mut::<crate::world_map::WorldMap>() = default();
+            app.world_mut()
+                .resource_mut::<crate::market::MarketPanel>()
+                .clear();
+            if market_panel {
+                let mut market = app.world_mut().resource_mut::<crate::market::MarketPanel>();
+                market.open = open;
+                market.input_blocked = true;
+            } else {
                 let mut map = app.world_mut().resource_mut::<crate::world_map::WorldMap>();
                 map.open = open;
                 map.input_blocked = true;
@@ -1146,6 +1180,9 @@ mod tests {
             assert!(matches!(read_message(&mut peer), ClientMessage::Ping));
         }
         *app.world_mut().resource_mut::<crate::world_map::WorldMap>() = default();
+        app.world_mut()
+            .resource_mut::<crate::market::MarketPanel>()
+            .clear();
         app.world_mut().write_message(TouchInput {
             window,
             ..event(3, TouchPhase::Moved, movement)

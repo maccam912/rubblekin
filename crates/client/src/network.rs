@@ -35,7 +35,7 @@ impl Connection {
         name: String,
         mode: SessionMode,
     ) -> io::Result<(Self, ServerMessage)> {
-        Self::connect_with_progress(address, name, mode, |_| Ok(()))
+        Self::connect_with_progress(address, name, mode, None, |_| Ok(()))
     }
 
     /// The callback runs on the connection worker at each real stage and while
@@ -44,6 +44,7 @@ impl Connection {
         address: &str,
         name: String,
         mode: SessionMode,
+        profile_id: Option<String>,
         mut progress: impl FnMut(ConnectionStage) -> io::Result<()>,
     ) -> io::Result<(Self, ServerMessage)> {
         progress(ConnectionStage::ResolvingAddress)?;
@@ -82,6 +83,7 @@ impl Connection {
             version: PROTOCOL_VERSION,
             name,
             mode,
+            profile_id,
         });
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {

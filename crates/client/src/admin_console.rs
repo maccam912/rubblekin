@@ -311,6 +311,7 @@ pub(crate) fn read(
     pause: Option<Res<PauseMenu>>,
     conversation: Option<Res<PilotConversation>>,
     map: Option<Res<crate::world_map::WorldMap>>,
+    market: Option<Res<crate::market::MarketPanel>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut keyboard: MessageReader<MenuKey>,
     #[cfg(not(target_os = "android"))] mut clipboard: Option<ResMut<Clipboard>>,
@@ -349,6 +350,7 @@ pub(crate) fn read(
         && !pause.is_some_and(|pause| pause.open || pause.input_blocked)
         && !conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         && !map.is_some_and(|map| map.open || map.input_blocked)
+        && !market.is_some_and(|market| market.open || market.input_blocked)
     {
         console.open = true;
         console.follow_output = 3;

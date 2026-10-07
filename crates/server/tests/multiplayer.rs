@@ -55,6 +55,46 @@ struct Client {
 }
 
 impl Client {
+    fn connect_profile(addr: SocketAddr, profile: &str) -> (Self, ServerMessage) {
+        let mut client = Self::open(addr);
+        client.send(ClientMessage::Hello {
+            version: PROTOCOL_VERSION,
+            name: "Courier".into(),
+            mode: SessionMode::Player,
+            profile_id: Some(profile.into()),
+        });
+        let welcome = client.until(|message| matches!(message, ServerMessage::Welcome { .. }));
+        (client, welcome)
+    }
+
+    fn teleport(&mut self, position: [f32; 3]) {
+        self.send(ClientMessage::AdminCommand {
+            command: format!("tp {} {} {}", position[0], position[1], position[2]),
+        });
+        let reply =
+            self.until(|message| matches!(message, ServerMessage::AdminCommandResult { .. }));
+        assert!(
+            matches!(reply, ServerMessage::AdminCommandResult {text} if text.contains("Teleported"))
+        );
+    }
+
+    fn market(
+        &mut self,
+        request_id: u64,
+        village_id: Option<u32>,
+        revision: u64,
+        action: rubblekin_core::economy::MarketAction,
+    ) -> ServerMessage {
+        thread::sleep(Duration::from_millis(110));
+        self.send(ClientMessage::Market {
+            request_id,
+            village_id,
+            revision,
+            action,
+        });
+        self.until(|message| matches!(message, ServerMessage::MarketState {request_id: response, ..} if *response == request_id))
+    }
+
     fn connect(addr: SocketAddr, name: &str) -> (Self, ServerMessage) {
         Self::connect_mode(addr, name, SessionMode::Player)
     }
@@ -62,6 +102,7 @@ impl Client {
     fn connect_mode(addr: SocketAddr, name: &str, mode: SessionMode) -> (Self, ServerMessage) {
         let mut client = Self::open(addr);
         client.send(ClientMessage::Hello {
+            profile_id: None,
             version: PROTOCOL_VERSION,
             name: name.into(),
             mode,
@@ -136,6 +177,199 @@ fn nearby_air() -> BlockPos {
         (world.surface_height(2.25, 0.25) / CELL_SIZE).round() as i32,
         0,
     )
+}
+
+#[test]
+fn market_delivery_is_durable_private_and_resumes_without_teleporting_cargo() {
+    use rubblekin_core::economy::MarketAction;
+    const PROFILE: &str = "00000000000000000000000000000042";
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV4;
+    let world = World::generate(42, config.generation);
+    let origin = &world.settlements().unwrap().villages[0];
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, welcome) = Client::connect_profile(server.addr, PROFILE);
+    assert!(!serde_json::to_string(&welcome).unwrap().contains(PROFILE));
+    let initial =
+        client.until(|message| matches!(message, ServerMessage::MarketState { request_id: 0, .. }));
+    assert!(
+        matches!(initial, ServerMessage::MarketState {ledger, ..} if ledger.coins == 0 && ledger.cargo_total() == 0)
+    );
+
+    let mut duplicate = Client::open(server.addr);
+    duplicate.send(ClientMessage::Hello {
+        version: PROTOCOL_VERSION,
+        name: "Other name".into(),
+        mode: SessionMode::Player,
+        profile_id: Some(PROFILE.into()),
+    });
+    let denied = duplicate.until(|message| matches!(message, ServerMessage::Notice { .. }));
+    assert!(matches!(denied, ServerMessage::Notice {text} if text.contains("already playing")));
+    drop(duplicate);
+
+    client.teleport(origin.market);
+    let quote = client.market(1, Some(origin.id), 0, MarketAction::View);
+    let ServerMessage::MarketState {
+        market: Some(view),
+        accepted: true,
+        ..
+    } = quote
+    else {
+        panic!("{quote:?}")
+    };
+    let offer = view.delivery_offer.unwrap();
+    let accepted = client.market(
+        2,
+        Some(origin.id),
+        0,
+        MarketAction::AcceptDelivery {
+            offer: offer.clone(),
+        },
+    );
+    assert!(
+        matches!(accepted, ServerMessage::MarketState {accepted: true, ref ledger, ..} if ledger.delivery.as_ref() == Some(&offer))
+    );
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(on_disk["profiles"][PROFILE]["ledger"]["revision"], 1);
+    assert_eq!(
+        on_disk["profiles"][PROFILE]["ledger"]["delivery"]["amount"],
+        6
+    );
+    let repeat = client.market(
+        3,
+        Some(origin.id),
+        0,
+        MarketAction::AcceptDelivery {
+            offer: offer.clone(),
+        },
+    );
+    assert!(
+        matches!(repeat, ServerMessage::MarketState {accepted: false, ref ledger, ..} if ledger.revision == 1)
+    );
+    let remote = client.market(4, Some(offer.destination), 1, MarketAction::Deliver);
+    assert!(
+        matches!(remote, ServerMessage::MarketState {accepted: false, ref ledger, ..} if ledger.coins == 0)
+    );
+    drop(client);
+    server.stop().unwrap();
+
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, welcome) = Client::connect_profile(server.addr, PROFILE);
+    let ServerMessage::Welcome {
+        session_id,
+        players,
+        ..
+    } = welcome
+    else {
+        panic!()
+    };
+    let player = players
+        .iter()
+        .find(|player| player.id == session_id)
+        .unwrap();
+    assert!(rubblekin_core::economy::can_reach_market(
+        player.body.position,
+        origin.market
+    ));
+    let resumed =
+        client.until(|message| matches!(message, ServerMessage::MarketState { request_id: 0, .. }));
+    assert!(
+        matches!(resumed, ServerMessage::MarketState {ref ledger, ..} if ledger.delivery.as_ref() == Some(&offer))
+    );
+    let destination = world
+        .settlements()
+        .unwrap()
+        .villages
+        .iter()
+        .find(|village| village.id == offer.destination)
+        .unwrap();
+    // Admin movement isolates authoritative reach/transaction checks from the
+    // separately tested walking controller and the native physical-trip check.
+    client.teleport(destination.market);
+    let delivered = client.market(5, Some(destination.id), 1, MarketAction::Deliver);
+    assert!(
+        matches!(delivered, ServerMessage::MarketState {accepted: true, ref ledger, ..} if ledger.coins == 12 && ledger.delivery.is_none())
+    );
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(on_disk["profiles"][PROFILE]["ledger"]["coins"], 12);
+    let repeated = client.market(6, Some(destination.id), 1, MarketAction::Deliver);
+    assert!(
+        matches!(repeated, ServerMessage::MarketState {accepted: false, ref ledger, ..} if ledger.coins == 12)
+    );
+    let (mut other, _) = Client::connect_profile(server.addr, "00000000000000000000000000000043");
+    let own =
+        other.until(|message| matches!(message, ServerMessage::MarketState { request_id: 0, .. }));
+    assert!(
+        matches!(own, ServerMessage::MarketState {ledger, ..} if ledger.coins == 0 && ledger.delivery.is_none())
+    );
+    drop(other);
+    drop(client);
+    server.stop().unwrap();
+}
+
+#[test]
+fn market_save_failure_never_acknowledges_or_replaces_the_canonical_ledger() {
+    use rubblekin_core::economy::MarketAction;
+    const PROFILE: &str = "00000000000000000000000000000044";
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV4;
+    let world = World::generate(42, config.generation);
+    let origin = &world.settlements().unwrap().villages[0];
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    client.teleport(origin.market);
+    let reply = client.market(1, Some(origin.id), 0, MarketAction::View);
+    let ServerMessage::MarketState {
+        market: Some(view), ..
+    } = reply
+    else {
+        panic!("{reply:?}")
+    };
+    let offer = view.delivery_offer.unwrap();
+    let before = fs::read(&config.save_path).unwrap();
+    let temporary = save
+        .0
+        .join(format!(".world.json.{}.tmp", std::process::id()));
+    fs::create_dir(&temporary).unwrap();
+    thread::sleep(Duration::from_millis(110));
+    client.send(ClientMessage::Market {
+        request_id: 2,
+        village_id: Some(origin.id),
+        revision: 0,
+        action: MarketAction::AcceptDelivery { offer },
+    });
+    loop {
+        let mut line = String::new();
+        match client.reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => assert!(!matches!(
+                serde_json::from_str::<ServerMessage>(&line).unwrap(),
+                ServerMessage::MarketState {
+                    request_id: 2,
+                    accepted: true,
+                    ..
+                }
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
+            Err(error) => panic!("Expected a save-failure disconnect: {error}"),
+        }
+    }
+    assert!(server.stop().is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), before);
+    fs::remove_dir(&temporary).unwrap();
+    let restarted = spawn(config).unwrap();
+    let (mut client, _) = Client::connect_profile(restarted.addr, PROFILE);
+    let state =
+        client.until(|message| matches!(message, ServerMessage::MarketState { request_id: 0, .. }));
+    assert!(
+        matches!(state, ServerMessage::MarketState {ledger, ..} if ledger.revision == 0 && ledger.delivery.is_none())
+    );
+    drop(client);
+    restarted.stop().unwrap();
 }
 
 fn assert_distinct_bodies(positions: impl IntoIterator<Item = [f32; 3]>) {
@@ -736,7 +970,9 @@ fn assert_geographic_world_restart(world_generation: WorldGeneration) {
     config.generation = match world_generation {
         WorldGeneration::GeographyV1 => WorldGeneration::GeographyV2,
         WorldGeneration::GeographyV2 => WorldGeneration::ValleyV1,
-        WorldGeneration::ValleyV1 | WorldGeneration::GeographyV3 => unreachable!(),
+        WorldGeneration::ValleyV1 | WorldGeneration::GeographyV3 | WorldGeneration::GeographyV4 => {
+            unreachable!()
+        }
     };
     config.seed = 999;
     let restarted = spawn(config).unwrap();
@@ -852,6 +1088,14 @@ fn observers_receive_the_live_world_without_an_avatar_and_cannot_mutate_it() {
         let notice = observer.until(|message| matches!(message, ServerMessage::Notice { .. }));
         assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("read-only")));
     }
+    observer.send(ClientMessage::Market {
+        request_id: 92,
+        village_id: None,
+        revision: 0,
+        action: rubblekin_core::economy::MarketAction::Deliver,
+    });
+    let notice = observer.until(|message| matches!(message, ServerMessage::Notice { .. }));
+    assert!(matches!(notice, ServerMessage::Notice { text } if text.contains("read-only")));
     let state = observer.until(|message| matches!(message, ServerMessage::State { .. }));
     match state {
         ServerMessage::State { players, npc, .. } => {
@@ -910,6 +1154,7 @@ fn observer_admission_and_old_protocol_fail_with_notices_before_disconnect() {
     let server = spawn(save.config(false)).unwrap();
     let mut denied = Client::open(server.addr);
     denied.send(ClientMessage::Hello {
+        profile_id: None,
         version: PROTOCOL_VERSION,
         name: "Camera".into(),
         mode: SessionMode::Observer,
@@ -945,6 +1190,7 @@ fn an_observer_cannot_repeat_hello_to_create_a_player() {
     let server = spawn(save.config(true)).unwrap();
     let (mut observer, _) = Client::connect_mode(server.addr, "Camera", SessionMode::Observer);
     observer.send(ClientMessage::Hello {
+        profile_id: None,
         version: PROTOCOL_VERSION,
         name: "Attempted player".into(),
         mode: SessionMode::Player,

@@ -267,6 +267,33 @@ impl VillageLife {
             .collect()
     }
 
+    pub(crate) fn market_stocks(&self, id: u32) -> Option<&VillageSnapshot> {
+        self.villages
+            .iter()
+            .find(|village| village.snapshot.id == id)
+            .map(|village| &village.snapshot)
+    }
+
+    pub(crate) fn change_market_stock(
+        &mut self,
+        id: u32,
+        kind: ResourceKind,
+        delta: f32,
+    ) -> Result<(), String> {
+        let economy = self
+            .villages
+            .iter_mut()
+            .find(|village| village.snapshot.id == id)
+            .ok_or("The market is unavailable.")?;
+        let storage = stock_mut(&mut economy.snapshot, kind);
+        let next = *storage + delta;
+        if !next.is_finite() || !(0.0..=MAX_STOCK).contains(&next) {
+            return Err("The market cannot accept that quantity right now.".into());
+        }
+        *storage = next;
+        Ok(())
+    }
+
     pub fn positions(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
         self.residents.iter().map(|resident| resident.body.position)
     }
@@ -3507,6 +3534,7 @@ mod tests {
             std::process::id()
         ));
         let simulation = crate::persistence::Simulation {
+            profiles: Default::default(),
             world: world.clone(),
             npc: crate::npc::Forager::new(&world),
             world_time: time,
@@ -3659,6 +3687,7 @@ mod tests {
                 std::process::id()
             ));
             let simulation = crate::persistence::Simulation {
+                profiles: Default::default(),
                 world: world.clone(),
                 npc: crate::npc::Forager::new(&world),
                 world_time: saved_time,
@@ -3748,6 +3777,7 @@ mod tests {
             std::process::id()
         ));
         let simulation = crate::persistence::Simulation {
+            profiles: Default::default(),
             world: world.clone(),
             npc: crate::npc::Forager::new(&world),
             world_time: 120.0,
@@ -4380,6 +4410,7 @@ mod tests {
                 .as_nanos()
         ));
         let sim = Simulation {
+            profiles: Default::default(),
             npc: Forager::new(&world),
             world,
             world_time: 123.0,

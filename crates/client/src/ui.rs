@@ -131,7 +131,7 @@ pub fn setup_ui(
             (Text::new(format!("{}{}", if observing {
                 "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect aimed target     •     F2   graphics\nV   visit next village     •     M   world map\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
-                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot     •     M   world map\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
+                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   materials     •     F   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot     •     M   world map\nB   cargo, markets & delivery work\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
             }, if session.can_admin { "\n` / ~   admin commands (help lists commands)" } else { "" })), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
         ],
     ));
@@ -317,7 +317,7 @@ fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) 
                     Text::new(if observing {
                         "Left stick: fly · swipe the world: look\nRise / Fall: vertical flight · Sprint: boost\n+ / −: camera speed\nMenu: graphics, return to spawn, next village, servers\nInspect: aimed character, block, or plot · swipe panel to scroll\nRead-only observer: no avatar or editing"
                     } else {
-                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose a building block\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nMenu: graphics, controls, and leave world"
+                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose a building block\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nCargo: coins, goods and delivery work · trade at market entrances\nMenu: graphics, controls, and leave world"
                     }),
                     TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink()),
                     Node { flex_shrink: 0., ..default() },
@@ -425,6 +425,7 @@ pub fn update_ui(
     console: Option<Res<crate::admin_console::AdminConsole>>,
     map: Option<Res<crate::world_map::WorldMap>>,
     conversation: Option<Res<crate::airships::PilotConversation>>,
+    market: Option<Res<crate::market::MarketPanel>>,
     mut refresh: Local<f32>,
     mut texts: ParamSet<(
         Query<&mut Text, With<StatusText>>,
@@ -449,6 +450,7 @@ pub fn update_ui(
     let menu_open = pause.as_ref().is_some_and(|pause| pause.open)
         || console.as_ref().is_some_and(|console| console.open)
         || map.as_ref().is_some_and(|map| map.open)
+        || market.as_ref().is_some_and(|market| market.open)
         || conversation
             .as_ref()
             .is_some_and(|conversation| conversation.open());
@@ -484,7 +486,16 @@ pub fn update_ui(
         let value = crate::inspection_details::text(&world.0, &session);
         set_text(&mut text, value);
     }
-    let notice = notice_text(&session, &world, time.elapsed_secs_f64(), touch_enabled);
+    let mut notice = notice_text(&session, &world, time.elapsed_secs_f64(), touch_enabled);
+    if let Some(market) = &market {
+        let cargo = crate::market::hud_text(market, &session, &world, touch_enabled);
+        if !cargo.is_empty() {
+            if !notice.is_empty() {
+                notice.push('\n');
+            }
+            notice.push_str(&cargo);
+        }
+    }
     for mut text in &mut texts.p2() {
         set_text(&mut text, notice.clone());
     }
@@ -727,6 +738,7 @@ mod tests {
             .init_resource::<crate::world_map::WorldMap>()
             .init_resource::<crate::admin_console::AdminConsole>()
             .init_resource::<crate::airships::PilotConversation>()
+            .init_resource::<crate::market::MarketPanel>()
             .init_gizmo_group::<DefaultGizmoConfigGroup>()
             .add_systems(Update, crate::edit_blocks);
         app.world_mut().spawn((
@@ -747,13 +759,16 @@ mod tests {
         );
         assert_eq!(app.world().resource::<Session>().status_until, 13.);
         assert_eq!(app.world().resource::<Session>().next_request, 1);
-        for modal in 0..5 {
+        for modal in 0..7 {
             *app.world_mut().resource_mut::<crate::pause::PauseMenu>() = default();
             *app.world_mut().resource_mut::<crate::world_map::WorldMap>() = default();
             *app.world_mut()
                 .resource_mut::<crate::admin_console::AdminConsole>() = default();
             *app.world_mut()
                 .resource_mut::<crate::airships::PilotConversation>() = default();
+            app.world_mut()
+                .resource_mut::<crate::market::MarketPanel>()
+                .clear();
             {
                 let mut session = app.world_mut().resource_mut::<Session>();
                 session.status = "existing notice".into();
@@ -781,11 +796,21 @@ mod tests {
                         .resource_mut::<crate::airships::PilotConversation>()
                         .input_blocked = true
                 }
-                _ => {
+                4 => {
                     app.world_mut().resource_mut::<Session>().ride = Some(AirshipRide {
                         ship_id: 1,
                         seat: 0,
                     })
+                }
+                5 => {
+                    app.world_mut()
+                        .resource_mut::<crate::market::MarketPanel>()
+                        .open = true
+                }
+                _ => {
+                    app.world_mut()
+                        .resource_mut::<crate::market::MarketPanel>()
+                        .input_blocked = true
                 }
             }
             app.world_mut().run_schedule(Update);
@@ -797,6 +822,9 @@ mod tests {
             assert_eq!(app.world().resource::<Session>().next_request, 1);
         }
         app.world_mut().resource_mut::<Session>().ride = None;
+        app.world_mut()
+            .resource_mut::<crate::market::MarketPanel>()
+            .clear();
         let block = BlockPos::new(0, 154, -8);
         app.world_mut()
             .resource_mut::<VoxelWorld>()

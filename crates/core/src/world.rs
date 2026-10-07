@@ -29,6 +29,13 @@ pub enum WorldGeneration {
     GeographyV1,
     GeographyV2,
     GeographyV3,
+    GeographyV4,
+}
+
+impl WorldGeneration {
+    pub const fn has_settlements(self) -> bool {
+        matches!(self, Self::GeographyV3 | Self::GeographyV4)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -283,8 +290,12 @@ impl World {
             trees: HashMap::new(),
             overrides: HashMap::new(),
         };
-        if generation == WorldGeneration::GeographyV3 {
-            world.settlements = Some(Arc::new(SettlementPlan::generate(&world)));
+        if generation.has_settlements() {
+            let mut plan = SettlementPlan::generate(&world);
+            if generation == WorldGeneration::GeographyV4 {
+                plan.add_regional_buildings(&world);
+            }
+            world.settlements = Some(Arc::new(plan));
         }
         world
     }
@@ -890,7 +901,9 @@ impl World {
         let sample = geography.sample(tree_mx, tree_mz);
         let refined = matches!(
             self.generation,
-            WorldGeneration::GeographyV2 | WorldGeneration::GeographyV3
+            WorldGeneration::GeographyV2
+                | WorldGeneration::GeographyV3
+                | WorldGeneration::GeographyV4
         );
         let (density, kind) = match sample.biome {
             Biome::Forest => (75, TreeKind::Broadleaf),

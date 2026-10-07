@@ -15,6 +15,7 @@ path = "src/main.rs"
 rubblekin_core.workspace = true
 rubblekin_server.workspace = true
 serde_json.workspace = true
+getrandom = "=0.3.4"
 bevy = { version = "=0.19.1", default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_pbr", "bevy_gizmos", "bevy_gizmos_render", "bevy_light", "bevy_mesh", "bevy_camera", "bevy_color", "bevy_image", "bevy_material", "bevy_shader", "bevy_text", "bevy_ui", "bevy_ui_render", "bevy_input_focus", "default_font", "png", "keyboard", "mouse", "touch", "tonemapping_luts", "zstd_rust"] }
 
 # Matches Bevy's window backend; native modifier flags support macOS text shortcuts.

@@ -175,15 +175,15 @@ Export the actual generated geography as a shaded PPM map, with the spawn marked
 cargo run --locked -p rubblekin_core --example geography -- 42 /tmp/geography.ppm
 ```
 
-New islands use GeographyV3, retaining GeographyV2 landforms and biomes: visibly distinct meadows, broadleaf woods, pine forest, dry scrub, desert, wet forest, tundra, alpine rock, beaches, and snow. Pine trees have taller tiered crowns, scrub is low and sparse, and meadows have fewer trees. River water and its carved bed share a channel profile, avoiding elevated water walls at tributaries and dry banks. Medium/far terrain uses smooth stitched heightmap triangles painted with an 8192² desktop map: biome colors, gentle relief, actual water, village footprints/fields, connecting trails, and individual tree-colored dots at the actual generated positions. Android retains 2048²; smaller device texture limits select a supported power-of-two size. The full 8192² mip chain uses about 341 MiB of GPU texture storage (about 21 MiB at 2048²); generation happens once when joining a world, and CPU pixels are released after upload. Filtered mip levels limit distant shimmer. Simplified trees cover your chosen 128–2500 m range, initially 128 m, while building silhouettes bridge to editable voxels within 128 m; fine grain stays on nearby blocks. Stepped fake voxel LOD and coarse square grain have been removed.
+New islands use GeographyV4, retaining the established landforms, village locations, trails, and biomes: visibly distinct meadows, broadleaf woods, pine forest, dry scrub, desert, wet forest, tundra, alpine rock, beaches, and snow. Pine trees have taller tiered crowns, scrub is low and sparse, and meadows have fewer trees. River water and its carved bed share a channel profile, avoiding elevated water walls at tributaries and dry banks. Medium/far terrain uses smooth stitched heightmap triangles painted with an 8192² desktop map: biome colors, gentle relief, actual water, village footprints/fields, connecting trails, and individual tree-colored dots at the actual generated positions. Android retains 2048²; smaller device texture limits select a supported power-of-two size. The full 8192² mip chain uses about 341 MiB of GPU texture storage (about 21 MiB at 2048²); generation happens once when joining a world, and CPU pixels are released after upload. Filtered mip levels limit distant shimmer. Simplified trees cover your chosen 128–2500 m range, initially 128 m, while building silhouettes bridge to editable voxels within 128 m; fine grain stays on nearby blocks. Stepped fake voxel LOD and coarse square grain have been removed.
 
-Existing islands retain GeographyV1 or GeographyV2, including their saved edits and terrain. Villages and resources are added only to new GeographyV3 worlds; existing worlds are not silently converted. To try the revised generator without replacing an existing world:
+Existing islands retain GeographyV1 or GeographyV2, including their saved edits and terrain. Villages and resources appear in GeographyV3/V4 worlds; existing worlds are not silently converted. V4 adds regional cottages, farm windmills, and climbable lookouts. Use `--generation v3` with a fresh save to reproduce the previous generator. To try the revised generator without replacing an existing world:
 
 ```sh
 cargo run --locked -p rubblekin_client -- --local --observe --save saves/detailed-island.json
 ```
 
-Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Individual edits appear only in the nearby detailed area; very distant terrain still uses a coarse surface, and vegetation beyond the chosen tree range is represented by crown-colored dots baked into the terrain texture, with no added tree meshes or draw calls. These dots describe generated trees; individual saved edits still appear only in detailed terrain. Village airships and the in-game world map are implemented below; gliders remain future work. Villages and trails are now generated in GeographyV3; live physical settlement expansion remains future work. Representative integrated-graphics measurements remain necessary. The [map-textured valley](artifacts/map-lod-valley.png), [closer view](artifacts/map-lod-near.png), [forest/coast](artifacts/map-lod-forest.png), and [exact 2048² atlas](artifacts/distant-map-atlas.png) show the approved medium/far rendering, enabled automatically in all graphics presets. Nearby [voxel gameplay](artifacts/map-lod-ground.png) and [ground shading](artifacts/terrain-readable-ground.png) are retained. Export the current exact atlas with `cargo run --locked -p rubblekin_client --example distant_map -- 42 /tmp/distant-map.ppm` (8192² by default; append `2048` for the fallback raster).
+Current limits: drainage follows eight directions on the 64 m grid; water is static and does not simulate flowing through excavations or swimming. Individual edits appear only in the nearby detailed area; very distant terrain still uses a coarse surface, and vegetation beyond the chosen tree range is represented by crown-colored dots baked into the terrain texture, with no added tree meshes or draw calls. These dots describe generated trees; individual saved edits still appear only in detailed terrain. Village airships and the in-game world map are implemented below; gliders remain future work. Villages and trails are generated in GeographyV3/V4; live physical settlement expansion remains future work. Representative integrated-graphics measurements remain necessary. The [map-textured valley](artifacts/map-lod-valley.png), [closer view](artifacts/map-lod-near.png), [forest/coast](artifacts/map-lod-forest.png), and [exact 2048² atlas](artifacts/distant-map-atlas.png) show the approved medium/far rendering, enabled automatically in all graphics presets. Nearby [voxel gameplay](artifacts/map-lod-ground.png) and [ground shading](artifacts/terrain-readable-ground.png) are retained. Export the current exact atlas with `cargo run --locked -p rubblekin_client --example distant_map -- 42 /tmp/distant-map.ppm` (8192² by default; append `2048` for the fallback raster).
 
 ## Villages, resources, and residents
 
@@ -203,6 +203,18 @@ cargo run --locked -p rubblekin_core --example village_asset_catalog -- /tmp/vil
 
 Existing saves remain available with `--save saves/geography.json` or `--save saves/valley.json`. Protocol v9 requires rebuilt matching clients and servers. This source update does not itself update the public test server.
 
+## Trade and delivery work
+
+Press **B** or **Cargo** to see your coins, goods, and delivery. Walk up to a village market entrance (within three meters) to buy or sell food, timber, stone, clay, and iron. Prices reflect local production and current stock. Choose one or five units; the panel shows the exact total before each purchase or sale. Transactions use the server’s current quote and save before confirmation. Village food and material reserves cannot be bought away.
+
+You start with zero coins. Accept a delivery at a market to carry six sealed units to a neighboring village for **12 coins**. Deliver at the destination market, or return the parcel at its origin. Jobs have no expiry. Cargo holds **24 units**, including the sealed parcel; you can carry one delivery at a time. Ordinary walking and free airships transport cargo. Creative building materials remain separate from traded goods.
+
+The panel has large buttons, keyboard selection with Tab/arrows and Enter, and mouse-wheel or touch scrolling. B, Escape, Android Back, or Close returns to play. Opening a panel stops your controls while the shared world keeps running. The HUD retains your active delivery destination.
+
+Use the same **character name** to keep progress on this device. `player-profiles.json` in the game data directory stores private guest tokens scoped to the local save or remote address and character name. Back it up with your world save; losing the token loses access to that character’s progress. A different name creates a separate character. The server saves coins, cargo, job, and location in the world file; reconnecting also restores a moving airship position when applicable. Two sessions cannot use the same character simultaneously. Existing worlds gain markets without regenerating their terrain. Delivery rewards and sales create coins; purchases remove them. Village treasuries and a balanced monetary supply are outside this prototype.
+
+New V4 villages keep their established doors, fields, residents, and trade routes while using timber cabins, pale masonry cottages, and steep-roof upland homes. Suitable sites add a farm windmill or a stair-access lookout joined to the village lane. These are editable voxel buildings with interiors; windmill sails are stationary. The [asset sheet](artifacts/village-assets.svg) shows the actual generated shapes, and the [native market](artifacts/player-market.png) shows a loaded delivery. The [windmill view](artifacts/village-windmill.png) records the native landmark. Difficult sites may omit the extra landmark.
+
 ## Controls
 
 | Input | Action |
@@ -218,6 +230,7 @@ Existing saves remain available with `--save saves/geography.json` or `--save sa
 | F; Q / E | Toggle creative flight; descend / ascend. |
 | Tab | Close inspection, or open it and select the target under the center dot. |
 | G / N | Optional pilot conversation / next nearby pilot. |
+| B | Open cargo, coins, and delivery work; trade when beside a market. |
 | F2 | Cycle Low → Balanced → High → Low graphics. |
 | M | Open or close the world map; Escape also returns to play. |
 | H | Show or hide the controls panel. |
@@ -252,11 +265,11 @@ Press the **backquote / tilde key** (` / ~) in an admin-enabled player session t
 
 `tp` is an alias for `teleport`; a leading `/` is optional. Coordinates are **meters**, in X Y Z order, with Y the height of the player's feet. They must be inside the world and clear of terrain and characters. Named destinations choose clear space within three meters so players do not overlap; grounded destinations require a nearby supported floor. Names match in full, ignoring case; quote names containing spaces, for example `teleport "Ian Koski" Violet`. Missing or duplicate names produce a readable error.
 
-The existing server-wide admin setting controls access: local hosting enables it for every connected player, dedicated servers default to disabled, and observers remain read-only. No per-user authentication is added. Teleporting clears velocity and preserves the player's creative-flight toggle. Coordinate teleports detach from airships; teleporting to a passenger places you on their moving deck. Protocol v9 invalidates pre-teleport movement inputs and requires matching rebuilt clients and servers.
+The existing server-wide admin setting controls access: local hosting enables it for every connected player, dedicated servers default to disabled, and observers remain read-only. No per-user authentication is added. Teleporting clears velocity and preserves the player's creative-flight toggle. Coordinate teleports detach from airships; teleporting to a passenger places you on their moving deck. Protocol v10 invalidates pre-teleport movement inputs and requires matching rebuilt clients and servers.
 
 ## Ride village airships
 
-Every GeographyV3 village has an airship port and low landing berths connected by wooden gangways. Two-way services connect neighboring villages, with connections for farther trips. Each direction departs within three minutes and stops for 30 seconds; these are initial tuning defaults. Rides are currently free.
+Every GeographyV3/V4 village has an airship port and low landing berths connected by wooden gangways. Two-way services connect neighboring villages, with connections for farther trips. Each direction departs within three minutes and stops for 30 seconds; these are initial tuning defaults. Rides are currently free.
 
 Walk or jump onto a landed airship to ride. Move, sprint, look around and jump with the ordinary controls while it carries you. Walk or jump off an edge at any time, including during flight; you return to ordinary falling. There are no boarding/exit menus or required conversations. The current prototype has no fall damage; gliders remain future work.
 
@@ -264,7 +277,7 @@ Optional **G / Pilot** asks a nearby pilot where they are going and when they le
 
 NPC traders compare the complete airship trip, including approach and waiting, against walking to their destination. They carry their goods aboard and continue to the original destination before delivering; local jobs continue on foot. Journey state and schedules resume from saved simulation time after restart; server downtime is not replayed.
 
-Ports, gangways and ships are additive entities, so existing GeographyV3 terrain and block edits remain compatible. Worlds without villages have no routes. Rebuild both client and server for protocol v9; this local source change does not update the public server.
+Ports, gangways and ships are additive entities, so existing GeographyV3 terrain and block edits remain compatible. Worlds without villages have no routes. Rebuild both client and server for protocol v10; this local source change does not update the public server.
 
 Native macOS captures show the [voxel airship at its landing](artifacts/airship-port.png) and the [open deck in flight](artifacts/airship-onboard.png).
 
@@ -279,11 +292,11 @@ cargo run --locked -p rubblekin_client -- --connect 127.0.0.1:7878 --observe
 
 Observer sessions require an admin-enabled server (`--allow-admin` on dedicated hosting). Local hosting enables this; the public test server has it disabled. The existing admin setting applies to everyone who can connect, so it is not per-user authentication.
 
-The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed; **V** visits the next village in GeographyV3. Tab closes inspection or opens it on the aimed character, block, or plot. F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
+The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 2–64 m/s (initially 12), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed; **V** visits the next village in GeographyV3/V4. Tab closes inspection or opens it on the aimed character, block, or plot. F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
 
 Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. In geographic worlds, nearby detailed terrain follows the camera and distant landforms cover the full 32.768 km region. The old 160 × 160 m valley renderer remains available for legacy saves.
 
-The current handshake uses **protocol v9**. Rebuild/restart both client and server together. Save version 3 records the terrain generator and village residents/stores; earlier version-3 residents receive default needs and keep their jobs, goods, and terrain. Original version-1 valleys and version-2 worlds load with their original terrain and upgrade save metadata without changing their generator.
+The current handshake uses **protocol v10**. Rebuild/restart both client and server together. Save version 4 records the terrain generator, village residents/stores, and private player trading progress. Versions 1–3 load additively; earlier residents receive default needs and keep their jobs, goods, and terrain. Original version-1 valleys and version-2 worlds load with their original terrain and upgrade save metadata without changing their generator.
 
 ## Graphics
 
@@ -329,13 +342,13 @@ cargo run --locked -p rubblekin_server -- --bind 0.0.0.0:7878 --save saves/share
 
 Join it from the connection screen or with the client's `--connect` option. Add `--allow-admin` only for a trusted development session; it authorizes **every** connected player, not named administrators. Ctrl+C or SIGTERM saves the simulation and exits cleanly.
 
-Only one process can own a save file. Stop an auto-host before starting a dedicated server on the same port or save. Players receive new session identities and spawn positions when they reconnect; player accounts and persistent character positions are not implemented.
+Only one process can own a save file. Stop an auto-host before starting a dedicated server on the same port or save. Players receive new public session IDs when reconnecting. A private guest token restores trading progress and the saved position for that character on this server/world. This is local guest progress rather than an account/login system.
 
 ## Saves and containers
 
 Accepted edits are saved before the server acknowledges them. The server writes a temporary file beside the save, syncs it, and atomically replaces the previous save. An OS lock on a sidecar file prevents concurrent writers. NPC state and simulation time are checkpointed every five seconds and on orderly shutdown. Corrupt or unsupported saves fail visibly and are left intact.
 
-There is no downtime catch-up: simulation advances while the server runs, even with zero players, and resumes from saved time after a restart. The save records its terrain-generation version. Version-1 valley saves keep the original terrain when read and are written as version 3 with an explicit ValleyV1 generator. New islands use GeographyV3; existing GeographyV1/V2 islands keep their original terrain; a new client does not turn an existing valley into an island. Unknown save/generation versions fail visibly. Use a fresh save path to explore new geography.
+There is no downtime catch-up: simulation advances while the server runs, even with zero players, and resumes from saved time after a restart. The save records its terrain-generation version. Version-1 valley saves keep the original terrain when read and are written as version 4 with an explicit ValleyV1 generator. New islands use GeographyV4; existing GeographyV1/V2/V3 islands keep their original terrain; a new client does not turn an existing valley into an island. Unknown save/generation versions fail visibly. Use a fresh save path to explore new geography.
 
 [Dockerfile](Dockerfile) tests and builds only the headless server; it excludes the renderer and game assets. The runtime runs as UID/GID 10001. [deploy/kubernetes.yaml](deploy/kubernetes.yaml) provides one replica, a 1 GiB persistent volume claim, a `Recreate` rollout strategy, startup/readiness probes, `imagePullPolicy: Always`, and a private `ClusterIP` service. Review storage settings before using this standalone template.
 
@@ -412,7 +425,7 @@ cargo run --locked -p rubblekin_client -- --local --screenshot artifacts/geograp
 ## Current limits and next feedback
 
 - **World:** new islands span 32.768 km with 50 cm editable cells and bounded local detail. Distant terrain reflects generated geography; remote edits appear only in the nearby voxel region; medium/far heightmaps use the generated map texture, with simplified trees through the chosen 128–2500 m range. Building proxies outside near detail extend to 128 m; pending near chunks retain their buildings until detailed geometry is ready. Legacy 160 m valleys keep their original terrain.
-- **Simulation:** Moss retains the original foraging loop. GeographyV3 adds up to 60 village residents with hunger/energy, active crop work, shared crop growth, stores, finite extraction reserves, and physical deliveries/trade. Local farm paths use actual terrain and character physics; player-built obstructions can still block residents. Live settlement expansion, prices/currency, player farming/trade interactions, individual plant lifecycles, and flowing water remain future work.
+- **Simulation:** Moss retains the original foraging loop. GeographyV3 adds up to 60 village residents with hunger/energy, active crop work, shared crop growth, stores, finite extraction reserves, and physical deliveries/trade. Local farm paths use actual terrain and character physics; player-built obstructions can still block residents. Player markets, coins, cargo and paid deliveries use those real stores. Live settlement expansion, player farming, individual plant lifecycles, and flowing water remain future work.
 - **Airships:** scheduled village shuttles, NPC passengers and pilot destination dialogue are implemented. Board physically, move on deck and walk/jump off anywhere. Routes, waits and passenger comfort need playtesting; gliding remains future work.
 - **Building and ownership:** all players have unlimited materials and cooperative edit access. Claims and configurable offline property protection remain planned; no protection system is implemented. Moss does not destroy player structures.
 - **Networking:** 32 connection cap and 100,000 edited-cell cap are defensive prototype limits. There are no accounts, transport encryption, hostile-client load tests, or public-server readiness claims. Slow or malformed peers are disconnected.
