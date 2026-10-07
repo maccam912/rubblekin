@@ -316,10 +316,14 @@ impl VillageLife {
                     transit.stage,
                     TransitStage::Boarding | TransitStage::Alighting
                 ) || reservation.seat >= MAX_AIRSHIP_SEATS
-                    || !((ship.from_village == transit.origin
-                        && ship.next_village == transit.next_stop)
-                        || (ship.next_village == transit.origin
-                            && ship.from_village == transit.next_stop))
+                    || !(transit.stage == TransitStage::Alighting
+                        && network
+                            .landing_path(reservation.ship_id, transit.next_stop)
+                            .is_some())
+                        && !((ship.from_village == transit.origin
+                            && ship.next_village == transit.next_stop)
+                            || (ship.next_village == transit.origin
+                                && ship.from_village == transit.next_stop))
                 {
                     return false;
                 }
@@ -382,6 +386,16 @@ impl VillageLife {
                     .deck_position
                     .unwrap_or_else(|| initial_deck_position(ride.seat));
                 let unslotted = ride.seat == u8::MAX;
+                // Older saves can record contact with another craft while
+                // walking off a shared landing. Keep the real attachment only
+                // when that craft also visits the intended exit port; the next
+                // transit step reconciles its route/landing metadata. All pose,
+                // local bounds and original reservation checks still apply.
+                let incidental_exit = unslotted
+                    && transit.stage == TransitStage::Alighting
+                    && network
+                        .landing_path(ride.ship_id, transit.next_stop)
+                        .is_some();
                 if (ride.seat >= MAX_AIRSHIP_SEATS && !unslotted)
                     || unslotted
                         && !matches!(
@@ -389,10 +403,11 @@ impl VillageLife {
                             TransitStage::Boarding | TransitStage::Riding | TransitStage::Alighting
                         )
                     || !unslotted && transit.stage != TransitStage::Riding
-                    || !((ship.from_village == transit.origin
-                        && ship.next_village == transit.next_stop)
-                        || (ship.next_village == transit.origin
-                            && ship.from_village == transit.next_stop))
+                    || !incidental_exit
+                        && !((ship.from_village == transit.origin
+                            && ship.next_village == transit.next_stop)
+                            || (ship.next_village == transit.origin
+                                && ship.from_village == transit.next_stop))
                     || !unslotted
                         && occupied.iter().any(|other: &AirshipRide| {
                             other.ship_id == ride.ship_id && other.seat == ride.seat
@@ -415,9 +430,9 @@ impl VillageLife {
                             || local[2].abs()
                                 > rubblekin_core::airships::AIRSHIP_DECK_HALF_LENGTH + 0.02
                             || local[1] < -0.03)
-                    || transit
-                        .reservation
-                        .is_some_and(|reservation| reservation.ship_id != ride.ship_id)
+                    || transit.reservation.is_some_and(|reservation| {
+                        reservation.ship_id != ride.ship_id && !incidental_exit
+                    })
                 {
                     return false;
                 }
@@ -1319,6 +1334,16 @@ fn advance_transit(
             let path = network
                 .landing_path(reservation.ship_id, transit.origin)
                 .unwrap();
+            bypass_occupied_landing_gate(
+                world,
+                resident,
+                &mut transit,
+                path,
+                true,
+                obstacles,
+                network,
+                time,
+            );
             let target = if transit.ride.is_some() {
                 ride_position(&ship, reservation.seat)
             } else {
@@ -1414,11 +1439,22 @@ fn advance_transit(
             }
         }
         TransitStage::Alighting => {
+            reconcile_alighting_contact(&mut transit, network);
             let reservation = transit.reservation.unwrap();
             let ship = network.ship(reservation.ship_id, time).unwrap();
             let path = network
                 .landing_path(reservation.ship_id, transit.next_stop)
                 .unwrap();
+            bypass_occupied_landing_gate(
+                world,
+                resident,
+                &mut transit,
+                path,
+                false,
+                obstacles,
+                network,
+                time,
+            );
             if transit.ride.is_some() {
                 let pilot = rubblekin_core::airships::pilot_position(&ship);
                 while transit.waypoint > 0
@@ -1438,7 +1474,10 @@ fn advance_transit(
             resident.snapshot.target = Some(target);
             resident.snapshot.reason =
                 "Walking off the airship and back to the village road".into();
-            if transit.ride.is_some() && ship.docked_at != Some(transit.next_stop) {
+            if transit.ride.is_some()
+                && (ship.docked_at != Some(transit.next_stop)
+                    || ship.departure_in as f64 > AIRSHIP_DWELL_SECONDS - AIRSHIP_TURN_SECONDS)
+            {
                 move_character_with_airships(
                     world,
                     &mut resident.body,
@@ -1451,8 +1490,12 @@ fn advance_transit(
                     &mut transit.deck_position,
                 );
                 resident.snapshot.action = ResidentAction::RidingAirship;
-                resident.snapshot.reason =
-                    "Landing was blocked; staying aboard until the destination docks again".into();
+                resident.snapshot.reason = if ship.docked_at == Some(transit.next_stop) {
+                    "Arrived; waiting for the airship to finish turning at the landing"
+                } else {
+                    "Landing was blocked; staying aboard until the destination docks again"
+                }
+                .into();
             } else if horizontal_distance(resident.body.position, target) <= ARRIVAL {
                 if transit.waypoint > 0 {
                     transit.waypoint -= 1;
@@ -1480,10 +1523,77 @@ fn advance_transit(
                     &mut transit,
                 );
             }
+            reconcile_alighting_contact(&mut transit, network);
         }
     }
     resident.transit = Some(transit);
     true
+}
+
+fn reconcile_alighting_contact(transit: &mut Transit, network: &AirshipNetwork) {
+    let Some(ride) = transit.ride else {
+        return;
+    };
+    if transit
+        .reservation
+        .is_some_and(|r| r.ship_id == ride.ship_id)
+    {
+        return;
+    }
+    let Some(path) = network.landing_path(ride.ship_id, transit.next_stop) else {
+        // Like boarding, crossing an unrelated dock does not attach this job
+        // to a craft that cannot reach its intended port. The pier remains.
+        transit.ride = None;
+        transit.deck_position = None;
+        return;
+    };
+    transit.reservation = Some(AirshipRide {
+        ship_id: ride.ship_id,
+        seat: 0,
+    });
+    // An attached passenger exits from this craft's deck when it docks again,
+    // even if its airborne position is now nearer a different static gate.
+    transit.waypoint = path.len() - 1;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bypass_occupied_landing_gate(
+    world: &World,
+    resident: &Resident,
+    transit: &mut Transit,
+    path: &[[f32; 3]],
+    forward: bool,
+    obstacles: &[[f32; 3]],
+    network: &AirshipNetwork,
+    time: f64,
+) {
+    let end = if forward { path.len() - 1 } else { 0 };
+    if transit.ride.is_some()
+        || transit.waypoint == end
+        || resident.navigation.stalled < 0.3
+        || !obstacles
+            .iter()
+            .any(|p| rubblekin_core::physics::characters_overlap(path[transit.waypoint], *p))
+    {
+        return;
+    }
+    let next = if forward {
+        transit.waypoint + 1
+    } else {
+        transit.waypoint - 1
+    };
+    // A character can occupy the exact gate even when there is room to pass.
+    // Preserve corners/steps with a terrain-and-ramp probe; live movement still
+    // steers around that character. Endpoints and reserved deck places stay exact.
+    if (Walking {
+        world,
+        obstacles: &[],
+        airships: Some((network, time)),
+    })
+    .has_straight_path(&Walker::on_foot(&resident.body), path[next])
+    {
+        transit.waypoint = next;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2503,7 +2613,15 @@ mod tests {
                         deck_position: None,
                     });
                     for boarding in [true, false] {
+                        let mut tick_time = time;
                         if !boarding {
+                            // Start once this craft has turned, then advance
+                            // the clock throughout the exit. A shared landing
+                            // can contact another craft still turning; a frozen
+                            // clock would make its legitimate wait permanent.
+                            tick_time = (time
+                                - (AIRSHIP_DWELL_SECONDS - AIRSHIP_TURN_SECONDS - 1.0))
+                                .max(0.0);
                             let transit = resident.transit.as_mut().unwrap();
                             let ride = transit.ride.unwrap();
                             transit.stage = TransitStage::Alighting;
@@ -2528,9 +2646,12 @@ mod tests {
                                 0.25,
                                 &[],
                                 &network,
-                                time,
+                                tick_time,
                                 &[],
                             );
+                            if !boarding {
+                                tick_time += 0.25;
+                            }
                             let transit = resident.transit.as_ref().unwrap();
                             if transit.stage
                                 == if boarding {
@@ -2587,137 +2708,436 @@ mod tests {
     }
 
     #[test]
-    fn opposing_traders_pass_on_each_landing_without_overlap_or_losing_cargo() {
-        let world = World::generate(42, WorldGeneration::GeographyV3);
-        let network = AirshipNetwork::new(&world);
-        let plan = world.settlements().unwrap();
-        let life = VillageLife::new(&world);
-        for route in network.routes() {
-            for (origin, destination) in [(route.from, route.to), (route.to, route.from)] {
-                for dt in [0.05, 0.25] {
+    fn stationary_player_on_landing_gate_can_be_passed_without_losing_cargo() {
+        for seed in [42, 43] {
+            let world = World::generate(seed, WorldGeneration::GeographyV3);
+            let network = AirshipNetwork::new(&world);
+            let plan = world.settlements().unwrap();
+            let life = VillageLife::new(&world);
+            for route in network.routes() {
+                for (origin, destination) in [(route.from, route.to), (route.to, route.from)] {
                     let leg = network.next_leg(origin, destination, 0.0).unwrap();
                     let time = (leg.departure_in as f64 - 1.0).max(0.0);
                     let ship = network.ship(leg.ship_id, time).unwrap();
                     let path = network.landing_path(ship.id, origin).unwrap();
-                    let mut boarding = life
-                        .residents
+                    let gate = path
                         .iter()
-                        .find(|r| r.snapshot.village_id == origin && r.trail.is_some())
-                        .unwrap()
-                        .clone();
-                    boarding.phase = Phase::ToTrade;
-                    let waypoint = path
-                        .iter()
-                        .rposition(|p| horizontal_distance(*p, ship.position) >= 14.0)
+                        .rposition(|p| horizontal_distance(*p, ship.position) >= 12.0)
                         .unwrap();
-                    boarding.body = Body::new(path[waypoint]);
-                    boarding.body.on_ground = true;
-                    boarding.transit = Some(Transit {
-                        origin,
-                        destination,
-                        next_stop: destination,
-                        stage: TransitStage::Boarding,
-                        waypoint,
-                        ride: None,
-                        reservation: Some(AirshipRide {
-                            ship_id: ship.id,
-                            seat: 0,
-                        }),
-                        deck_position: None,
-                    });
-                    let mut alighting = boarding.clone();
-                    alighting.phase = Phase::Returning;
-                    let exit_waypoint = path
-                        .iter()
-                        .rposition(|p| horizontal_distance(*p, ship.position) >= 11.0)
-                        .unwrap();
-                    alighting.body = Body::new(path[exit_waypoint]);
-                    alighting.body.on_ground = true;
-                    alighting.transit = Some(Transit {
-                        origin: destination,
-                        destination: origin,
-                        next_stop: origin,
-                        stage: TransitStage::Alighting,
-                        waypoint: exit_waypoint,
-                        ride: None,
-                        reservation: Some(AirshipRide {
-                            ship_id: ship.id,
-                            seat: 7,
-                        }),
-                        deck_position: None,
-                    });
-                    let cargo = Some(ResourceCargo {
-                        kind: ResourceKind::Timber,
-                        amount: 6.0,
-                    });
-                    boarding.snapshot.carrying = cargo.clone();
-                    alighting.snapshot.carrying = cargo.clone();
-                    // Runtime passing preferences/checkpoints are rebuilt on load.
-                    boarding.stuck = 10.0;
-                    alighting.stuck = 10.0;
-                    boarding =
-                        serde_json::from_slice(&serde_json::to_vec(&boarding).unwrap()).unwrap();
-                    alighting =
-                        serde_json::from_slice(&serde_json::to_vec(&alighting).unwrap()).unwrap();
-                    let mut completed = [false; 2];
-                    for _ in 0..4_000 {
-                        let before = [boarding.body.position, alighting.body.position];
-                        if !completed[0] {
-                            advance_transit(
-                                &world,
-                                plan,
-                                &mut boarding,
-                                dt,
-                                &[alighting.body.position],
-                                &network,
-                                time,
-                                &[],
+                    assert!(
+                        gate >= 1 && gate + 1 < path.len(),
+                        "seed={seed} route={} origin={origin} gate={gate} len={} path={path:?}",
+                        route.id,
+                        path.len()
+                    );
+                    let player = path[gate];
+                    for boarding in [true, false] {
+                        let before_gate = path[..gate]
+                            .iter()
+                            .rposition(|p| horizontal_distance(*p, player) >= 2.0)
+                            .unwrap();
+                        let after_gate = gate
+                            + 1
+                            + path[gate + 1..]
+                                .iter()
+                                .position(|p| horizontal_distance(*p, player) >= 2.0)
+                                .unwrap();
+                        let start = if boarding { before_gate } else { after_gate };
+                        let finish = if boarding { after_gate } else { before_gate };
+                        let mut resident = life
+                            .residents
+                            .iter()
+                            .find(|r| r.snapshot.village_id == origin && r.trail.is_some())
+                            .unwrap()
+                            .clone();
+                        resident.body = Body::new(path[start]);
+                        resident.body.on_ground = true;
+                        resident.phase = if boarding {
+                            Phase::ToTrade
+                        } else {
+                            Phase::Returning
+                        };
+                        resident.transit = Some(Transit {
+                            origin: if boarding { origin } else { destination },
+                            destination: if boarding { destination } else { origin },
+                            next_stop: if boarding { destination } else { origin },
+                            stage: if boarding {
+                                TransitStage::Boarding
+                            } else {
+                                TransitStage::Alighting
+                            },
+                            waypoint: start,
+                            ride: None,
+                            reservation: Some(AirshipRide {
+                                ship_id: ship.id,
+                                seat: 0,
+                            }),
+                            deck_position: None,
+                        });
+                        let cargo = Some(ResourceCargo {
+                            kind: ResourceKind::Timber,
+                            amount: 6.0,
+                        });
+                        resident.snapshot.carrying = cargo.clone();
+                        // Establish a physically reachable bypass using the same controller,
+                        // support checks and body collision as the live resident.
+                        let mut walker = Walker::on_foot(&resident.body);
+                        let mut navigation = Navigation::default();
+                        let obstacles = [player];
+                        let walking = Walking {
+                            world: &world,
+                            obstacles: &obstacles,
+                            airships: Some((&network, time)),
+                        };
+                        for _ in 0..160 {
+                            walking.walk(
+                                &mut walker,
+                                &mut navigation,
+                                path[finish],
+                                0.52,
+                                false,
+                                0.25,
+                                |_| true,
                             );
-                            completed[0] =
-                                boarding.transit.as_ref().unwrap().stage == TransitStage::Riding;
-                        }
-                        if !completed[1] {
-                            advance_transit(
-                                &world,
-                                plan,
-                                &mut alighting,
-                                dt,
-                                &[boarding.body.position],
-                                &network,
-                                time,
-                                &[],
-                            );
-                            completed[1] = alighting.transit.as_ref().unwrap().waypoint
-                                < waypoint.saturating_sub(8);
+                            if horizontal_distance(walker.body.position, path[finish]) < ARRIVAL {
+                                break;
+                            }
                         }
                         assert!(
-                            character_position_is_clear(
-                                &world,
-                                boarding.body.position,
-                                &[alighting.body.position]
-                            ),
-                            "route={} village={origin}: traders overlapped",
-                            route.id
+                            horizontal_distance(walker.body.position, path[finish]) < ARRIVAL,
+                            "fixture has no demonstrated bypass: seed={seed} route={} origin={origin} boarding={boarding} gate={gate} body={:?}",
+                            route.id,
+                            walker.body
                         );
-                        assert!(
-                            horizontal_distance(before[0], boarding.body.position)
-                                <= 3.0 * dt + 0.03
-                        );
-                        assert!(
-                            horizontal_distance(before[1], alighting.body.position)
-                                <= 3.0 * dt + 0.03
-                        );
-                        assert_eq!(boarding.snapshot.carrying, cargo);
-                        assert_eq!(alighting.snapshot.carrying, cargo);
-                        if completed == [true; 2] {
-                            break;
+                        let initial = resident;
+                        for dt in [0.05, 0.25] {
+                            // Repeat with the player staying put and stepping aside after
+                            // contact. Neither case may become a persistent oscillation.
+                            for step_aside in [false, true] {
+                                let mut resident = initial.clone();
+                                let mut passed = false;
+                                for tick in 0..(20.0 / dt) as usize {
+                                    let active_obstacles = if step_aside && tick as f32 * dt >= 1.0
+                                    {
+                                        &[][..]
+                                    } else {
+                                        &obstacles[..]
+                                    };
+                                    let before = resident.body.position;
+                                    advance_transit(
+                                        &world,
+                                        plan,
+                                        &mut resident,
+                                        dt,
+                                        active_obstacles,
+                                        &network,
+                                        time,
+                                        &[],
+                                    );
+                                    assert!(
+                                        active_obstacles.iter().all(|player| {
+                                            !rubblekin_core::physics::characters_overlap(
+                                                resident.body.position,
+                                                *player,
+                                            )
+                                        }),
+                                        "overlap seed={seed} route={} origin={origin} boarding={boarding} dt={dt}",
+                                        route.id
+                                    );
+                                    assert!(
+                                        horizontal_distance(before, resident.body.position)
+                                            <= 3.0 * dt + 0.03
+                                    );
+                                    assert_eq!(resident.snapshot.carrying, cargo);
+                                    let transit = resident.transit.as_ref().unwrap();
+                                    passed = if boarding {
+                                        transit.waypoint > finish
+                                            || transit.stage == TransitStage::Riding
+                                    } else {
+                                        transit.waypoint < finish
+                                    };
+                                    if passed {
+                                        break;
+                                    }
+                                }
+                                assert!(
+                                    passed,
+                                    "failed to pass/resume: seed={seed} route={} origin={origin} boarding={boarding} dt={dt} step_aside={step_aside} body={:?} transit={:?}",
+                                    route.id, resident.body, resident.transit
+                                );
+                            }
                         }
                     }
-                    assert_eq!(
-                        completed, [true; 2],
-                        "route={} village={origin} dt={dt}: boarding={:?}; alighting={:?}",
-                        route.id, boarding, alighting
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn blocked_disembarkation_at_departure_stays_aboard_and_resumes_at_the_same_port() {
+        for seed in [42, 43] {
+            let world = World::generate(seed, WorldGeneration::GeographyV3);
+            let network = AirshipNetwork::new(&world);
+            let plan = world.settlements().unwrap();
+            let life = VillageLife::new(&world);
+            let route = &network.routes()[0];
+            for (origin, destination) in [(route.from, route.to), (route.to, route.from)] {
+                let leg = network.next_leg(origin, destination, 0.0).unwrap();
+                let start = leg.departure_in as f64 - 1.0;
+                let ship = network.ship(leg.ship_id, start).unwrap();
+                let local = initial_deck_position(27);
+                let mut resident = life
+                    .residents
+                    .iter()
+                    .find(|r| r.snapshot.village_id == origin && r.trail.is_some())
+                    .unwrap()
+                    .clone();
+                resident.body = Body::new(deck_position(&ship, local));
+                resident.body.on_ground = true;
+                resident.phase = Phase::Returning;
+                resident.transit = Some(Transit {
+                    origin: destination,
+                    destination: origin,
+                    next_stop: origin,
+                    stage: TransitStage::Alighting,
+                    waypoint: network.landing_path(ship.id, origin).unwrap().len() - 1,
+                    ride: Some(AirshipRide {
+                        ship_id: ship.id,
+                        seat: u8::MAX,
+                    }),
+                    reservation: Some(AirshipRide {
+                        ship_id: ship.id,
+                        seat: 27,
+                    }),
+                    deck_position: Some(local),
+                });
+                let cargo = Some(ResourceCargo {
+                    kind: ResourceKind::Timber,
+                    amount: 6.0,
+                });
+                resident.snapshot.carrying = cargo.clone();
+                let cycle = (AIRSHIP_DWELL_SECONDS + route.travel_seconds) * 2.0;
+                let mut departed = false;
+                let mut disembarked = false;
+                for tick in 0..((cycle + 30.0) / 0.25).ceil() as usize {
+                    let time = start + tick as f64 * 0.25;
+                    let ship = network.ship(leg.ship_id, time).unwrap();
+                    // Other passengers enclose this resident during the final
+                    // docked second, then leave room once the craft departs.
+                    let obstacles: Vec<_> = if tick < 4 {
+                        (-1..=1)
+                            .flat_map(|x| {
+                                (-1..=1).filter_map(move |z| (x != 0 || z != 0).then_some((x, z)))
+                            })
+                            .map(|(x, z)| {
+                                deck_position(
+                                    &ship,
+                                    [local[0] + x as f32 * 0.6, 0.0, local[2] + z as f32 * 0.6],
+                                )
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    advance_transit(
+                        &world,
+                        plan,
+                        &mut resident,
+                        0.25,
+                        &obstacles,
+                        &network,
+                        time,
+                        &[],
                     );
+                    assert_eq!(resident.snapshot.carrying, cargo);
+                    assert!(obstacles.iter().all(
+                        |p| !rubblekin_core::physics::characters_overlap(
+                            resident.body.position,
+                            *p
+                        )
+                    ));
+                    let transit = resident.transit.as_ref().unwrap();
+                    departed |= ship.docked_at != Some(origin);
+                    if ship.docked_at != Some(origin)
+                        || ship.departure_in as f64 > AIRSHIP_DWELL_SECONDS - AIRSHIP_TURN_SECONDS
+                    {
+                        assert_eq!(
+                            transit.ride.map(|r| r.ship_id),
+                            Some(ship.id),
+                            "resident must remain aboard while flying or turning after a blocked departure"
+                        );
+                        assert_eq!(transit.stage, TransitStage::Alighting);
+                    }
+                    if transit.ride.is_none() {
+                        assert!(departed && ship.docked_at == Some(origin));
+                        // Descending onto the ramp briefly clears on_ground.
+                        let height = resident.body.position[1];
+                        let mut body = resident.body.clone();
+                        let mut ride = None;
+                        let mut local = None;
+                        move_character_with_airships(
+                            &world,
+                            &mut body,
+                            MoveInput::default(),
+                            0.25,
+                            &[],
+                            &network,
+                            time,
+                            &mut ride,
+                            &mut local,
+                        );
+                        assert!(
+                            body.on_ground && (body.position[1] - height).abs() <= CELL_SIZE,
+                            "seed={seed} origin={origin} time={time} ship={ship:?} initial={:?} settled={body:?} transit={transit:?}",
+                            resident.body
+                        );
+                        disembarked = true;
+                        break;
+                    }
+                }
+                assert!(
+                    disembarked,
+                    "seed={seed} origin={origin}: did not resume after returning to the blocked port"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn opposing_traders_pass_on_each_landing_without_overlap_or_losing_cargo() {
+        for seed in [42, 43] {
+            let world = World::generate(seed, WorldGeneration::GeographyV3);
+            let network = AirshipNetwork::new(&world);
+            let plan = world.settlements().unwrap();
+            let life = VillageLife::new(&world);
+            for route in network.routes() {
+                for (origin, destination) in [(route.from, route.to), (route.to, route.from)] {
+                    for dt in [0.05, 0.25] {
+                        let leg = network.next_leg(origin, destination, 0.0).unwrap();
+                        let time = (leg.departure_in as f64 - 1.0).max(0.0);
+                        let ship = network.ship(leg.ship_id, time).unwrap();
+                        let path = network.landing_path(ship.id, origin).unwrap();
+                        let mut boarding = life
+                            .residents
+                            .iter()
+                            .find(|r| r.snapshot.village_id == origin && r.trail.is_some())
+                            .unwrap()
+                            .clone();
+                        boarding.phase = Phase::ToTrade;
+                        let waypoint = path
+                            .iter()
+                            .rposition(|p| horizontal_distance(*p, ship.position) >= 14.0)
+                            .unwrap();
+                        boarding.body = Body::new(path[waypoint]);
+                        boarding.body.on_ground = true;
+                        boarding.transit = Some(Transit {
+                            origin,
+                            destination,
+                            next_stop: destination,
+                            stage: TransitStage::Boarding,
+                            waypoint,
+                            ride: None,
+                            reservation: Some(AirshipRide {
+                                ship_id: ship.id,
+                                seat: 0,
+                            }),
+                            deck_position: None,
+                        });
+                        let mut alighting = boarding.clone();
+                        alighting.phase = Phase::Returning;
+                        let exit_waypoint = path
+                            .iter()
+                            .rposition(|p| horizontal_distance(*p, ship.position) >= 11.0)
+                            .unwrap();
+                        alighting.body = Body::new(path[exit_waypoint]);
+                        alighting.body.on_ground = true;
+                        alighting.transit = Some(Transit {
+                            origin: destination,
+                            destination: origin,
+                            next_stop: origin,
+                            stage: TransitStage::Alighting,
+                            waypoint: exit_waypoint,
+                            ride: None,
+                            reservation: Some(AirshipRide {
+                                ship_id: ship.id,
+                                seat: 7,
+                            }),
+                            deck_position: None,
+                        });
+                        let cargo = Some(ResourceCargo {
+                            kind: ResourceKind::Timber,
+                            amount: 6.0,
+                        });
+                        boarding.snapshot.carrying = cargo.clone();
+                        alighting.snapshot.carrying = cargo.clone();
+                        // Runtime passing preferences/checkpoints are rebuilt on load.
+                        boarding.stuck = 10.0;
+                        alighting.stuck = 10.0;
+                        boarding = serde_json::from_slice(&serde_json::to_vec(&boarding).unwrap())
+                            .unwrap();
+                        alighting =
+                            serde_json::from_slice(&serde_json::to_vec(&alighting).unwrap())
+                                .unwrap();
+                        let mut completed = [false; 2];
+                        for _ in 0..4_000 {
+                            let before = [boarding.body.position, alighting.body.position];
+                            if !completed[0] {
+                                advance_transit(
+                                    &world,
+                                    plan,
+                                    &mut boarding,
+                                    dt,
+                                    &[alighting.body.position],
+                                    &network,
+                                    time,
+                                    &[],
+                                );
+                                completed[0] = boarding.transit.as_ref().unwrap().stage
+                                    == TransitStage::Riding;
+                            }
+                            if !completed[1] {
+                                advance_transit(
+                                    &world,
+                                    plan,
+                                    &mut alighting,
+                                    dt,
+                                    &[boarding.body.position],
+                                    &network,
+                                    time,
+                                    &[],
+                                );
+                                completed[1] = alighting.transit.as_ref().unwrap().waypoint
+                                    < waypoint.saturating_sub(8);
+                            }
+                            assert!(
+                                character_position_is_clear(
+                                    &world,
+                                    boarding.body.position,
+                                    &[alighting.body.position]
+                                ),
+                                "route={} village={origin}: traders overlapped",
+                                route.id
+                            );
+                            assert!(
+                                horizontal_distance(before[0], boarding.body.position)
+                                    <= 3.0 * dt + 0.03
+                            );
+                            assert!(
+                                horizontal_distance(before[1], alighting.body.position)
+                                    <= 3.0 * dt + 0.03
+                            );
+                            assert_eq!(boarding.snapshot.carrying, cargo);
+                            assert_eq!(alighting.snapshot.carrying, cargo);
+                            if completed == [true; 2] {
+                                break;
+                            }
+                        }
+                        assert_eq!(
+                            completed, [true; 2],
+                            "route={} village={origin} dt={dt}: boarding={:?}; alighting={:?}",
+                            route.id, boarding, alighting
+                        );
+                    }
                 }
             }
         }
@@ -2989,6 +3409,151 @@ mod tests {
         transit.deck_position = Some(local);
         reconcile_boarding_contact(&world, resident, &mut transit, &[], &network, time, &[]);
         assert!(transit.ride.is_none() && transit.deck_position.is_none());
+    }
+
+    #[test]
+    fn incidental_alighting_contact_from_native_save_roundtrips_and_keeps_its_destination() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let network = AirshipNetwork::new(&world);
+        let time = 875.6000130474567;
+        let mut life = VillageLife::new(&world);
+        let index = life
+            .residents
+            .iter()
+            .position(|r| r.snapshot.id == 2310)
+            .unwrap();
+        let resident = &mut life.residents[index];
+        // Exact transit/body state from a native session closed normally at a
+        // shared landing. Physics contacted route 0 while exiting route 7.
+        resident.phase = Phase::ToTrade;
+        resident.waypoint = 5595;
+        resident.body = Body {
+            position: [2178.2615, 299.35, 3017.2905],
+            velocity: [0.0; 3],
+            on_ground: true,
+        };
+        resident.transit = Some(Transit {
+            origin: 9,
+            destination: 5,
+            next_stop: 5,
+            stage: TransitStage::Alighting,
+            waypoint: 0,
+            ride: Some(AirshipRide {
+                ship_id: 4294967297,
+                seat: u8::MAX,
+            }),
+            reservation: Some(AirshipRide {
+                ship_id: 34359738369,
+                seat: 0,
+            }),
+            deck_position: Some([0.022818793, 0.0, 0.5619632]),
+        });
+        let cargo = Some(ResourceCargo {
+            kind: ResourceKind::Stone,
+            amount: 6.0,
+        });
+        resident.snapshot.carrying = cargo.clone();
+        resident.snapshot.position = resident.body.position;
+        resident.snapshot.ride = resident.transit.as_ref().unwrap().ride;
+        resident.snapshot.deck_position = resident.transit.as_ref().unwrap().deck_position;
+        assert!(life.validate(&world));
+        assert!(
+            life.validate_transport(&world, &network, time),
+            "a physically attached passenger can still reach its intended shared port"
+        );
+        let mut wrong_pose = life.clone();
+        wrong_pose.residents[index].body.position[0] += 0.5;
+        wrong_pose.residents[index].snapshot.position = wrong_pose.residents[index].body.position;
+        assert!(!wrong_pose.validate_transport(&world, &network, time));
+        let mut wrong_route = life.clone();
+        let unrelated = network
+            .ships(time)
+            .into_iter()
+            .find(|s| network.landing_path(s.id, 5).is_none())
+            .unwrap();
+        let local = initial_deck_position(27);
+        let resident = &mut wrong_route.residents[index];
+        resident.body.position = deck_position(&unrelated, local);
+        resident.snapshot.position = resident.body.position;
+        resident.transit.as_mut().unwrap().ride = Some(AirshipRide {
+            ship_id: unrelated.id,
+            seat: u8::MAX,
+        });
+        resident.transit.as_mut().unwrap().deck_position = Some(local);
+        resident.snapshot.ride = resident.transit.as_ref().unwrap().ride;
+        resident.snapshot.deck_position = Some(local);
+        assert!(!wrong_route.validate_transport(&world, &network, time));
+
+        // New contact is reconciled in the same tick, before it can be saved.
+        let mut contact = life.clone();
+        let leg = network.next_leg(5, 0, 0.0).unwrap();
+        let contact_time = leg.departure_in as f64 - 1.0;
+        let ship = network.ship(leg.ship_id, contact_time).unwrap();
+        let resident = &mut contact.residents[index];
+        resident.body.position = deck_position(&ship, local);
+        resident.snapshot.position = resident.body.position;
+        resident.transit.as_mut().unwrap().ride = None;
+        resident.transit.as_mut().unwrap().deck_position = None;
+        resident.snapshot.ride = None;
+        resident.snapshot.deck_position = None;
+        contact.tick_with_transport(&world, 0.05, &[], &network, contact_time, &[]);
+        let transit = contact.residents[index].transit.as_ref().unwrap();
+        assert_eq!(transit.ride.unwrap().ship_id, ship.id);
+        assert_eq!(transit.reservation.unwrap().ship_id, ship.id);
+        assert!(contact.validate_transport(&world, &network, contact_time));
+
+        let path = std::env::temp_dir().join(format!(
+            "rubblekin-native-alighting-{}.json",
+            std::process::id()
+        ));
+        let simulation = crate::persistence::Simulation {
+            world: world.clone(),
+            npc: crate::npc::Forager::new(&world),
+            world_time: time,
+            villages: life,
+        };
+        simulation.save(&path).unwrap();
+        let mut restored =
+            crate::persistence::Simulation::load(&path, 999, WorldGeneration::ValleyV1).unwrap();
+        std::fs::remove_file(path).unwrap();
+        restored
+            .villages
+            .tick_with_transport(&world, 0.05, &[], &network, time, &[]);
+        let resident = &restored.villages.residents[index];
+        let transit = resident.transit.as_ref().unwrap();
+        assert_eq!(transit.destination, 5);
+        assert_eq!(transit.next_stop, 5);
+        assert_eq!(transit.origin, 9);
+        assert_eq!(transit.reservation.unwrap().ship_id, 4294967297);
+        assert_eq!(transit.ride.unwrap().ship_id, 4294967297);
+        assert_eq!(resident.snapshot.carrying, cargo);
+        assert_eq!(resident.phase, Phase::ToTrade);
+        assert!(restored.villages.validate_transport(&world, &network, time));
+        let resident = &mut restored.villages.residents[index];
+        for tick in 1..2_000 {
+            advance_transit(
+                &world,
+                world.settlements().unwrap(),
+                resident,
+                0.25,
+                &[],
+                &network,
+                time + tick as f64 * 0.25,
+                &[],
+            );
+            assert_eq!(resident.snapshot.carrying, cargo);
+            if resident.transit.as_ref().unwrap().stage == TransitStage::ToDestination {
+                break;
+            }
+        }
+        assert_eq!(
+            resident.transit.as_ref().unwrap().stage,
+            TransitStage::ToDestination
+        );
+        assert!(
+            horizontal_distance(resident.body.position, network.port(5).unwrap().position)
+                <= ARRIVAL
+        );
     }
 
     #[test]

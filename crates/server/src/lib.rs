@@ -185,7 +185,7 @@ struct Connection {
     input_credit: f64,
     credit_updated: Instant,
     last_edit: Option<Instant>,
-    last_admin_command: Option<Instant>,
+    last_admin_request: Option<Instant>,
     dead: bool,
 }
 
@@ -208,9 +208,21 @@ impl Connection {
             input_credit: MAX_INPUT_CREDIT,
             credit_updated: now,
             last_edit: None,
-            last_admin_command: None,
+            last_admin_request: None,
             dead: false,
         })
+    }
+
+    fn admit_admin_request(&mut self) -> bool {
+        let now = Instant::now();
+        if self
+            .last_admin_request
+            .is_some_and(|last| now.duration_since(last) < Duration::from_millis(100))
+        {
+            return false;
+        }
+        self.last_admin_request = Some(now);
+        true
     }
 
     fn receive(&mut self) -> io::Result<Vec<ClientMessage>> {
@@ -818,10 +830,12 @@ fn handle_message(
             );
         }
         ClientMessage::Admin { action } => {
-            let result = if config.allow_admin {
-                sim.npc.admin(&sim.world, action)
-            } else {
+            let result = if !config.allow_admin {
                 Err("Developer controls are disabled on this server".into())
+            } else if !connections.get_mut(&id).unwrap().admit_admin_request() {
+                Err("NPC controls are arriving too quickly; try again in a moment".into())
+            } else {
+                sim.npc.admin(&sim.world, action)
             };
             let text = match result {
                 Ok(()) => {

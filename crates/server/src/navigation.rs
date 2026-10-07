@@ -82,6 +82,32 @@ impl Walking<'_> {
             && distance(settled.body.position, walker.body.position) < 0.05
     }
 
+    /// Check a short route-gate shortcut with the actual controller and support.
+    /// Callers may omit temporary characters while checking terrain, then keep
+    /// those characters in the live steering and collision step.
+    pub fn has_straight_path(&self, start: &Walker, target: [f32; 3]) -> bool {
+        let mut walker = start.clone();
+        for _ in 0..40 {
+            let remaining = distance(walker.body.position, target);
+            if remaining <= 0.03 && (walker.body.position[1] - target[1]).abs() <= 0.15 {
+                return true;
+            }
+            let factor = 0.52_f32.min(remaining / (3.8 * 0.05));
+            walker = self.step(
+                &walker,
+                MoveInput {
+                    direction: toward(walker.body.position, target).map(|d| d * factor),
+                    ..Default::default()
+                },
+                0.05,
+            );
+            if !self.supported(&walker) {
+                return false;
+            }
+        }
+        false
+    }
+
     /// The same steering and detour search serves workers, traders and Moss.
     /// A caller can protect a precision approach without duplicating steering.
     #[allow(clippy::too_many_arguments)]
@@ -363,6 +389,39 @@ mod tests {
             }
         }
         world
+    }
+
+    #[test]
+    fn short_route_gate_probe_rejects_a_wall_and_an_unsupported_drop() {
+        let mut world = flat_path();
+        let start = Walker::on_foot(&Body::new([-1.75, 20.0, 0.25]));
+        let target = [1.25, 20.0, 0.25];
+        let probe = |world: &World| {
+            Walking {
+                world,
+                obstacles: &[],
+                airships: None,
+            }
+            .has_straight_path(&start, target)
+        };
+        assert!(probe(&world));
+        for y in 40..=44 {
+            world
+                .set_block(BlockPos::new(0, y, 0), Block::Brick)
+                .unwrap();
+        }
+        assert!(
+            !probe(&world),
+            "an occupied gate must not skip a route corner through a wall"
+        );
+        for y in 36..=44 {
+            for x in 0..=2 {
+                for z in -2..=2 {
+                    world.set_block(BlockPos::new(x, y, z), Block::Air).unwrap();
+                }
+            }
+        }
+        assert!(!probe(&world), "a shortcut needs continuous support");
     }
 
     #[test]

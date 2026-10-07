@@ -36,13 +36,9 @@ pub(super) fn handle(
 ) {
     let result = if !config.allow_admin {
         Err("Admin commands are disabled on this server".into())
-    } else if connections[&id]
-        .last_admin_command
-        .is_some_and(|last| last.elapsed() < Duration::from_millis(100))
-    {
+    } else if !connections.get_mut(&id).unwrap().admit_admin_request() {
         Err("Commands are arriving too quickly; try again in a moment".into())
     } else {
-        connections.get_mut(&id).unwrap().last_admin_command = Some(Instant::now());
         parse_admin_command(command)
             .and_then(|command| execute(id, command, connections, sim, airships))
     };

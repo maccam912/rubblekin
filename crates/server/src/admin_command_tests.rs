@@ -25,6 +25,16 @@ impl Fixture {
             connections: BTreeMap::new(),
             config: ServerConfig {
                 allow_admin: true,
+                save_path: std::env::temp_dir()
+                    .join(format!(
+                        "rubblekin-admin-test-{}-{}",
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    ))
+                    .join("world.json"),
                 ..Default::default()
             },
             peers: Vec::new(),
@@ -67,7 +77,7 @@ impl Fixture {
     fn command(&mut self, id: u64, command: &str) -> String {
         // These tests exercise repeated individual requests; the rate test
         // below explicitly leaves the timestamp in place.
-        self.connections.get_mut(&id).unwrap().last_admin_command = None;
+        self.connections.get_mut(&id).unwrap().last_admin_request = None;
         self.send(
             id,
             ClientMessage::AdminCommand {
@@ -90,6 +100,29 @@ impl Fixture {
 
     fn snapshot(&self, id: u64) -> &PlayerSnapshot {
         self.connections[&id].player.as_ref().unwrap()
+    }
+
+    fn npc_weights(&mut self, id: u64, forage: f32, rest: f32) -> String {
+        self.send(
+            id,
+            ClientMessage::Admin {
+                action: AdminAction::SetNpcWeights { forage, rest },
+            },
+        );
+        match serde_json::from_slice::<ServerMessage>(
+            self.connections[&id].outgoing.back().unwrap(),
+        )
+        .unwrap()
+        {
+            ServerMessage::Notice { text } => text,
+            other => panic!("Expected NPC-control notice, got {other:?}"),
+        }
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.config.save_path.parent().unwrap());
     }
 }
 
@@ -358,6 +391,72 @@ fn command_length_and_request_rate_are_bounded_without_disconnect() {
     );
     assert!(f.result(1).contains("too quickly"));
     assert_eq!(f.snapshot(1).movement_epoch, 0);
+    assert!(!f.connections[&1].dead);
+}
+
+#[test]
+fn npc_control_bursts_share_the_console_budget_without_mutating_or_saving() {
+    let mut f = Fixture::new();
+    f.player(1, "Ian", [10.0, 60.0, 10.0]);
+    f.player(2, "Violet", [15.0, 60.0, 15.0]);
+    assert_eq!(f.npc_weights(1, 2.0, 3.0), "NPC settings updated");
+    let saved = std::fs::read(&f.config.save_path).unwrap();
+    let npc = serde_json::to_value(&f.sim.npc).unwrap();
+    assert_eq!(npc["forage_weight"], 2.0);
+    assert_eq!(npc["rest_weight"], 3.0);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&saved).unwrap()["npc"],
+        npc
+    );
+
+    // Hold the clock inside the rate window even on a heavily loaded runner.
+    let blocked_until = Instant::now() + Duration::from_secs(60);
+    f.connections.get_mut(&1).unwrap().last_admin_request = Some(blocked_until);
+    for _ in 0..63 {
+        assert!(f.npc_weights(1, 9.0, 9.0).contains("too quickly"));
+    }
+    f.send(
+        1,
+        ClientMessage::AdminCommand {
+            command: "tp 20 50 20".into(),
+        },
+    );
+    assert!(f.result(1).contains("too quickly"));
+    assert_eq!(f.snapshot(1).movement_epoch, 0);
+    assert_eq!(serde_json::to_value(&f.sim.npc).unwrap(), npc);
+    assert_eq!(std::fs::read(&f.config.save_path).unwrap(), saved);
+    assert_eq!(f.connections[&1].last_admin_request, Some(blocked_until));
+    assert!(!f.connections[&1].dead);
+
+    // Other players retain their own allowance, and the sender can retry after
+    // the existing 100 ms interval without reconnecting.
+    assert_eq!(f.npc_weights(2, 4.0, 5.0), "NPC settings updated");
+    f.connections.get_mut(&1).unwrap().last_admin_request =
+        Some(Instant::now() - Duration::from_millis(100));
+    assert_eq!(f.npc_weights(1, 6.0, 7.0), "NPC settings updated");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&f.config.save_path).unwrap()).unwrap();
+    assert_eq!(saved["npc"]["forage_weight"], 6.0);
+    assert_eq!(saved["npc"]["rest_weight"], 7.0);
+}
+
+#[test]
+fn console_then_npc_controls_share_the_budget_and_keep_permission_errors() {
+    let mut f = Fixture::new();
+    f.player(1, "Ian", [10.0, 60.0, 10.0]);
+    assert!(f.command(1, "help").contains("teleport PLAYER DESTINATION"));
+    assert!(f.connections[&1].last_admin_request.is_some());
+    f.connections.get_mut(&1).unwrap().last_admin_request =
+        Some(Instant::now() + Duration::from_secs(60));
+    let npc = serde_json::to_value(&f.sim.npc).unwrap();
+    assert!(f.npc_weights(1, 2.0, 3.0).contains("too quickly"));
+    f.config.allow_admin = false;
+    assert!(f.npc_weights(1, 2.0, 3.0).contains("disabled"));
+    f.config.allow_admin = true;
+    f.connections.get_mut(&1).unwrap().mode = Some(SessionMode::Observer);
+    assert!(f.npc_weights(1, 2.0, 3.0).contains("read-only"));
+    assert_eq!(serde_json::to_value(&f.sim.npc).unwrap(), npc);
+    assert!(!f.config.save_path.exists());
     assert!(!f.connections[&1].dead);
 }
 
