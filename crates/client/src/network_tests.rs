@@ -20,6 +20,58 @@ fn preserves_terrain_delta_coalesced_with_welcome() {
     }
 }
 
+#[test]
+fn cancelled_handshake_reports_real_stages_and_closes_its_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let (received_hello, hello_received) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(socket.try_clone().unwrap());
+        let mut hello = String::new();
+        reader.read_line(&mut hello).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<ClientMessage>(&hello).unwrap(),
+            ClientMessage::Hello { .. }
+        ));
+        received_hello.send(()).unwrap();
+        // The server deliberately never sends a welcome. Cancellation should
+        // close this socket without waiting for the ten-second handshake timer.
+        assert_eq!(socket.read(&mut [0u8; 1]).unwrap(), 0);
+    });
+    let mut stages = Vec::new();
+    let result = Connection::connect_with_progress(
+        &address,
+        "Tester".into(),
+        SessionMode::Player,
+        |stage| {
+            if stages.last() != Some(&stage) {
+                stages.push(stage);
+            }
+            if stage == ConnectionStage::AwaitingWelcome && hello_received.try_recv().is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Cancelled by player",
+                ));
+            }
+            Ok(())
+        },
+    );
+    assert!(matches!(result, Err(error) if error.kind() == io::ErrorKind::Interrupted));
+    assert_eq!(
+        stages,
+        [
+            ConnectionStage::ResolvingAddress,
+            ConnectionStage::Connecting,
+            ConnectionStage::AwaitingWelcome
+        ]
+    );
+    server.join().unwrap();
+}
+
 fn preserves_delta_for_mode(mode: SessionMode) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     let address = listener.local_addr().unwrap().to_string();

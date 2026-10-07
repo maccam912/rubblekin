@@ -1,6 +1,6 @@
 # Gameplay review and fix backlog — 2026-10-06
 
-Status: **28 open findings; no fixes implemented by this review.** Priorities and remedies below are assistant recommendations for discussion, not newly approved gameplay or art decisions.
+Status: **28 tracked findings.** The original review implemented no fixes; follow-up status is recorded below and in DESIGN.md. Priorities and remedies below are assistant recommendations for discussion, not newly approved gameplay or art decisions.
 
 The recording makes the central weakness clear: the simulation has more substance than the presentation communicates. We can follow a worker, board a moving ship, cross a large landscape, and reach another inhabited village. But the ship looks like a flying construction platform, the settlements look assembled from the same small kit, and the scenery visibly changes representation around us. Too much of the interesting world exists in inspector text. I would improve this journey before adding more systems.
 
@@ -16,7 +16,7 @@ The recording makes the central weakness clear: the simulation has more substanc
 
 ## Recommended order
 
-P1 means a high-impact problem with this basic village-to-airship journey, not a release-blocking severity claim. P2 means substantial presentation or usability work. P3 means polish after the journey reads well. All entries remain open.
+P1 means a high-impact problem with this basic village-to-airship journey, not a release-blocking severity claim. P2 means substantial presentation or usability work. P3 means polish after the journey reads well. Visual acceptance remains open unless a follow-up explicitly records it.
 
 | Pass | Items | Intended result |
 | --- | --- | --- |
@@ -43,12 +43,16 @@ P1 means a high-impact problem with this basic village-to-airship journey, not a
 
 ### R03 — The destination village assembles in front of the passenger
 
+Follow-up 2026-10-06: the C01 placeholder cutoff defect is repaired with pending-job/approach/replacement regressions. Full native approach verification remains open.
+
 **Observed · 03:42–03:46 · [before](artifacts/gameplay-review-2026-10-06/0343-village-before.jpg), [partial](artifacts/gameplay-review-2026-10-06/0344-village-partial.jpg), [after](artifacts/gameplay-review-2026-10-06/0345-village-after.jpg).** Roads are visible first; isolated roofs and then most of the settlement appear over a short approach interval. A whole destination should be recognizable before we are nearly over it. The denser four-frame-per-second check confirms a burst of appearance, not just one misleading still.
 
 - **Recommendation:** inspect the building proxy, placeholder, and detailed-chunk handoff together. Ensure a recognizable settlement footprint and silhouette survives until its replacement is ready. Tune for an arriving passenger's view, not only walking speed.
 - **Done when:** a fixed-camera approach shows a continuous village at distance and a controlled increase in detail, without missing houses between representations.
 
 ### R04 — The airship envelope can swallow the camera view
+
+Follow-up 2026-10-06: added camera envelope clearance and smooth outward recovery, with geometric orbit/zoom coverage. Native motion/comfort acceptance remains open.
 
 **Observed · 01:38, with further obstruction during deck camera rotation · [01:38](artifacts/gameplay-review-2026-10-06/0138-camera-obstruction.jpg).** A featureless gray envelope surface covers most of the upper view while the player is on deck. Even if collision is technically keeping the camera outside the mesh, this framing fails the sightseeing goal.
 
@@ -86,6 +90,8 @@ P1 means a high-impact problem with this basic village-to-airship journey, not a
 ## P2 — make the world readable and worth visiting
 
 ### R09 — Pilot dialogue contains conflicting departure times
+
+Follow-up 2026-10-06: repaired with a timeless introduction and one live timetable/guidance source. Client/server regressions cover departure, arrival and turnaround; native dialogue review remains open.
 
 **Observed · 01:27–01:31 · [01:31](artifacts/gameplay-review-2026-10-06/0131-pilot-times.jpg).** The spoken paragraph still says “We leave in 13 seconds” while the live line below says “departs in 9 seconds.” The paragraph's arrival estimate also remains the originally supplied value. Two countdowns with different freshness make the answer less trustworthy.
 
@@ -192,6 +198,8 @@ P1 means a high-impact problem with this basic village-to-airship journey, not a
 
 ### R24 — The HUD keeps advertising building while the player travels
 
+Follow-up 2026-10-06: aboard trip information now occupies the main notice, the lower duplicate is hidden, and reach warnings appear only after an attempted ground edit. Automated socket/modal/aboard coverage passes; native travel presentation review remains open.
+
 **Observed / usability · 00:10–03:52 · [farm HUD](artifacts/gameplay-review-2026-10-06/0045-farm.jpg), [flight HUD](artifacts/gameplay-review-2026-10-06/0212-forest-cutoff.jpg).** A title/subtitle, edit hint, statistics, material palette, controls panel, inspector, and transport hint can compete for the screen. During flight, the prominent instruction remains “Move closer to reach a block · aim down to build nearby,” even though the player is riding. The transport destination is tucked beside the palette.
 
 - **Recommendation:** give context-sensitive travel/interact information priority. Let established controls and diagnostics collapse after onboarding, keeping them easy to reopen; preserve direct creative building access.
@@ -208,12 +216,16 @@ P1 means a high-impact problem with this basic village-to-airship journey, not a
 
 ### R26 — Joining spends several seconds without useful progress
 
+Follow-up 2026-10-06: real worker stages, elapsed time and cancellation are implemented and natively checked against a waiting local server. Synchronous atlas/scene preparation still blocks the final stage and remains a measured follow-up.
+
 **Observed / usability · 00:01–00:10 · [00:05](artifacts/gameplay-review-2026-10-06/0005-joining.jpg).** The small join panel remains largely unchanged while connecting, then jumps into the village. This sample takes roughly nine seconds; it does not reveal whether networking, world generation, atlas generation, or mesh preparation owns the wait.
 
 - **Recommendation:** expose honest coarse loading stages and a clear pending state, with retry/cancel where supported. Avoid a fabricated percentage or redesigning the connection architecture just for a progress label.
 - **Done when:** a player can distinguish connection work, world preparation, and an actual failure; time the stages separately before optimizing them.
 
 ### R27 — Graphics distances expose inconsistent units and awkward tuning
+
+Follow-up 2026-10-06: meter labels, preview-on-drag/apply-on-release sliders and Reset distances are implemented. Native desktop and compact touch-preview checks passed; touch-device comfort and keyboard fine adjustment remain follow-up.
 
 **Observed / usability · 04:54 · [settings](artifacts/gameplay-review-2026-10-06/0454-settings.jpg).** Near detail is **512 m**, trees are **2184 blocks (1092 m)**, and shadows are **90 m**. The same kind of distance is presented differently, with only small plus/minus controls for large ranges. The panel explains general cost, but not what a novice should choose.
 

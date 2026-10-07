@@ -41,6 +41,8 @@ Evidence labels below distinguish a **source-confirmed behavior**, a **refactor 
 
 ### C01 — Building placeholders have a coverage gap
 
+Follow-up 2026-10-06: source defect repaired; automated pending-job/approach/replacement coverage passes. The broader filmed native approach remains an acceptance follow-up.
+
 **Source-confirmed behavior.** [`move_local_square`](crates/client/src/terrain.rs#L326) creates a placeholder for each newly needed near chunk. Its call to [`add_village_proxies`](crates/client/src/terrain.rs#L709) clips buildings to that chunk, but the helper first rejects every building more than `LOD_BUILDING_DISTANCE` (128 m) from the current horizontal chunk center. The same helper also builds the far silhouettes.
 
 At the recorded 512 m near-detail setting, a building can therefore enter the local square well outside 128 m and get a placeholder containing no building geometry. The distant landscape excludes that entire local square. Existing placeholders are skipped when the square advances, so merely getting closer does not regenerate their omitted buildings. A detailed mesh eventually supplies them, subject to the two-job detail queue. The painted ground may remain, but the building silhouette does not.

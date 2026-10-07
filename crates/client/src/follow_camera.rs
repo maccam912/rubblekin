@@ -9,18 +9,22 @@ use rubblekin_core::{
 const FOLLOW_RATE: f32 = 18.0;
 const SNAP_DISTANCE: f32 = 4.0;
 const TERRAIN_CLEARANCE: f32 = 0.2;
+// Release collision compression gradually; reach 95% in about 375 ms.
+const OBSTRUCTION_RECOVERY_RATE: f32 = 8.0;
 
 #[derive(Component, Default)]
 pub struct CameraFollow {
     // World coordinates on foot, deck coordinates while following this ship.
     eye: Option<Vec3>,
     ship_id: Option<u64>,
+    airship_camera_fraction: Option<f32>,
 }
 
 impl CameraFollow {
     pub fn advance(&mut self, target: Vec3, dt: f32) -> Vec3 {
         if self.ship_id.take().is_some() {
             self.eye = None;
+            self.airship_camera_fraction = None;
         }
         self.advance_eye(target, dt)
     }
@@ -32,10 +36,42 @@ impl CameraFollow {
         if self.ship_id != Some(ship.id) {
             self.eye = None;
             self.ship_id = Some(ship.id);
+            self.airship_camera_fraction = None;
         }
         let local_target = Vec3::from_array(deck_local_position(ship, target.to_array()));
         let local_eye = self.advance_eye(local_target, dt);
         Vec3::from_array(deck_position(ship, local_eye.to_array()))
+    }
+
+    /// Clip immediately on the current ray, but recover from an obstruction
+    /// gradually. Smoothing a fraction preserves immediate unobstructed zoom.
+    pub fn airship_camera_position(
+        &mut self,
+        ship: &AirshipSnapshot,
+        eye: Vec3,
+        desired: Vec3,
+        dt: f32,
+    ) -> Vec3 {
+        let safe = crate::airships::camera_position(ship, eye, desired);
+        let length = desired.distance(eye);
+        let allowed = if length > 0.0 {
+            (safe.distance(eye) / length).min(1.0)
+        } else {
+            1.0
+        };
+        let fraction = self.airship_camera_fraction.map_or(allowed, |previous| {
+            if allowed <= previous {
+                allowed
+            } else {
+                previous
+                    + (allowed - previous)
+                        * (1.0 - (-OBSTRUCTION_RECOVERY_RATE * dt.max(0.0)).exp())
+            }
+        });
+        self.airship_camera_fraction = Some(fraction);
+        // Every point before the current ray's first collision remains clear,
+        // including during recovery, turns, jumps and deck motion.
+        eye + (desired - eye) * fraction
     }
 
     fn advance_eye(&mut self, target: Vec3, dt: f32) -> Vec3 {
@@ -187,6 +223,72 @@ mod tests {
         ship.position[0] = 48.0;
         let corrected = ship_eye(&ship, Vec3::new(5.0, 1.6, 0.0));
         assert_eq!(follow.advance_on_airship(corrected, 0.1, &ship), corrected);
+    }
+
+    #[test]
+    fn airship_obstruction_recovery_is_smooth_but_new_collisions_are_immediate() {
+        let ship = ship();
+        let eye = ship_eye(&ship, Vec3::Y * rubblekin_core::physics::EYE_HEIGHT);
+        let obstructed = eye + Vec3::new(0.8, 6.0, 4.0);
+        let clear = eye + Vec3::new(0.8, 0.0, 9.0);
+        for fps in [15, 60, 144] {
+            let dt = 1.0 / fps as f32;
+            let mut follow = CameraFollow::default();
+            follow.advance_on_airship(eye, dt, &ship);
+            let clipped = follow.airship_camera_position(&ship, eye, obstructed, dt);
+            assert!(clipped.distance(eye) < obstructed.distance(eye) * 0.5);
+            let mut previous_fraction = clipped.distance(eye) / obstructed.distance(eye);
+            for _ in 0..fps / 2 {
+                let recovered = follow.airship_camera_position(&ship, eye, clear, dt);
+                let fraction = recovered.distance(eye) / clear.distance(eye);
+                assert!(fraction > previous_fraction && fraction < 1.0);
+                assert!((fraction - previous_fraction) < 0.5);
+                previous_fraction = fraction;
+            }
+            assert!(previous_fraction > 0.98);
+            let clipped = follow.airship_camera_position(&ship, eye, obstructed, dt);
+            let safe = crate::airships::camera_position(&ship, eye, obstructed);
+            assert!(clipped.distance(safe) < 0.0001);
+        }
+    }
+
+    #[test]
+    fn clear_airship_zoom_is_immediate_and_old_obstructions_reset_when_boarding() {
+        let mut ship = ship();
+        let eye = ship_eye(&ship, Vec3::Y * rubblekin_core::physics::EYE_HEIGHT);
+        let mut follow = CameraFollow::default();
+        follow.advance_on_airship(eye, 0.0, &ship);
+        for distance in [6.5, 1.0, 9.0, 3.0] {
+            let desired = eye + Vec3::new(0.8, 0.0, distance);
+            assert!(
+                follow
+                    .airship_camera_position(&ship, eye, desired, 0.0)
+                    .distance(desired)
+                    < 0.0001
+            );
+        }
+        let obstructed = eye + Vec3::new(0.8, 6.0, 4.0);
+        follow.airship_camera_position(&ship, eye, obstructed, 0.0);
+        let clear = eye + Vec3::Z * 6.5;
+        assert!(
+            follow
+                .airship_camera_position(&ship, eye, clear, 0.0)
+                .distance(clear)
+                > 1.0
+        );
+        follow.advance(eye, 0.0);
+        follow.advance_on_airship(eye, 0.0, &ship);
+        assert_eq!(
+            follow.airship_camera_position(&ship, eye, clear, 0.0),
+            clear
+        );
+        follow.airship_camera_position(&ship, eye, obstructed, 0.0);
+        ship.id += 1;
+        follow.advance_on_airship(eye, 0.0, &ship);
+        assert_eq!(
+            follow.airship_camera_position(&ship, eye, clear, 0.0),
+            clear
+        );
     }
 
     #[test]

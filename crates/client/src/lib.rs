@@ -999,7 +999,8 @@ fn camera(
         session.camera_distance,
     );
     if let Some(ship) = ship {
-        transform.translation = airships::camera_position(&ship, eye, transform.translation);
+        transform.translation =
+            follow.airship_camera_position(&ship, eye, transform.translation, time.delta_secs());
     }
 }
 
@@ -1007,6 +1008,7 @@ fn camera(
 fn edit_blocks(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
     camera: Single<&Transform, With<GameCamera>>,
     world: Res<VoxelWorld>,
     mut session: ResMut<Session>,
@@ -1048,6 +1050,26 @@ fn edit_blocks(
             None
         }
     });
+    let repeated = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let dig = if touch.enabled {
+        touch.dig
+    } else {
+        mouse.just_pressed(MouseButton::Left) || repeated && mouse.pressed(MouseButton::Left)
+    };
+    let build = if touch.enabled {
+        touch.build
+    } else {
+        mouse.just_pressed(MouseButton::Right) || repeated && mouse.pressed(MouseButton::Right)
+    };
+    let attempted = session.captured
+        && session.edit_clock <= 0.0
+        && connection.error.is_none()
+        && (dig || build);
+    if attempted && session.target.is_none() {
+        session.status = "Move closer to reach a block · aim down to build nearby".into();
+        session.status_until = time.elapsed_secs_f64() + 3.0;
+        session.edit_clock = 0.16;
+    }
     if let Some((position, previous)) = session.target {
         let center = Vec3::new(
             position.x as f32 + 0.5,
@@ -1058,22 +1080,7 @@ fn edit_blocks(
             Transform::from_translation(center).with_scale(Vec3::splat(CELL_SIZE + 0.014)),
             Color::srgb(1.0, 0.89, 0.57),
         );
-        let repeated = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        let dig = if touch.enabled {
-            touch.dig
-        } else {
-            mouse.just_pressed(MouseButton::Left) || repeated && mouse.pressed(MouseButton::Left)
-        };
-        let build = if touch.enabled {
-            touch.build
-        } else {
-            mouse.just_pressed(MouseButton::Right) || repeated && mouse.pressed(MouseButton::Right)
-        };
-        if session.captured
-            && session.edit_clock <= 0.0
-            && connection.error.is_none()
-            && (dig || build)
-        {
+        if attempted {
             let block = if dig {
                 Block::Air
             } else {

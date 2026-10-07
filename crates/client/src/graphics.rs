@@ -76,6 +76,13 @@ impl GraphicsSettings {
         }
     }
 
+    /// Return experimental distances to this preset's starting values.
+    pub fn reset_distances(&mut self) {
+        self.near_distance = DEFAULT_NEAR_DISTANCE;
+        self.tree_distance = DEFAULT_TREE_DISTANCE;
+        self.shadow_distance = self.quality.default_shadow_distance();
+    }
+
     pub fn adjust_near_distance(&mut self, delta: f32) {
         if delta.is_finite() {
             self.near_distance = (((self.near_distance + delta) / DISTANCE_STEP).round()

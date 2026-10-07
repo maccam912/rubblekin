@@ -854,25 +854,14 @@ fn handle_message(
                     .and_then(|plan| plan.villages.iter().find(|v| v.id == village_id))
                     .map_or_else(|| format!("Village {village_id}"), |v| v.name.clone())
             };
-            let destination = village_name(ship.next_village);
-            let text = if let Some(docked) = ship.docked_at {
-                format!(
-                    "I'm {}, sailing from {} to {}. We leave in {} seconds and reach {} in about {} seconds. You can walk or jump aboard and enjoy the view.",
-                    ship.pilot_name,
-                    village_name(docked),
-                    destination,
-                    ship.departure_in.ceil() as u32,
-                    destination,
-                    ship.arrival_in.ceil() as u32
-                )
-            } else {
-                format!(
-                    "I'm {}, heading to {}. We'll arrive in about {} seconds. Enjoy the view!",
-                    ship.pilot_name,
-                    destination,
-                    ship.arrival_in.ceil() as u32
-                )
-            };
+            // The conversation can stay open through departure and the return
+            // trip. Its live client timetable owns all phase-dependent details.
+            let text = format!(
+                "I'm {}, sailing between {} and {}. Enjoy the view!",
+                ship.pilot_name,
+                village_name(ship.from_village),
+                village_name(ship.next_village),
+            );
             connections
                 .get_mut(&id)
                 .unwrap()

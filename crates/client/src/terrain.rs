@@ -704,8 +704,9 @@ fn add_outer_ocean(radius: f32, center: ChunkKey, water: &mut Geometry) {
     water.uvs[start..].fill([1.0, 0.0]);
 }
 
-/// Nearby silhouettes bridge the painted map to editable assets and remain
-/// visible while detailed chunks load. The map represents distant settlements.
+/// Far silhouettes bridge the painted map through the fixed building distance.
+/// Inside a near chunk, its complete clipped silhouette remains until detail
+/// replaces it, even when the near square extends beyond that distance.
 fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometry: &mut Geometry) {
     let Some(plan) = world.settlements() else {
         return;
@@ -724,8 +725,23 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
             ) * CELL_SIZE;
             let size = Vec3::new(width as f32, height as f32, depth as f32) * CELL_SIZE;
             let building_center = Vec2::new(base.x + size.x * 0.5, base.z + size.z * 0.5);
-            if building_center.distance(camera) > LOD_BUILDING_DISTANCE {
-                continue;
+            match clip {
+                ProxyClip::Outside(_)
+                    if building_center.distance_squared(camera) > LOD_BUILDING_DISTANCE.powi(2) =>
+                {
+                    continue;
+                }
+                ProxyClip::Inside([x0, z0, x1, z1])
+                    if base.x + size.x <= x0
+                        || base.x >= x1
+                        || base.z + size.z <= z0
+                        || base.z >= z1 =>
+                {
+                    // Most buildings do not touch this chunk. Reject them
+                    // before constructing all five clipped proxy cuboids.
+                    continue;
+                }
+                _ => {}
             }
             let walls = (size.y * 0.58).min(3.5);
             proxy_cuboid(
@@ -2564,6 +2580,158 @@ mod tests {
         assert_ne!(
             meshes.get(&chunk.opaque).unwrap().indices().unwrap().len(),
             before
+        );
+    }
+
+    #[test]
+    fn distant_buildings_remain_in_pending_near_chunks_during_approach() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let building = &world.settlements().unwrap().villages[0].buildings[0];
+        let [width, height, depth] = building.dimensions();
+        let base = Vec3::new(
+            building.origin.x as f32,
+            building.origin.y as f32,
+            building.origin.z as f32,
+        ) * CELL_SIZE;
+        let key = chunk_key([
+            base.x + width as f32 * CELL_SIZE * 0.5,
+            base.y,
+            base.z + depth as f32 * CELL_SIZE * 0.5,
+        ]);
+        let near_radius = 18;
+        let center = (key.0 - near_radius, key.1);
+        assert!((key.0 - center.0) as f32 * CHUNK_METERS > LOD_BUILDING_DISTANCE);
+        let wall_corner = [
+            base.x.max(key.0 as f32 * CHUNK_METERS),
+            base.y + (height as f32 * CELL_SIZE * 0.58).min(3.5),
+            base.z.max(key.1 as f32 * CHUNK_METERS),
+        ];
+        let mut ecs = bevy::prelude::World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut scene = TerrainScene {
+            map_image: None,
+            chunks: HashMap::new(),
+            opaque_material: Handle::default(),
+            glass_material: Handle::default(),
+            water_material: Handle::default(),
+            landscape: None,
+            pending_landscape: None,
+            pending_chunks: HashMap::new(),
+            triangle_count: 0,
+        };
+        move_local_square(
+            &mut scene,
+            center,
+            near_radius,
+            &world,
+            &mut Commands::new(&mut queue, &ecs),
+            &mut meshes,
+        );
+        queue.apply(&mut ecs);
+        let chunk = &scene.chunks[&key];
+        assert!(!chunk.detailed);
+        let handle = chunk.opaque.clone();
+        let entity = chunk.entity;
+        let placeholder = meshes.get(&handle).unwrap();
+        let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
+            placeholder.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+        else {
+            panic!("mesh positions")
+        };
+        assert!(
+            positions.contains(&wall_corner),
+            "an entering near chunk must include its building beyond the far-building cutoff"
+        );
+        let positions = positions.clone();
+
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        scene.pending_chunks.insert(
+            key,
+            AsyncComputeTaskPool::get().spawn(std::future::pending()),
+        );
+        move_local_square(
+            &mut scene,
+            (key.0 - 4, key.1),
+            near_radius,
+            &world,
+            &mut Commands::new(&mut queue, &ecs),
+            &mut meshes,
+        );
+        queue.apply(&mut ecs);
+        let chunk = &scene.chunks[&key];
+        assert!(!chunk.detailed);
+        assert!(scene.pending_chunks.contains_key(&key));
+        assert_eq!(chunk.entity, entity);
+        assert_eq!(chunk.opaque.id(), handle.id());
+        assert_eq!(
+            meshes
+                .get(&handle)
+                .unwrap()
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .unwrap(),
+            &bevy::mesh::VertexAttributeValues::Float32x3(positions),
+            "approaching keeps the complete placeholder while detail is pending"
+        );
+
+        scene.pending_chunks.remove(&key);
+        let (opaque, glass) = chunk_geometry(&world, key.0, key.1);
+        let detailed_positions = opaque.positions.clone();
+        let detailed_indices = opaque.indices.clone();
+        install_chunk(
+            &mut scene,
+            key,
+            (opaque, glass),
+            true,
+            &mut Commands::new(&mut queue, &ecs),
+            &mut meshes,
+        );
+        queue.apply(&mut ecs);
+        let chunk = &scene.chunks[&key];
+        assert!(chunk.detailed);
+        assert_eq!(chunk.entity, entity);
+        assert_eq!(chunk.opaque.id(), handle.id());
+        let installed = meshes.get(&handle).unwrap();
+        assert_eq!(
+            installed.attribute(Mesh::ATTRIBUTE_POSITION).unwrap(),
+            &bevy::mesh::VertexAttributeValues::Float32x3(detailed_positions),
+            "detail replaces the placeholder without retaining duplicate proxy faces"
+        );
+        assert_eq!(
+            installed.indices().unwrap(),
+            &Indices::U32(detailed_indices)
+        );
+    }
+
+    #[test]
+    fn large_near_square_building_coverage_does_not_extend_far_silhouettes() {
+        let world = World::generate(42, WorldGeneration::GeographyV3);
+        let building = &world.settlements().unwrap().villages[0].buildings[0];
+        let base_x = building.origin.x as f32 * CELL_SIZE;
+        let base_z = building.origin.z as f32 * CELL_SIZE;
+        let key = chunk_key([base_x, 0.0, base_z]);
+        let center = (key.0 - 64, key.1);
+        let bounds = local_bounds(key, 0);
+        assert!(local_keys(center, 64, &world).contains(&key));
+        let mut placeholder = Geometry::default();
+        add_village_proxies(&world, center, ProxyClip::Inside(bounds), &mut placeholder);
+        assert!(!placeholder.positions.is_empty(), "512 m near coverage");
+        assert!(placeholder.positions.iter().all(|&[x, _, z]| {
+            x >= bounds[0] && x <= bounds[2] && z >= bounds[1] && z <= bounds[3]
+        }));
+
+        let mut far = Geometry::default();
+        add_village_proxies(
+            &world,
+            center,
+            ProxyClip::Outside(local_bounds(center, DETAIL_RADIUS)),
+            &mut far,
+        );
+        assert!(
+            far.positions.iter().all(|&[x, _, z]| {
+                x < bounds[0] || x > bounds[2] || z < bounds[1] || z > bounds[3]
+            }),
+            "far buildings retain the existing 128 m visibility limit"
         );
     }
 

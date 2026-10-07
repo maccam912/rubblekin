@@ -105,6 +105,48 @@ fn optional_pilot_conversation_answers_without_boarding_or_changing_the_body() {
 }
 
 #[test]
+fn pilot_introduction_remains_the_same_after_departure() {
+    let mut f = Fixture::new();
+    let docked = f.docked_ship();
+    f.add_player(1, pilot_position(&docked));
+    let mut replies = Vec::new();
+    for time in [0.0, f64::from(docked.departure_in) + 1.0] {
+        f.sim.world_time = time;
+        let ship = f.network.ship(docked.id, time).unwrap();
+        f.connections
+            .get_mut(&1)
+            .unwrap()
+            .player
+            .as_mut()
+            .unwrap()
+            .body
+            .position = pilot_position(&ship);
+        f.send(1, ClientMessage::TalkToPilot { ship_id: ship.id });
+        let ServerMessage::PilotDialog { text, .. } =
+            serde_json::from_slice(f.connections[&1].outgoing.back().unwrap()).unwrap()
+        else {
+            panic!("Expected a pilot answer");
+        };
+        for village_id in [docked.from_village, docked.next_village] {
+            let village = f
+                .sim
+                .world
+                .settlements()
+                .unwrap()
+                .villages
+                .iter()
+                .find(|village| village.id == village_id)
+                .unwrap();
+            assert!(text.contains(&village.name));
+        }
+        assert!(!text.contains("seconds"));
+        assert!(!text.contains("aboard"));
+        replies.push(text);
+    }
+    assert_eq!(replies[0], replies[1]);
+}
+
+#[test]
 fn pilot_dialogue_rejects_remote_requests_and_observers_remain_read_only() {
     let mut f = Fixture::new();
     let ship = f.docked_ship();

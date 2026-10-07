@@ -11,6 +11,13 @@ use std::{
 const MAX_SERVER_FRAME: usize = 16 * 1024 * 1024;
 const MAX_OUTBOX: usize = 256;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConnectionStage {
+    ResolvingAddress,
+    Connecting,
+    AwaitingWelcome,
+}
+
 #[derive(Resource)]
 pub struct Connection {
     stream: TcpStream,
@@ -22,11 +29,24 @@ pub struct Connection {
 }
 
 impl Connection {
+    #[cfg(test)]
     pub fn connect(
         address: &str,
         name: String,
         mode: SessionMode,
     ) -> io::Result<(Self, ServerMessage)> {
+        Self::connect_with_progress(address, name, mode, |_| Ok(()))
+    }
+
+    /// The callback runs on the connection worker at each real stage and while
+    /// awaiting a welcome. Returning an error cancels and closes the socket.
+    pub(crate) fn connect_with_progress(
+        address: &str,
+        name: String,
+        mode: SessionMode,
+        mut progress: impl FnMut(ConnectionStage) -> io::Result<()>,
+    ) -> io::Result<(Self, ServerMessage)> {
+        progress(ConnectionStage::ResolvingAddress)?;
         // A hostname can resolve to both IPv6 and IPv4; try alternatives if the
         // first family is unavailable instead of rejecting a reachable server.
         let addresses: Vec<_> = address.to_socket_addrs()?.take(8).collect();
@@ -34,6 +54,7 @@ impl Connection {
         let mut last_error = io::Error::other("Address did not resolve");
         let mut connected = None;
         for address in addresses {
+            progress(ConnectionStage::Connecting)?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -64,6 +85,7 @@ impl Connection {
         });
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
+            progress(ConnectionStage::AwaitingWelcome)?;
             let mut messages = connection.poll().into_iter();
             while let Some(message) = messages.next() {
                 match message {

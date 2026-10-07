@@ -1,7 +1,11 @@
 //! A guest join screen. DNS, connection, and local-server startup run off the render thread.
 use crate::{
-    Avatars, GameEntity, Session, VoxelWorld, graphics::GraphicsQuality, network::Connection,
-    observer::ObserverCamera, prediction::Prediction, terrain::TerrainScene,
+    Avatars, GameEntity, Session, VoxelWorld,
+    graphics::GraphicsQuality,
+    network::{Connection, ConnectionStage},
+    observer::ObserverCamera,
+    prediction::Prediction,
+    terrain::TerrainScene,
 };
 use bevy::{
     input::{
@@ -20,7 +24,15 @@ use rubblekin_core::{
     world::World as GameWorld,
 };
 use rubblekin_server::{ServerConfig, ServerHandle, spawn};
-use std::{net::Ipv6Addr, thread::JoinHandle};
+use std::{
+    net::Ipv6Addr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::JoinHandle,
+    time::Instant,
+};
 use winit::{event::WindowEvent as NativeWindowEvent, keyboard::ModifiersState};
 
 #[derive(Resource)]
@@ -31,9 +43,49 @@ pub struct JoinScreen {
     config: ServerConfig,
     graphics: GraphicsQuality,
     mode: SessionMode,
-    pending: Option<JoinHandle<Result<Joined, String>>>,
+    pending: Option<PendingJoin>,
     next_action: Option<Action>,
     local_server: Option<ServerHandle>,
+}
+
+#[derive(Clone, Copy)]
+enum JoinStage {
+    OpeningLocalWorld,
+    Network(ConnectionStage),
+    PreparingLandscape,
+}
+
+impl JoinStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::OpeningLocalWorld => "Opening your local world…",
+            Self::Network(ConnectionStage::ResolvingAddress) => "Looking up the server…",
+            Self::Network(ConnectionStage::Connecting) => "Connecting to the server…",
+            Self::Network(ConnectionStage::AwaitingWelcome) => "Waiting for the server's world…",
+            Self::PreparingLandscape => "Preparing the landscape…",
+        }
+    }
+}
+
+struct PendingJoin {
+    worker: JoinHandle<Result<Joined, String>>,
+    stage: Arc<Mutex<JoinStage>>,
+    cancelled: Arc<AtomicBool>,
+    started: Instant,
+}
+
+impl PendingJoin {
+    fn status(&self) -> String {
+        let label = if self.cancelled.load(Ordering::Relaxed) {
+            "Cancelling… waiting for the current step to finish."
+        } else {
+            self.stage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .label()
+        };
+        format!("{label}\n{} s elapsed", self.started.elapsed().as_secs())
+    }
 }
 
 struct Joined {
@@ -86,15 +138,37 @@ impl JoinScreen {
                 }
             }
         };
-        self.status = if local {
-            "Opening your local world and shaping its geography…".into()
+        let stage = Arc::new(Mutex::new(if local {
+            JoinStage::OpeningLocalWorld
         } else {
-            format!("Connecting to {address}…")
-        };
+            JoinStage::Network(ConnectionStage::ResolvingAddress)
+        }));
+        self.status = stage.lock().unwrap().label().into();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_stage = stage.clone();
+        let worker_cancelled = cancelled.clone();
         let config = self.config.clone();
         let mode = self.mode;
         let graphics = self.graphics;
-        self.pending = Some(std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
+            let report = |stage| {
+                if worker_cancelled.load(Ordering::Relaxed) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "Join cancelled",
+                    ));
+                }
+                *worker_stage
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = stage;
+                Ok(())
+            };
+            report(if local {
+                JoinStage::OpeningLocalWorld
+            } else {
+                JoinStage::Network(ConnectionStage::ResolvingAddress)
+            })
+            .map_err(|error| error.to_string())?;
             let server = if local {
                 Some(spawn(config).map_err(|error| error.to_string())?)
             } else {
@@ -114,17 +188,38 @@ impl JoinScreen {
                 address
             };
             let (connection, welcome) =
-                Connection::connect(&address, name, mode).map_err(|error| error.to_string())?;
+                Connection::connect_with_progress(&address, name, mode, |stage| {
+                    report(JoinStage::Network(stage))
+                })
+                .map_err(|error| error.to_string())?;
             // Global geography is prepared on this worker, keeping the menu
             // responsive even on a first join to a new seed.
+            report(JoinStage::PreparingLandscape).map_err(|error| error.to_string())?;
             let (world, session) = session_from_welcome(welcome, address, graphics, 0.0, mode)?;
+            // Cancelled local servers and sockets are dropped on this worker,
+            // preserving final-save cleanup without blocking menu input.
+            report(JoinStage::PreparingLandscape).map_err(|error| error.to_string())?;
             Ok(Joined {
                 connection,
                 world,
                 session,
                 server,
             })
-        }));
+        });
+        self.pending = Some(PendingJoin {
+            worker,
+            stage,
+            cancelled,
+            started: Instant::now(),
+        });
+    }
+
+    fn cancel(&mut self) {
+        if let Some(pending) = &self.pending {
+            pending.cancelled.store(true, Ordering::Relaxed);
+            self.status = pending.status();
+            self.next_action = None;
+        }
     }
 }
 
@@ -170,6 +265,7 @@ pub(super) enum Field {
 pub(super) enum Action {
     Join,
     Local,
+    Cancel,
     Mode(SessionMode),
     DismissKeyboard,
 }
@@ -255,8 +351,8 @@ pub fn setup(
                     });
                     actions.spawn((Text::new("Observer camera is read-only; the server must allow observers."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
                     actions.spawn((Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() },)).with_children(|row| {
-                        for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world")] {
-                            row.spawn((Button, action, Node { min_height: px(48), padding: UiRect::axes(px(20), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                        for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world"), (Action::Cancel, "Cancel")] {
+                            row.spawn((Button, action, Node { display: if matches!(action, Action::Cancel) { Display::None } else { Display::Flex }, min_height: px(48), padding: UiRect::axes(px(20), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
                                 .with_child((Text::new(label), TextFont::from_font_size(19.).with_font(font.clone()), TextColor(ink())));
                         }
                     });
@@ -330,7 +426,7 @@ pub fn interact(
     clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
 ) {
-    if session.is_some() || menu.pending.is_some() {
+    if session.is_some() {
         keyboard.clear();
         ime.clear();
         fingers.clear();
@@ -362,7 +458,7 @@ pub fn interact(
             {
                 continue;
             }
-            if field.is_some() {
+            if field.is_some() && menu.pending.is_none() {
                 focus.set(entity, FocusCause::Navigated);
                 #[cfg(target_os = "android")]
                 if let Some(app) = bevy::android::ANDROID_APP.get() {
@@ -375,6 +471,24 @@ pub fn interact(
                 break;
             }
         }
+    }
+    if menu.pending.is_some() {
+        let back = keyboard.read().any(|key| {
+            key.input.state.is_pressed()
+                && matches!(key.input.logical_key, Key::Escape | Key::BrowserBack)
+        });
+        ime.clear();
+        if back
+            || keys.just_pressed(KeyCode::Escape)
+            || matches!(touched_action, Some(Action::Cancel))
+            || (!cfg!(target_os = "android")
+                && actions.iter().any(|(action, interaction)| {
+                    matches!(action, Action::Cancel) && *interaction == Interaction::Pressed
+                }))
+        {
+            menu.cancel();
+        }
+        return;
     }
     for (entity, _, interaction, _) in &fields {
         if !cfg!(target_os = "android") && *interaction == Interaction::Pressed {
@@ -488,7 +602,7 @@ pub fn interact(
     if let Some(action) = requested {
         menu.next_action = None;
         focus.clear();
-        if !matches!(action, Action::DismissKeyboard) {
+        if matches!(action, Action::Join | Action::Local) {
             menu.start(matches!(action, Action::Local));
         }
     }
@@ -848,15 +962,35 @@ pub fn poll_connection(
     time: Res<Time>,
     touch: Option<Res<crate::touch::TouchControls>>,
 ) {
-    if !menu.pending.as_ref().is_some_and(JoinHandle::is_finished) {
+    let Some(pending) = &menu.pending else {
+        return;
+    };
+    if !pending.worker.is_finished() {
+        menu.status = pending.status();
         return;
     }
-    let result = menu
-        .pending
-        .take()
-        .unwrap()
+    let pending = menu.pending.take().unwrap();
+    let result = pending
+        .worker
         .join()
         .unwrap_or_else(|_| Err("Connection worker stopped unexpectedly.".into()));
+    if pending.cancelled.load(Ordering::Relaxed) {
+        if let Ok(joined) = result {
+            // Cancel can win after the worker's final cancellation check. Keep
+            // retry disabled until its completed local server has shut down,
+            // and keep that potentially blocking save off the render thread.
+            menu.pending = Some(PendingJoin {
+                worker: std::thread::spawn(move || {
+                    drop(joined);
+                    Err("Join cancelled".into())
+                }),
+                ..pending
+            });
+        } else {
+            menu.status = "Join cancelled. Choose a server or local world to try again.".into();
+        }
+        return;
+    }
     match result {
         Ok(mut joined) => {
             joined.session.status_until = time.elapsed_secs_f64() + 12.0;
@@ -1063,7 +1197,7 @@ pub fn refresh(
     mut camera: Single<&mut Camera, With<MenuCamera>>,
     mut status: Single<&mut Text, With<MenuStatus>>,
     mut fields: Query<(Entity, &mut BorderColor), With<Field>>,
-    mut buttons: Query<(&Action, &Interaction, &mut BackgroundColor)>,
+    mut buttons: Query<(&Action, &Interaction, &mut BackgroundColor, &mut Node), Without<MenuRoot>>,
 ) {
     root.display = if session.is_some() {
         Display::None
@@ -1081,8 +1215,20 @@ pub fn refresh(
             Color::srgb(0.20, 0.32, 0.30)
         });
     }
-    for (action, interaction, mut background) in &mut buttons {
-        background.0 = if menu.pending.is_some() {
+    for (action, interaction, mut background, mut node) in &mut buttons {
+        let cancel = matches!(action, Action::Cancel);
+        if cancel {
+            node.display = if menu
+                .pending
+                .as_ref()
+                .is_some_and(|pending| !pending.cancelled.load(Ordering::Relaxed))
+            {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        }
+        background.0 = if menu.pending.is_some() && !cancel {
             Color::srgb(0.12, 0.22, 0.20)
         } else if matches!(action, Action::Mode(mode) if *mode == menu.mode) {
             Color::srgb(0.39, 0.43, 0.24)
@@ -1284,8 +1430,13 @@ pub(crate) mod tests {
             GraphicsQuality::default(),
             SessionMode::Player,
         );
-        menu.pending = Some(std::thread::spawn(|| Err("Connection refused".into())));
-        while !menu.pending.as_ref().unwrap().is_finished() {
+        menu.pending = Some(PendingJoin {
+            worker: std::thread::spawn(|| Err("Connection refused".into())),
+            stage: Arc::new(Mutex::new(JoinStage::Network(ConnectionStage::Connecting))),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            started: Instant::now(),
+        });
+        while !menu.pending.as_ref().unwrap().worker.is_finished() {
             std::thread::yield_now();
         }
         app.insert_resource(menu)
@@ -1299,6 +1450,154 @@ pub(crate) mod tests {
         assert_eq!(menu.address, "test.example:7878");
         assert_eq!(menu.name, "Wayfarer");
         assert!(!app.world().contains_resource::<Session>());
+    }
+
+    #[test]
+    fn progress_updates_while_waiting_and_cancel_keeps_retry_disabled_until_cleanup() {
+        let (finish, finished) = std::sync::mpsc::channel();
+        let stage = Arc::new(Mutex::new(JoinStage::OpeningLocalWorld));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut menu = JoinScreen::new(
+            "test.example:7878".into(),
+            "Wayfarer".into(),
+            ServerConfig::default(),
+            GraphicsQuality::default(),
+            SessionMode::Player,
+        );
+        menu.pending = Some(PendingJoin {
+            worker: std::thread::spawn(move || {
+                finished
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                Err("Join cancelled".into())
+            }),
+            stage: stage.clone(),
+            cancelled: cancelled.clone(),
+            started: Instant::now() - std::time::Duration::from_secs(3),
+        });
+        let mut app = App::new();
+        app.insert_resource(menu)
+            .init_resource::<InputFocus>()
+            .init_resource::<Time>()
+            .add_systems(Update, poll_connection);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<JoinScreen>()
+                .status
+                .contains("Opening your local world")
+        );
+        *stage.lock().unwrap() = JoinStage::Network(ConnectionStage::AwaitingWelcome);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<JoinScreen>()
+                .status
+                .contains("Waiting for the server's world")
+        );
+        assert!(
+            app.world()
+                .resource::<JoinScreen>()
+                .status
+                .contains("s elapsed")
+        );
+        app.world_mut().resource_mut::<JoinScreen>().cancel();
+        assert!(cancelled.load(Ordering::Relaxed));
+        app.world_mut().resource_mut::<JoinScreen>().start(false);
+        assert!(Arc::ptr_eq(
+            &app.world()
+                .resource::<JoinScreen>()
+                .pending
+                .as_ref()
+                .unwrap()
+                .cancelled,
+            &cancelled
+        ));
+        app.update();
+        assert!(
+            app.world()
+                .resource::<JoinScreen>()
+                .status
+                .contains("Cancelling")
+        );
+        finish.send(()).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while app.world().resource::<JoinScreen>().pending.is_some() && Instant::now() < deadline {
+            app.update();
+            std::thread::yield_now();
+        }
+        let menu = app.world().resource::<JoinScreen>();
+        assert!(menu.pending.is_none());
+        assert!(menu.status.contains("Join cancelled"));
+        assert_eq!(menu.address, "test.example:7878");
+        assert_eq!(menu.name, "Wayfarer");
+    }
+
+    #[test]
+    fn cancelling_a_completed_local_join_never_enters_world_and_allows_retry() {
+        let path = std::env::temp_dir().join(format!(
+            "rubblekin-cancel-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut menu = JoinScreen::new(
+            "remote.example:7878".into(),
+            "Tester".into(),
+            ServerConfig {
+                bind_addr: "127.0.0.1:0".into(),
+                save_path: path.clone(),
+                seed: 42,
+                generation: rubblekin_core::world::WorldGeneration::ValleyV1,
+                allow_admin: true,
+            },
+            GraphicsQuality::default(),
+            SessionMode::Player,
+        );
+        menu.start(true);
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while !menu.pending.as_ref().unwrap().worker.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(menu.pending.as_ref().unwrap().worker.is_finished());
+        // The user cancels after success is produced but before the render
+        // thread accepts it. This late result must never create a session.
+        menu.cancel();
+        let mut app = App::new();
+        app.insert_resource(menu)
+            .init_resource::<InputFocus>()
+            .init_resource::<Time>()
+            .add_systems(Update, poll_connection);
+        app.update();
+        assert!(!app.world().contains_resource::<Session>());
+        assert!(app.world().resource::<JoinScreen>().pending.is_some());
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while app.world().resource::<JoinScreen>().pending.is_some() && Instant::now() < deadline {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.world().resource::<JoinScreen>().pending.is_none());
+        assert!(!app.world().contains_resource::<Session>());
+        assert!(!app.world().contains_resource::<Connection>());
+        assert!(app.world().resource::<JoinScreen>().local_server.is_none());
+        // Reopening the same save exercises server shutdown and writer-lock
+        // release, not merely hiding the cancelled connection in the UI.
+        app.world_mut().resource_mut::<JoinScreen>().start(true);
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while app.world().resource::<JoinScreen>().pending.is_some() && Instant::now() < deadline {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            app.world().contains_resource::<Session>(),
+            "{}",
+            app.world().resource::<JoinScreen>().status
+        );
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("json.lock"));
     }
 
     #[test]

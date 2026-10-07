@@ -8,6 +8,8 @@ pub struct NpcText;
 #[derive(Component)]
 pub struct NoticeText;
 #[derive(Component)]
+pub struct NoticePanel;
+#[derive(Component)]
 pub struct HelpPanel;
 #[derive(Component)]
 pub struct NpcPanel;
@@ -233,6 +235,7 @@ pub fn setup_ui(
             ..default()
         },
         BackgroundColor(Color::srgba(0.055, 0.10, 0.10, 0.70)),
+        NoticePanel,
         children![(
             Text::new(""),
             TextFont::from_font_size(16.0).with_font(font.clone()),
@@ -282,6 +285,7 @@ fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) 
             ..default()
         },
         BackgroundColor(Color::srgba(0.055, 0.10, 0.10, 0.70)),
+        NoticePanel,
         children![(
             Text::new(""),
             TextFont::from_font_size(14.).with_font(font.clone()),
@@ -419,6 +423,8 @@ pub fn update_ui(
     touch: Option<Res<crate::touch::TouchControls>>,
     pause: Option<Res<crate::pause::PauseMenu>>,
     console: Option<Res<crate::admin_console::AdminConsole>>,
+    map: Option<Res<crate::world_map::WorldMap>>,
+    conversation: Option<Res<crate::airships::PilotConversation>>,
     mut refresh: Local<f32>,
     mut texts: ParamSet<(
         Query<&mut Text, With<StatusText>>,
@@ -426,7 +432,12 @@ pub fn update_ui(
         Query<&mut Text, With<NoticeText>>,
         Query<&mut Text, With<ModeText>>,
     )>,
-    mut panels: Query<(&mut Node, Option<&HelpPanel>, Option<&NpcPanel>)>,
+    mut panels: Query<(
+        &mut Node,
+        Option<&HelpPanel>,
+        Option<&NpcPanel>,
+        Option<&NoticePanel>,
+    )>,
     mut slots: Query<(&PaletteSlot, &mut BorderColor, &mut BackgroundColor)>,
 ) {
     *refresh += time.delta_secs();
@@ -436,7 +447,11 @@ pub fn update_ui(
     *refresh = 0.0;
     let touch_enabled = touch.as_ref().is_some_and(|touch| touch.enabled);
     let menu_open = pause.as_ref().is_some_and(|pause| pause.open)
-        || console.as_ref().is_some_and(|console| console.open);
+        || console.as_ref().is_some_and(|console| console.open)
+        || map.as_ref().is_some_and(|map| map.open)
+        || conversation
+            .as_ref()
+            .is_some_and(|conversation| conversation.open());
     let minutes = (session.world_time / 60.0) as u64;
     for mut text in &mut texts.p0() {
         set_text(
@@ -469,45 +484,9 @@ pub fn update_ui(
         let value = crate::inspection_details::text(&world.0, &session);
         set_text(&mut text, value);
     }
+    let notice = notice_text(&session, &world, time.elapsed_secs_f64(), touch_enabled);
     for mut text in &mut texts.p2() {
-        let value = if time.elapsed_secs_f64() < session.status_until {
-            session.status.clone()
-        } else if touch_enabled {
-            if session.observer.is_some() {
-                "Observer · swipe to look · Menu for travel and servers".into()
-            } else if session.target.is_none() {
-                "Aim near the center dot to reach a block".into()
-            } else {
-                format!(
-                    "{} · {}",
-                    PALETTE[session.selected].name(),
-                    if session.flying {
-                        "creative flight"
-                    } else {
-                        "Dig / Build changes the aimed block"
-                    }
-                )
-            }
-        } else if !session.captured {
-            if session.observer.is_some() {
-                "Click to fly the camera  ·  read-only observation".into()
-            } else {
-                "Click to explore  ·  changes are saved automatically".into()
-            }
-        } else if let Some(observer) = &session.observer {
-            format!(
-                "Camera  {:.0}, {:.0}, {:.0} m  ·  R or Home returns to spawn",
-                observer.position.x, observer.position.y, observer.position.z
-            )
-        } else if session.target.is_none() {
-            "Move closer to reach a block  ·  aim down to build nearby".into()
-        } else {
-            format!(
-                "{}  ·  0.5 m blocks  ·  hold Ctrl + click to repeat",
-                PALETTE[session.selected].name()
-            )
-        };
-        set_text(&mut text, value);
+        set_text(&mut text, notice.clone());
     }
     for mut text in &mut texts.p3() {
         let value = if let Some(observer) = &session.observer {
@@ -528,7 +507,14 @@ pub fn update_ui(
         };
         set_text(&mut text, value);
     }
-    for (mut node, help, npc) in &mut panels {
+    for (mut node, help, npc, notice_panel) in &mut panels {
+        if notice_panel.is_some() {
+            node.display = if !notice.is_empty() && !menu_open {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        }
         if help.is_some() {
             node.display = if session.help && !menu_open {
                 Display::Flex
@@ -559,8 +545,286 @@ pub fn update_ui(
     }
 }
 
+fn notice_text(session: &Session, world: &crate::VoxelWorld, now: f64, touch: bool) -> String {
+    if now < session.status_until {
+        return session.status.clone();
+    }
+    if session.ride.is_some() {
+        return crate::airships::travel_hint(session, world, touch).unwrap_or_default();
+    }
+    if touch {
+        if session.observer.is_some() {
+            "Observer · swipe to look · Menu for travel and servers".into()
+        } else if session.target.is_none() {
+            String::new()
+        } else {
+            format!(
+                "{} · {}",
+                PALETTE[session.selected].name(),
+                if session.flying {
+                    "creative flight"
+                } else {
+                    "Dig / Build changes the aimed block"
+                }
+            )
+        }
+    } else if !session.captured {
+        if session.observer.is_some() {
+            "Click to fly the camera  ·  read-only observation".into()
+        } else {
+            "Click to explore  ·  changes are saved automatically".into()
+        }
+    } else if let Some(observer) = &session.observer {
+        format!(
+            "Camera  {:.0}, {:.0}, {:.0} m  ·  R or Home returns to spawn",
+            observer.position.x, observer.position.y, observer.position.z
+        )
+    } else if session.target.is_none() {
+        String::new()
+    } else {
+        format!(
+            "{}  ·  0.5 m blocks  ·  hold Ctrl + click to repeat",
+            PALETTE[session.selected].name()
+        )
+    }
+}
+
 fn set_text(text: &mut Text, value: String) {
     if text.0 != value {
         text.0 = value;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{VoxelWorld, graphics::GraphicsQuality, join::session_from_welcome};
+    use rubblekin_core::{
+        airships::AirshipRide,
+        protocol::{ServerMessage, SessionMode},
+        world::{BlockPos, WorldGeneration},
+    };
+
+    fn fixture(generation: WorldGeneration) -> (VoxelWorld, Session) {
+        let mut welcome = crate::join::tests::welcome(SessionMode::Player);
+        if let ServerMessage::Welcome {
+            generation: actual, ..
+        } = &mut welcome
+        {
+            *actual = generation;
+        }
+        let (world, mut session) = session_from_welcome(
+            welcome,
+            "test".into(),
+            GraphicsQuality::Low,
+            0.,
+            SessionMode::Player,
+        )
+        .unwrap();
+        session.status_until = 0.;
+        session.captured = true;
+        (VoxelWorld(world), session)
+    }
+
+    #[test]
+    fn idle_no_target_has_no_build_warning_but_ground_targets_keep_direct_hints() {
+        let (world, mut session) = fixture(WorldGeneration::ValleyV1);
+        for touch in [false, true] {
+            assert!(notice_text(&session, &world, 10., touch).is_empty());
+            session.target = Some((BlockPos::new(0, 10, 0), BlockPos::new(0, 11, 0)));
+            let text = notice_text(&session, &world, 10., touch);
+            assert!(text.contains(PALETTE[session.selected].name()));
+            assert!(text.contains(if touch { "Dig / Build" } else { "Ctrl + click" }));
+            session.target = None;
+        }
+        session.status = "Move closer to reach a block".into();
+        session.status_until = 12.;
+        assert!(notice_text(&session, &world, 10., false).contains("Move closer"));
+        assert!(notice_text(&session, &world, 13., false).is_empty());
+        session.captured = false;
+        assert!(notice_text(&session, &world, 13., false).contains("Click to explore"));
+    }
+
+    #[test]
+    fn riding_notice_uses_actual_destination_and_live_departure_or_arrival() {
+        let (world, mut session) = fixture(WorldGeneration::GeographyV3);
+        let ship = session
+            .airships
+            .ships(0.)
+            .into_iter()
+            .find(|ship| ship.docked_at.is_some())
+            .unwrap();
+        session.ride = Some(AirshipRide {
+            ship_id: ship.id,
+            seat: 0,
+        });
+        let destination = world
+            .0
+            .settlements()
+            .unwrap()
+            .villages
+            .iter()
+            .find(|village| village.id == ship.next_village)
+            .unwrap()
+            .name
+            .clone();
+        for touch in [false, true] {
+            session.airship_clock.time = 0.;
+            let docked = notice_text(&session, &world, 20., touch);
+            assert!(docked.contains(&destination), "{docked}");
+            assert!(docked.contains("departs"), "{docked}");
+            session.airship_clock.time = f64::from(ship.departure_in) + 1.;
+            let underway = notice_text(&session, &world, 20., touch);
+            assert!(underway.contains(&destination), "{underway}");
+            assert!(underway.contains("arrives"), "{underway}");
+            assert!(!underway.contains("block"), "{underway}");
+        }
+    }
+
+    #[test]
+    fn missing_target_warns_only_on_ground_edit_attempt_and_never_on_modal_close() {
+        use crate::network::Connection;
+        use bevy::gizmos::{AppGizmoBuilder, config::DefaultGizmoConfigGroup};
+        use rubblekin_core::{protocol::ClientMessage, world::Block};
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            time::Duration,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let client = std::thread::spawn(move || {
+            Connection::connect(&address, "Tester".into(), SessionMode::Player).unwrap()
+        });
+        let (socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut peer = BufReader::new(socket);
+        peer.read_line(&mut String::new()).unwrap();
+        serde_json::to_writer(
+            peer.get_mut(),
+            &crate::join::tests::welcome(SessionMode::Player),
+        )
+        .unwrap();
+        peer.get_mut().write_all(b"\n").unwrap();
+        let (connection, _) = client.join().unwrap();
+        let (world, mut session) = fixture(WorldGeneration::ValleyV1);
+        session.body.position = [0.25, 76., 0.25];
+        session.status.clear();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs(10));
+        let mut app = App::new();
+        app.insert_resource(world)
+            .insert_resource(session)
+            .insert_resource(connection)
+            .insert_resource(time)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::touch::TouchControls>()
+            .init_resource::<crate::pause::PauseMenu>()
+            .init_resource::<crate::world_map::WorldMap>()
+            .init_resource::<crate::admin_console::AdminConsole>()
+            .init_resource::<crate::airships::PilotConversation>()
+            .init_gizmo_group::<DefaultGizmoConfigGroup>()
+            .add_systems(Update, crate::edit_blocks);
+        app.world_mut().spawn((
+            crate::GameCamera,
+            Transform::from_xyz(0.25, 77.25, 0.25).looking_to(Vec3::NEG_Z, Vec3::Y),
+        ));
+        app.world_mut().run_schedule(Update);
+        assert!(app.world().resource::<Session>().status.is_empty());
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.world_mut().run_schedule(Update);
+        assert!(
+            app.world()
+                .resource::<Session>()
+                .status
+                .contains("Move closer")
+        );
+        assert_eq!(app.world().resource::<Session>().status_until, 13.);
+        assert_eq!(app.world().resource::<Session>().next_request, 1);
+        for modal in 0..5 {
+            *app.world_mut().resource_mut::<crate::pause::PauseMenu>() = default();
+            *app.world_mut().resource_mut::<crate::world_map::WorldMap>() = default();
+            *app.world_mut()
+                .resource_mut::<crate::admin_console::AdminConsole>() = default();
+            *app.world_mut()
+                .resource_mut::<crate::airships::PilotConversation>() = default();
+            {
+                let mut session = app.world_mut().resource_mut::<Session>();
+                session.status = "existing notice".into();
+                session.edit_clock = 0.;
+                session.ride = None;
+            }
+            match modal {
+                0 => {
+                    app.world_mut()
+                        .resource_mut::<crate::pause::PauseMenu>()
+                        .input_blocked = true
+                }
+                1 => {
+                    app.world_mut()
+                        .resource_mut::<crate::world_map::WorldMap>()
+                        .input_blocked = true
+                }
+                2 => {
+                    app.world_mut()
+                        .resource_mut::<crate::admin_console::AdminConsole>()
+                        .input_blocked = true
+                }
+                3 => {
+                    app.world_mut()
+                        .resource_mut::<crate::airships::PilotConversation>()
+                        .input_blocked = true
+                }
+                _ => {
+                    app.world_mut().resource_mut::<Session>().ride = Some(AirshipRide {
+                        ship_id: 1,
+                        seat: 0,
+                    })
+                }
+            }
+            app.world_mut().run_schedule(Update);
+            assert_eq!(
+                app.world().resource::<Session>().status,
+                "existing notice",
+                "modal {modal}"
+            );
+            assert_eq!(app.world().resource::<Session>().next_request, 1);
+        }
+        app.world_mut().resource_mut::<Session>().ride = None;
+        let block = BlockPos::new(0, 154, -8);
+        app.world_mut()
+            .resource_mut::<VoxelWorld>()
+            .0
+            .set_block(block, Block::Wood)
+            .unwrap();
+        app.world_mut().run_schedule(Update);
+        assert_eq!(app.world().resource::<Session>().next_request, 2);
+        let mut line = String::new();
+        peer.read_line(&mut line).unwrap();
+        assert!(
+            matches!(
+                serde_json::from_str::<ClientMessage>(&line).unwrap(),
+                ClientMessage::Edit { request_id: 1, .. }
+            ),
+            "{line}"
+        );
+        app.world_mut()
+            .resource_mut::<Connection>()
+            .send(ClientMessage::Ping);
+        line.clear();
+        peer.read_line(&mut line).unwrap();
+        assert!(
+            matches!(
+                serde_json::from_str::<ClientMessage>(&line).unwrap(),
+                ClientMessage::Ping
+            ),
+            "{line}"
+        );
     }
 }

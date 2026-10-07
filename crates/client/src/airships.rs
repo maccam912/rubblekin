@@ -608,9 +608,6 @@ pub(super) fn refresh(
             JustifyContent::Center
         };
     }
-    let ship = conversation
-        .ship_id
-        .and_then(|id| session.airships.ship(id, session.airship_clock.time));
     for (action, mut node) in &mut buttons {
         let show = match action {
             Action::NextPilot => talk_candidates(&session).len() > 1,
@@ -621,27 +618,7 @@ pub(super) fn refresh(
     for mut text in &mut texts.p0() {
         text.0.clone_from(&conversation.text);
     }
-    let schedule = if !conversation.answered {
-        "Asking the pilot…".into()
-    } else {
-        ship.as_ref().map_or_else(
-            || "The airship has moved on. Another service will arrive soon.".into(),
-            |ship| {
-                let destination = village_name(&world, ship.next_village);
-                if ship.docked_at.is_some() {
-                    format!(
-                        "Next stop: {destination} · departs in {:.0} seconds",
-                        ship.departure_in.ceil()
-                    )
-                } else {
-                    format!(
-                        "Next stop: {destination} · arrives in {:.0} seconds",
-                        ship.arrival_in.ceil()
-                    )
-                }
-            },
-        )
-    };
+    let schedule = pilot_schedule(&session, &world, &conversation);
     for mut text in &mut texts.p1() {
         text.0.clone_from(&schedule);
     }
@@ -656,6 +633,7 @@ pub(super) fn refresh(
         };
         node.max_width = if touch.enabled { percent(58) } else { px(620) };
         node.display = if hint.is_some()
+            && session.ride.is_none()
             && !open
             && !pause.open
             && !map_open
@@ -674,7 +652,50 @@ pub(super) fn refresh(
     }
 }
 
-fn travel_hint(session: &Session, world: &VoxelWorld, touch: bool) -> Option<String> {
+fn pilot_schedule(
+    session: &Session,
+    world: &VoxelWorld,
+    conversation: &PilotConversation,
+) -> String {
+    if !conversation.answered {
+        return "Asking the pilot…".into();
+    }
+    let Some(ship) = conversation
+        .ship_id
+        .and_then(|id| session.airships.ship(id, session.airship_clock.time))
+    else {
+        return "The airship is no longer available.".into();
+    };
+    let destination = village_name(world, ship.next_village);
+    let timetable = if let Some(docked) = ship.docked_at {
+        format!(
+            "At {} · next stop: {destination}\nDeparts in {:.0}s · arrives in about {:.0}s",
+            village_name(world, docked),
+            ship.departure_in.ceil(),
+            ship.arrival_in.ceil(),
+        )
+    } else {
+        format!(
+            "Next stop: {destination} · arrives in about {:.0}s",
+            ship.arrival_in.ceil(),
+        )
+    };
+    let guidance = if session.ride.is_some_and(|ride| ride.ship_id == ship.id) {
+        "You're aboard. Close this conversation to move around."
+    } else if ship.docked_at.is_some()
+        && Vec3::from_array(session.body.position).distance(Vec3::from_array(pilot_position(&ship)))
+            <= TALK_REACH
+    {
+        "Close this conversation to walk or jump aboard."
+    } else if ship.docked_at.is_some() {
+        "Board from the landing while the ship is docked."
+    } else {
+        "This airship is underway."
+    };
+    format!("{timetable}\n{guidance}")
+}
+
+pub(crate) fn travel_hint(session: &Session, world: &VoxelWorld, touch: bool) -> Option<String> {
     if session.observer.is_some() {
         return None;
     }
@@ -778,7 +799,13 @@ pub(crate) fn camera_position(ship: &AirshipSnapshot, eye: Vec3, desired: Vec3) 
     );
     let balloon = crate::airship_mesh::camera_boxes()
         .iter()
-        .filter_map(|(min, max)| segment_box(origin, offset, *min, *max))
+        // A point ray can skim a stepped side while most of the screen sees
+        // only envelope. Pull inward before the camera reaches that surface,
+        // leaving room for its view without altering the visible ship.
+        .filter_map(|(min, max)| {
+            let clearance = Vec3::splat(1.0);
+            segment_box(origin, offset, *min - clearance, *max + clearance)
+        })
         .min_by(f32::total_cmp);
     let hit = deck.into_iter().chain(balloon).min_by(f32::total_cmp);
     hit.map_or(desired, |t| {
@@ -1017,6 +1044,104 @@ mod tests {
     }
 
     #[test]
+    fn open_pilot_dialogue_refreshes_times_and_boarding_guidance_through_departure() {
+        let (world, mut session) = fixture();
+        let ship = session
+            .airships
+            .ships(0.0)
+            .into_iter()
+            .find(|ship| ship.docked_at.is_some() && ship.departure_in > 13.0)
+            .unwrap();
+        session.body.position = pilot_position(&ship);
+        let departure = f64::from(ship.departure_in);
+        let arrival = f64::from(ship.arrival_in);
+        let mut conversation = PilotConversation {
+            ship_id: Some(ship.id),
+            ..default()
+        };
+        let introduction = "I sail between these villages. Enjoy the view!";
+        conversation.reply(ship.id, introduction.into());
+        let mut app = App::new();
+        app.insert_resource(world)
+            .insert_resource(session)
+            .insert_resource(conversation)
+            .init_resource::<PauseMenu>()
+            .init_resource::<TouchControls>()
+            .add_systems(Update, refresh);
+        let dialog = app.world_mut().spawn((DialogText, Text::new(""))).id();
+        let schedule = app.world_mut().spawn((ScheduleText, Text::new(""))).id();
+        let root = app.world_mut().spawn((DialogRoot, Node::default())).id();
+        for (time, seconds) in [(departure - 13.0, 13), (departure - 9.0, 9)] {
+            app.world_mut().resource_mut::<Session>().airship_clock.time = time;
+            app.update();
+            let text = &app.world().get::<Text>(schedule).unwrap().0;
+            assert!(text.contains(&format!("Departs in {seconds}s")), "{text}");
+            assert!(text.contains("arrives in about"));
+            assert!(text.contains("walk or jump aboard"));
+            assert_eq!(app.world().get::<Text>(dialog).unwrap().0, introduction);
+        }
+        app.world_mut().resource_mut::<Session>().airship_clock.time = departure + 0.25;
+        app.update();
+        let text = &app.world().get::<Text>(schedule).unwrap().0;
+        assert!(text.contains("arrives in about"));
+        assert!(text.contains("underway"));
+        assert!(!text.contains("Departs"), "{text}");
+        assert!(!text.contains("aboard"));
+        assert_eq!(app.world().get::<Text>(dialog).unwrap().0, introduction);
+
+        // An open conversation also survives arrival and the return timetable.
+        app.world_mut().resource_mut::<Session>().airship_clock.time = arrival + 0.25;
+        app.update();
+        let world = app.world().resource::<VoxelWorld>();
+        let text = &app.world().get::<Text>(schedule).unwrap().0;
+        assert!(text.contains(&format!(
+            "At {} · next stop: {}",
+            village_name(world, ship.next_village),
+            village_name(world, ship.from_village),
+        )));
+        assert!(!text.contains("walk or jump aboard"));
+
+        app.world_mut().resource_mut::<PilotConversation>().close();
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(root).unwrap().display,
+            Display::None
+        );
+        assert!(app.world().resource::<PilotConversation>().just_closed);
+    }
+
+    #[test]
+    fn pilot_timetable_recognizes_passengers_during_stops_and_flight() {
+        let (world, mut session) = fixture();
+        let ship = session
+            .airships
+            .ships(0.0)
+            .into_iter()
+            .find(|ship| ship.docked_at.is_some())
+            .unwrap();
+        session.ride = Some(AirshipRide {
+            ship_id: ship.id,
+            seat: 5,
+        });
+        let mut conversation = PilotConversation {
+            ship_id: Some(ship.id),
+            ..default()
+        };
+        assert_eq!(
+            pilot_schedule(&session, &world, &conversation),
+            "Asking the pilot…"
+        );
+        conversation.reply(ship.id, "Enjoy the view!".into());
+        for time in [0.0, f64::from(ship.departure_in) + 1.0] {
+            session.airship_clock.time = time;
+            let schedule = pilot_schedule(&session, &world, &conversation);
+            assert!(schedule.contains("You're aboard"));
+            assert!(schedule.contains("Close this conversation to move around"));
+            assert!(!schedule.contains("jump aboard"));
+        }
+    }
+
+    #[test]
     fn passenger_animation_tracks_deck_walks_instead_of_ship_carry_or_jumps() {
         let mut motion = crate::DeckMotion::default();
         let ride = AirshipRide {
@@ -1054,6 +1179,90 @@ mod tests {
             );
             let unobstructed = origin + rotate * Vec3::new(0.8, 2.0, 6.5);
             assert!(camera_position(&ship, eye, unobstructed).distance(unobstructed) < 0.0001);
+        }
+    }
+
+    fn orbit_view(eye: Vec3, yaw: f32, pitch: f32, distance: f32) -> Transform {
+        let forward = Vec3::new(
+            yaw.sin() * pitch.cos(),
+            -pitch.sin(),
+            -yaw.cos() * pitch.cos(),
+        );
+        let right = Vec3::new(yaw.cos(), 0.0, yaw.sin());
+        Transform::from_translation(eye + right * 0.8 - forward * distance)
+            .looking_to(forward, Vec3::Y)
+    }
+
+    fn envelope_screen_coverage(view: &Transform) -> f32 {
+        let mut blocked = 0;
+        let mut samples = 0;
+        // Sample the actual 60-degree camera frustum at the recording's 16:10
+        // aspect. Ray occupancy measures framing, not just camera-point safety.
+        let tangent = 30_f32.to_radians().tan();
+        for row in 0..7 {
+            for column in 0..11 {
+                let x = (column as f32 / 10.0 * 1.8 - 0.9) * tangent * 1.6;
+                let y = (row as f32 / 6.0 * 1.8 - 0.9) * tangent;
+                let ray = view.rotation * Vec3::new(x, y, -1.0).normalize() * 40.0;
+                blocked += usize::from(
+                    crate::airship_mesh::camera_boxes()
+                        .iter()
+                        .any(|(min, max)| segment_box(view.translation, ray, *min, *max).is_some()),
+                );
+                samples += 1;
+            }
+        }
+        blocked as f32 / samples as f32
+    }
+
+    #[test]
+    fn camera_clearance_prevents_the_envelope_from_filling_a_clear_center_ray() {
+        let (_, session) = fixture();
+        let mut ship = session.airships.ships(0.0)[0].clone();
+        ship.position = [0.0; 3];
+        ship.yaw = 0.0;
+        let eye = Vec3::new(-3.0, rubblekin_core::physics::EYE_HEIGHT, 0.0);
+        let mut view = orbit_view(eye, 15_f32.to_radians(), 1.0, 6.5);
+        // The old point ray misses every box, despite a nearly full-screen wall.
+        assert!(
+            crate::airship_mesh::camera_boxes()
+                .iter()
+                .all(|(min, max)| {
+                    segment_box(eye, view.translation - eye, *min, *max).is_none()
+                })
+        );
+        assert!(envelope_screen_coverage(&view) > 0.7);
+        view.translation = camera_position(&ship, eye, view.translation);
+        assert!(envelope_screen_coverage(&view) < 0.25);
+    }
+
+    #[test]
+    fn ordinary_deck_orbits_and_zoom_keep_the_envelope_out_of_most_of_the_view() {
+        let (_, session) = fixture();
+        let mut ship = session.airships.ships(0.0)[0].clone();
+        ship.position = [0.0; 3];
+        ship.yaw = 0.0;
+        for (x, z) in [
+            (0.0, 0.0),
+            (3.0, 0.0),
+            (-3.0, 0.0),
+            (0.0, 7.0),
+            (3.0, 7.0),
+            (-3.0, -7.0),
+        ] {
+            let eye = Vec3::new(x, rubblekin_core::physics::EYE_HEIGHT, z);
+            for yaw in (0..360).step_by(15) {
+                for pitch in [0.12, 0.3, 0.5, 0.7, 1.0] {
+                    for distance in [1.0, 3.0, 6.5, 9.0] {
+                        let mut view = orbit_view(eye, (yaw as f32).to_radians(), pitch, distance);
+                        view.translation = camera_position(&ship, eye, view.translation);
+                        assert!(
+                            envelope_screen_coverage(&view) < 0.25,
+                            "envelope obscured deck ({x}, {z}), yaw {yaw}, pitch {pitch}, distance {distance}"
+                        );
+                    }
+                }
+            }
         }
     }
 

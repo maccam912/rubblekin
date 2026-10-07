@@ -8,7 +8,6 @@ use bevy::{
     prelude::*,
     window::{PrimaryWindow, WindowFocused},
 };
-use rubblekin_core::world::CELL_SIZE;
 
 use crate::{
     GameEntity, Session,
@@ -30,6 +29,7 @@ pub struct PauseMenu {
     pub just_closed: bool,
     focused: Option<Action>,
     scroll_finger: Option<(u64, Vec2)>,
+    distance_drag: Option<DistanceDrag>,
 }
 
 #[derive(Component)]
@@ -52,6 +52,80 @@ pub(super) struct TreeText;
 pub(super) struct QualityNote;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Distance {
+    Near,
+    Trees,
+    Shadows,
+}
+
+#[derive(Component)]
+pub(super) struct DistanceFill(Distance);
+
+#[derive(Clone, Copy)]
+struct DistanceDrag {
+    distance: Distance,
+    finger: Option<u64>,
+    fraction: f32,
+}
+
+impl Distance {
+    fn bounds(self) -> (f32, f32) {
+        match self {
+            Self::Near => (MIN_NEAR_DISTANCE, MAX_NEAR_DISTANCE),
+            Self::Trees => (MIN_TREE_DISTANCE, MAX_TREE_DISTANCE),
+            Self::Shadows => (MIN_SHADOW_DISTANCE, MAX_SHADOW_DISTANCE),
+        }
+    }
+
+    fn value(self, graphics: &GraphicsSettings) -> f32 {
+        match self {
+            Self::Near => graphics.near_distance,
+            Self::Trees => graphics.tree_distance,
+            Self::Shadows => graphics.shadow_distance,
+        }
+    }
+
+    fn enabled(self, graphics: &GraphicsSettings) -> bool {
+        self != Self::Shadows || graphics.quality.shadows()
+    }
+
+    fn set_fraction(self, fraction: f32, graphics: &mut GraphicsSettings) {
+        if !fraction.is_finite() || !self.enabled(graphics) {
+            return;
+        }
+        let value = self.value_at_fraction(fraction);
+        match self {
+            Self::Near => graphics.adjust_near_distance(value - graphics.near_distance),
+            Self::Trees => graphics.adjust_tree_distance(value.round() - graphics.tree_distance),
+            Self::Shadows => {
+                graphics.adjust_shadow_distance(value.round() - graphics.shadow_distance)
+            }
+        }
+    }
+
+    fn value_at_fraction(self, fraction: f32) -> f32 {
+        let (min, max) = self.bounds();
+        let value = min + fraction.clamp(0., 1.) * (max - min);
+        let step = if self == Self::Near {
+            DISTANCE_STEP
+        } else {
+            1.
+        };
+        ((value / step).round() * step).clamp(min, max)
+    }
+
+    fn displayed_value(self, pause: &PauseMenu, graphics: &GraphicsSettings) -> f32 {
+        pause
+            .distance_drag
+            .filter(|drag| drag.distance == self)
+            .map_or_else(
+                || self.value(graphics),
+                |drag| self.value_at_fraction(drag.fraction),
+            )
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     Resume,
     Map,
@@ -62,6 +136,7 @@ pub(super) enum Action {
     TreeMore,
     ShadowLess,
     ShadowMore,
+    ResetDistances,
     Inspect,
     Controls,
     ReturnSpawn,
@@ -178,26 +253,30 @@ pub fn setup(
                             }
                         });
                         graphics.spawn((QualityNote, CompactNote, label("", &font, 14.)));
-                        for (title, less, more) in [
-                            ("NEAR DETAIL DISTANCE", Action::NearLess, Action::NearMore),
-                            ("MEDIUM TREE DISTANCE", Action::TreeLess, Action::TreeMore),
-                            ("SHADOW DISTANCE", Action::ShadowLess, Action::ShadowMore),
+                        for (title, distance, less, more) in [
+                            ("NEAR DETAIL DISTANCE", Distance::Near, Action::NearLess, Action::NearMore),
+                            ("MEDIUM TREE DISTANCE", Distance::Trees, Action::TreeLess, Action::TreeMore),
+                            ("SHADOW DISTANCE", Distance::Shadows, Action::ShadowLess, Action::ShadowMore),
                         ] {
                             graphics.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() },)).with_children(|setting| {
                                 setting.spawn((Text::new(title), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
                                 setting.spawn((Node { align_items: AlignItems::Center, column_gap: px(8), ..default() },)).with_children(|row| {
                                     row.spawn(button(less, px(48))).with_child(label("−", &font, 23.));
-                                    let value = row.spawn((label("", &font, if less == Action::TreeLess { 18. } else { 20. }), Node { flex_grow: 1., ..default() })).id();
+                                    let value = row.spawn((label("", &font, 20.), Node { min_width: px(76), ..default() })).id();
                                     match less {
                                         Action::NearLess => { row.commands().entity(value).insert(NearText); }
                                         Action::TreeLess => { row.commands().entity(value).insert(TreeText); }
                                         _ => { row.commands().entity(value).insert(ShadowText); }
                                     }
+                                    row.spawn((distance, Node { height: px(44), flex_grow: 1., min_width: px(40), align_items: AlignItems::Center, ..default() })).with_children(|track| {
+                                        track.spawn((Node { width: percent(100), height: px(8), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(Color::srgb(0.16, 0.27, 0.25)))).with_child((DistanceFill(distance), Node { width: percent(0), height: percent(100), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(accent())));
+                                    });
                                     row.spawn(button(more, px(48))).with_child(label("+", &font, 23.));
                                 });
                             });
                         }
-                        graphics.spawn((CompactNote, Text::new("Longer distances cost more memory and drawing work.\nPresets reset shadows; distant land stays visible."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+                        graphics.spawn(button(Action::ResetDistances, percent(100))).with_child(label("Reset distances", &font, 16.));
+                        graphics.spawn((CompactNote, Text::new("Drag a bar to adjust; − / + for step changes.\nLonger distances use more memory and drawing work.\nReset uses 48 m detail, 128 m trees and this preset's shadows."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
                     });
                     content.spawn((PauseActions, Node { width: px(220), flex_shrink: 0., flex_direction: FlexDirection::Column, row_gap: px(8), ..default() },)).with_children(|actions| {
                         actions.spawn(button(Action::Resume, percent(100))).with_child(label("Resume", &font, 18.));
@@ -252,6 +331,7 @@ fn activate(
         Action::TreeMore => graphics.adjust_tree_distance(TREE_DISTANCE_STEP),
         Action::ShadowLess => graphics.adjust_shadow_distance(-DISTANCE_STEP),
         Action::ShadowMore => graphics.adjust_shadow_distance(DISTANCE_STEP),
+        Action::ResetDistances => graphics.reset_distances(),
         _ => {
             pause.open = false;
             pause.just_closed = true;
@@ -284,8 +364,11 @@ pub fn read(
         Option<Res<crate::admin_console::AdminConsole>>,
         Option<ResMut<crate::world_map::WorldMap>>,
     ),
-    keys: Res<ButtonInput<KeyCode>>,
-    wheel: Res<AccumulatedMouseScroll>,
+    input: (
+        Res<ButtonInput<KeyCode>>,
+        Res<ButtonInput<MouseButton>>,
+        Res<AccumulatedMouseScroll>,
+    ),
     mut native: MessageReader<MenuKey>,
     mut fingers: MessageReader<TouchInput>,
     mut focus_events: MessageReader<WindowFocused>,
@@ -298,11 +381,20 @@ pub fn read(
         &Node,
         Option<&InheritedVisibility>,
     )>,
+    distances: Query<(
+        Entity,
+        &Distance,
+        &ComputedNode,
+        &UiGlobalTransform,
+        &Node,
+        Option<&InheritedVisibility>,
+    )>,
     windows: Query<&Window, With<PrimaryWindow>>,
     clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
     parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
 ) {
+    let (keys, mouse, wheel) = input;
     let (conversation, console, mut map) = modals;
     pause.just_closed = false;
     let back = native
@@ -324,6 +416,7 @@ pub fn read(
     {
         pause.input_blocked = false;
         pause.scroll_finger = None;
+        pause.distance_drag = None;
         touch.reset();
         fingers.clear();
         return;
@@ -331,6 +424,7 @@ pub fn read(
     if lost_focus || touch.suspended || !windows.iter().any(|window| window.focused) {
         pause.input_blocked = true;
         pause.scroll_finger = None;
+        pause.distance_drag = None;
         touch.menu_open = pause.open;
         fingers.clear();
         return;
@@ -350,6 +444,7 @@ pub fn read(
     if was_open != pause.open {
         pause.focused = Some(Action::Resume);
         pause.scroll_finger = None;
+        pause.distance_drag = None;
         touch.reset();
     }
     if !pause.open || !was_open {
@@ -359,14 +454,49 @@ pub fn read(
     }
     let mut chosen = None;
     let mut scroll_delta = -wheel.delta.y * 28.;
+    let distance_at = |point: Vec2| {
+        distances
+            .iter()
+            .find(
+                |(entity, distance, computed, transform, node, visibility)| {
+                    distance.enabled(&graphics)
+                        && node.display != Display::None
+                        && visibility.is_none_or(|visible| visible.get())
+                        && computed.contains_point(**transform, point)
+                        && bevy::ui::clip_check_recursive(point, *entity, &clipping, &parents)
+                },
+            )
+            .map(|(_, distance, computed, transform, _, _)| {
+                (*distance, track_fraction(point, computed, transform))
+            })
+    };
+    let drag_fraction = |distance: Distance, point: Vec2| {
+        distances
+            .iter()
+            .find(|(_, candidate, _, _, _, _)| **candidate == distance)
+            .map(|(_, _, computed, transform, _, _)| track_fraction(point, computed, transform))
+    };
+    let mut finished_drag = None;
     for finger in fingers.read() {
         let Ok(window) = windows.get(finger.window) else {
             continue;
         };
         match finger.phase {
             TouchPhase::Started => {
+                // One contact owns a drag until it ends. A second finger
+                // must not replace its preview, scroll or activate a button.
+                if pause.distance_drag.is_some() {
+                    continue;
+                }
                 let point = finger.position * window.scale_factor();
-                if let Some((_, action, _, _, _, _)) =
+                if let Some((distance, fraction)) = distance_at(point) {
+                    pause.distance_drag = Some(DistanceDrag {
+                        distance,
+                        finger: Some(finger.id),
+                        fraction,
+                    });
+                    pause.scroll_finger = None;
+                } else if let Some((_, action, _, _, _, _)) =
                     targets
                         .iter()
                         .find(|(entity, _, computed, transform, node, visibility)| {
@@ -385,6 +515,13 @@ pub fn read(
                 }
             }
             TouchPhase::Moved => {
+                if let Some(drag) = pause.distance_drag.as_mut()
+                    && drag.finger == Some(finger.id)
+                    && let Some(fraction) =
+                        drag_fraction(drag.distance, finger.position * window.scale_factor())
+                {
+                    drag.fraction = fraction;
+                }
                 if let Some((id, previous)) = pause.scroll_finger
                     && id == finger.id
                 {
@@ -393,11 +530,56 @@ pub fn read(
                 }
             }
             TouchPhase::Ended | TouchPhase::Canceled => {
+                if pause
+                    .distance_drag
+                    .is_some_and(|drag| drag.finger == Some(finger.id))
+                {
+                    let mut drag = pause.distance_drag.take().unwrap();
+                    if finger.phase == TouchPhase::Ended {
+                        if let Some(fraction) =
+                            drag_fraction(drag.distance, finger.position * window.scale_factor())
+                        {
+                            drag.fraction = fraction;
+                        }
+                        finished_drag = Some(drag);
+                    }
+                }
                 if pause.scroll_finger.is_some_and(|(id, _)| id == finger.id) {
                     pause.scroll_finger = None;
                 }
             }
         }
+    }
+    if !cfg!(target_os = "android") {
+        let cursor = windows
+            .single()
+            .ok()
+            .and_then(|window| window.physical_cursor_position());
+        if mouse.just_pressed(MouseButton::Left)
+            && pause.distance_drag.is_none()
+            && let Some((distance, fraction)) = cursor.and_then(distance_at)
+        {
+            pause.distance_drag = Some(DistanceDrag {
+                distance,
+                finger: None,
+                fraction,
+            });
+        }
+        if let Some(drag) = pause.distance_drag.as_mut()
+            && drag.finger.is_none()
+        {
+            if let Some(fraction) = cursor.and_then(|point| drag_fraction(drag.distance, point)) {
+                drag.fraction = fraction;
+            }
+            if !mouse.pressed(MouseButton::Left) {
+                finished_drag = pause.distance_drag.take();
+            }
+        }
+    }
+    // Preview while dragging; apply once on release so a slider does not queue
+    // a landscape rebuild and synchronous preferences save on every frame.
+    if let Some(drag) = finished_drag {
+        drag.distance.set_fraction(drag.fraction, &mut graphics);
     }
     if !cfg!(target_os = "android") && chosen.is_none() {
         chosen = actions
@@ -421,6 +603,7 @@ pub fn read(
             Action::TreeMore,
             Action::ShadowLess,
             Action::ShadowMore,
+            Action::ResetDistances,
             Action::Inspect,
             Action::Controls,
             Action::ReturnSpawn,
@@ -459,6 +642,7 @@ pub fn read(
         scroll.0.y = (scroll.0.y + scroll_delta).clamp(0., max.max(0.));
     }
     if let Some(action) = chosen {
+        pause.distance_drag = None;
         activate(
             action,
             &mut pause,
@@ -470,7 +654,12 @@ pub fn read(
     touch.menu_open = pause.open;
 }
 
-#[allow(clippy::type_complexity)]
+fn track_fraction(point: Vec2, computed: &ComputedNode, transform: &UiGlobalTransform) -> f32 {
+    let local = transform.affine().inverse().transform_point2(point);
+    (local.x / computed.size.x.max(1.) + 0.5).clamp(0., 1.)
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn refresh(
     pause: Res<PauseMenu>,
     graphics: Res<GraphicsSettings>,
@@ -484,7 +673,7 @@ pub fn refresh(
             Option<&PausePanel>,
             Option<&CompactNote>,
         ),
-        Without<PauseRoot>,
+        (Without<PauseRoot>, Without<DistanceFill>),
     >,
     mut texts: Query<(
         &mut Text,
@@ -499,6 +688,10 @@ pub fn refresh(
         &mut BackgroundColor,
         &mut BorderColor,
     )>,
+    mut fills: Query<
+        (&DistanceFill, &mut Node, &mut BackgroundColor),
+        (Without<Action>, Without<PauseRoot>),
+    >,
 ) {
     let wide = window.width() >= 620.;
     let compact = window.height() < 500.;
@@ -541,20 +734,22 @@ pub fn refresh(
     }
     for (mut text, near, shadow, tree, note) in &mut texts {
         if near.is_some() {
-            text.0 = format!("{:.0} m", graphics.near_distance);
+            text.0 = format!("{:.0} m", Distance::Near.displayed_value(&pause, &graphics));
         }
         if shadow.is_some() {
             text.0 = if graphics.quality.shadows() {
-                format!("{:.0} m", graphics.shadow_distance)
+                format!(
+                    "{:.0} m",
+                    Distance::Shadows.displayed_value(&pause, &graphics)
+                )
             } else {
                 "Off in Low".into()
             };
         }
         if tree.is_some() {
             text.0 = format!(
-                "{:.0} blocks ({:.0} m)",
-                graphics.tree_distance / CELL_SIZE,
-                graphics.tree_distance
+                "{:.0} m",
+                Distance::Trees.displayed_value(&pause, &graphics)
             );
         }
         if note.is_some() {
@@ -565,6 +760,18 @@ pub fn refresh(
             }
             .into();
         }
+    }
+    for (DistanceFill(distance), mut node, mut background) in &mut fills {
+        let (min, max) = distance.bounds();
+        node.width = percent(
+            100. * ((distance.displayed_value(&pause, &graphics) - min) / (max - min))
+                .clamp(0., 1.),
+        );
+        background.0 = if distance.enabled(&graphics) {
+            accent()
+        } else {
+            Color::srgb(0.24, 0.30, 0.27)
+        };
     }
     for (action, interaction, mut background, mut border) in &mut buttons {
         let selected = matches!(action, Action::Quality(quality) if *quality == graphics.quality);
@@ -589,7 +796,7 @@ pub fn refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rubblekin_core::protocol::SessionMode;
+    use rubblekin_core::{protocol::SessionMode, world::CELL_SIZE};
 
     fn menu_app() -> (App, Entity) {
         let (_, session) = crate::join::session_from_welcome(
@@ -610,6 +817,7 @@ mod tests {
                 ..default()
             })
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<AccumulatedMouseScroll>()
             .add_message::<MenuKey>()
             .add_message::<TouchInput>()
@@ -755,23 +963,178 @@ mod tests {
     }
 
     #[test]
-    fn tree_distance_label_shows_blocks_and_meters_through_the_cap() {
+    fn tree_distance_label_uses_meters_through_the_cap() {
         let (mut app, _) = menu_app();
         app.add_systems(Update, refresh);
         let value = app.world_mut().spawn((Text::new(""), TreeText)).id();
         app.update();
-        assert_eq!(
-            app.world().get::<Text>(value).unwrap().0,
-            "256 blocks (128 m)"
-        );
+        assert_eq!(app.world().get::<Text>(value).unwrap().0, "128 m");
         app.world_mut()
             .resource_mut::<GraphicsSettings>()
             .adjust_tree_distance(10000.0);
         app.update();
+        assert_eq!(app.world().get::<Text>(value).unwrap().0, "2500 m");
+    }
+
+    fn distance_target(app: &mut App, distance: Distance) {
+        app.world_mut().spawn((
+            distance,
+            Node::default(),
+            InheritedVisibility::VISIBLE,
+            ComputedNode {
+                size: Vec2::new(200., 44.),
+                ..default()
+            },
+            UiGlobalTransform::from_xy(200., 100.),
+        ));
+    }
+
+    fn drag_touch(app: &mut App, window: Entity, phase: TouchPhase, x: f32) {
+        app.world_mut().write_message(TouchInput {
+            id: 19,
+            phase,
+            position: Vec2::new(x, 100.),
+            window,
+            force: None,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn touch_distance_drag_previews_then_applies_once_even_outside_the_bar() {
+        let (mut app, window) = menu_app();
+        distance_target(&mut app, Distance::Near);
+        drag_touch(&mut app, window, TouchPhase::Started, 200.);
         assert_eq!(
-            app.world().get::<Text>(value).unwrap().0,
-            "5000 blocks (2500 m)"
+            app.world().resource::<GraphicsSettings>().near_distance,
+            48.
         );
+        assert_eq!(
+            Distance::Near.displayed_value(
+                app.world().resource::<PauseMenu>(),
+                app.world().resource::<GraphicsSettings>()
+            ),
+            512.
+        );
+        drag_touch(&mut app, window, TouchPhase::Moved, 450.);
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().near_distance,
+            48.
+        );
+        drag_touch(&mut app, window, TouchPhase::Ended, 450.);
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().near_distance,
+            MAX_NEAR_DISTANCE
+        );
+        let pause = app.world().resource::<PauseMenu>();
+        assert!(pause.open && pause.input_blocked && pause.distance_drag.is_none());
+    }
+
+    #[test]
+    fn canceled_touch_or_focus_loss_discards_unapplied_distance() {
+        for lost_focus in [false, true] {
+            let (mut app, window) = menu_app();
+            distance_target(&mut app, Distance::Trees);
+            drag_touch(&mut app, window, TouchPhase::Started, 290.);
+            if lost_focus {
+                app.world_mut().write_message(WindowFocused {
+                    window,
+                    focused: false,
+                });
+                app.update();
+            } else {
+                drag_touch(&mut app, window, TouchPhase::Canceled, 290.);
+            }
+            assert!(app.world().resource::<PauseMenu>().distance_drag.is_none());
+            assert_eq!(
+                app.world().resource::<GraphicsSettings>().tree_distance,
+                MIN_TREE_DISTANCE
+            );
+        }
+    }
+
+    #[test]
+    fn a_second_finger_cannot_steal_a_slider_or_trigger_another_action() {
+        let (mut app, window) = menu_app();
+        distance_target(&mut app, Distance::Near);
+        distance_target(&mut app, Distance::Trees);
+        target(&mut app, Action::Resume);
+        drag_touch(&mut app, window, TouchPhase::Started, 250.);
+        let drag = app.world().resource::<PauseMenu>().distance_drag.unwrap();
+        for x in [200., 100.] {
+            for phase in [TouchPhase::Started, TouchPhase::Ended] {
+                app.world_mut().write_message(TouchInput {
+                    id: 20,
+                    phase,
+                    position: Vec2::new(x, 100.),
+                    window,
+                    force: None,
+                });
+            }
+            app.update();
+            let pause = app.world().resource::<PauseMenu>();
+            assert!(pause.open);
+            assert_eq!(pause.distance_drag.unwrap().finger, Some(19));
+            assert_eq!(pause.distance_drag.unwrap().distance, drag.distance);
+            assert!(pause.scroll_finger.is_none());
+        }
+        drag_touch(&mut app, window, TouchPhase::Ended, 300.);
+        let graphics = app.world().resource::<GraphicsSettings>();
+        assert_eq!(drag.distance.value(graphics), drag.distance.bounds().1);
+    }
+
+    #[test]
+    fn mouse_distance_drag_releases_at_the_last_value_and_low_disables_shadows() {
+        let (mut app, window) = menu_app();
+        distance_target(&mut app, Distance::Trees);
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(bevy::math::DVec2::new(200., 100.)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().tree_distance,
+            MIN_TREE_DISTANCE
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        assert_eq!(
+            app.world().resource::<GraphicsSettings>().tree_distance,
+            1314.
+        );
+        let mut graphics = app.world_mut().resource_mut::<GraphicsSettings>();
+        graphics.set_quality(GraphicsQuality::Low);
+        let before = graphics.shadow_distance;
+        Distance::Shadows.set_fraction(1., &mut graphics);
+        assert_eq!(graphics.shadow_distance, before);
+    }
+
+    #[test]
+    fn resetting_distances_keeps_quality_and_the_menu_open() {
+        let (mut app, window) = menu_app();
+        target(&mut app, Action::ResetDistances);
+        {
+            let mut graphics = app.world_mut().resource_mut::<GraphicsSettings>();
+            graphics.set_quality(GraphicsQuality::High);
+            graphics.near_distance = MAX_NEAR_DISTANCE;
+            graphics.tree_distance = MAX_TREE_DISTANCE;
+            graphics.shadow_distance = MAX_SHADOW_DISTANCE;
+        }
+        tap(&mut app, window);
+        let graphics = app.world().resource::<GraphicsSettings>();
+        assert_eq!(graphics.quality, GraphicsQuality::High);
+        assert_eq!(graphics.near_distance, 48.);
+        assert_eq!(graphics.tree_distance, 128.);
+        assert_eq!(
+            graphics.shadow_distance,
+            GraphicsSettings::new(GraphicsQuality::High).shadow_distance
+        );
+        assert!(app.world().resource::<PauseMenu>().open);
     }
 
     #[test]
