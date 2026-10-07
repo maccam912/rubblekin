@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, Write},
+    io::{self, BufReader, BufWriter, Write},
     path::Path,
 };
 
@@ -170,8 +170,7 @@ impl Simulation {
                 world_time: self.world_time,
                 villages: Some(self.villages.clone()),
             };
-            serde_json::to_writer(&mut file, &save).map_err(io::Error::other)?;
-            file.write_all(b"\n")?;
+            write_save(&mut file, &save)?;
             file.sync_all()?;
             fs::rename(&temporary, path)?;
             #[cfg(unix)]
@@ -183,6 +182,15 @@ impl Simulation {
         }
         result
     }
+}
+
+fn write_save(file: &mut impl Write, save: &Save) -> io::Result<()> {
+    // Serde writes individual JSON tokens. Buffer those small writes, then
+    // propagate the final flush failure before syncing or replacing the save.
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer(&mut writer, save).map_err(io::Error::other)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -217,6 +225,37 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.0);
         }
+    }
+
+    #[test]
+    fn buffered_save_reports_failure_when_the_final_bytes_cannot_be_written() {
+        struct FullDisk;
+        impl Write for FullDisk {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::StorageFull, "Disk is full"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let world = World::new(42);
+        let save = Save {
+            version: SAVE_VERSION,
+            seed: world.seed,
+            generation: Some(world.generation()),
+            edits: Vec::new(),
+            npc: Forager::new(&world),
+            world_time: 0.0,
+            villages: Some(VillageLife::default()),
+        };
+        // This entire save fits in the buffer. Serialization succeeds before
+        // the explicit final flush tries to write it; dropping BufWriter alone
+        // would silently discard this error and falsely report a saved world.
+        assert!(
+            serde_json::to_vec(&save).unwrap().len() + 1 < BufWriter::new(io::sink()).capacity()
+        );
+        let error = write_save(&mut FullDisk, &save).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::StorageFull);
     }
 
     #[test]

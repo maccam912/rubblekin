@@ -1054,6 +1054,47 @@ fn accepted_edits_npc_override_and_world_time_survive_a_restart() {
 }
 
 #[test]
+fn failed_durable_edit_never_reaches_the_player_or_observer() {
+    let save = TestSave::new();
+    let config = save.config(true);
+    let server = spawn(config.clone()).unwrap();
+    let (mut player, _) = Client::connect(server.addr, "Builder");
+    let (mut observer, _) = Client::connect_mode(server.addr, "Camera", SessionMode::Observer);
+    let original = fs::read(&config.save_path).unwrap();
+    // Block the temporary save file without touching the last committed world.
+    let temporary = save
+        .0
+        .join(format!(".world.json.{}.tmp", std::process::id()));
+    fs::create_dir(&temporary).unwrap();
+    player.send(ClientMessage::Edit {
+        request_id: 51,
+        position: nearby_air(),
+        block: Block::Brick,
+    });
+    for client in [&mut player, &mut observer] {
+        loop {
+            let mut line = String::new();
+            match client.reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => assert!(!matches!(
+                    serde_json::from_str::<ServerMessage>(&line).unwrap(),
+                    ServerMessage::BlockChanged { request_id: 51, .. }
+                )),
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
+                Err(error) => panic!("Expected failed-save disconnect, got {error}"),
+            }
+        }
+    }
+    assert!(server.stop().is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), original);
+    fs::remove_dir(temporary).unwrap();
+    let restarted = spawn(config).unwrap();
+    let (_, welcome) = Client::connect(restarted.addr, "Returning builder");
+    assert!(matches!(welcome, ServerMessage::Welcome { edits, .. } if edits.is_empty()));
+    restarted.stop().unwrap();
+}
+
+#[test]
 fn world_and_forager_advance_with_no_clients_and_admin_is_disabled_by_default() {
     let save = TestSave::new();
     let server = spawn(save.config(false)).unwrap();
