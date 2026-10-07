@@ -83,6 +83,14 @@ impl GraphicsSettings {
         self.shadow_distance = self.quality.default_shadow_distance();
     }
 
+    /// Recovery option available before loading a world or its rendering resources.
+    pub fn reset_to_minimum(&mut self) {
+        self.quality = GraphicsQuality::Low;
+        self.near_distance = MIN_NEAR_DISTANCE;
+        self.tree_distance = MIN_TREE_DISTANCE;
+        self.shadow_distance = MIN_SHADOW_DISTANCE;
+    }
+
     pub fn adjust_near_distance(&mut self, delta: f32) {
         if delta.is_finite() {
             self.near_distance = (((self.near_distance + delta) / DISTANCE_STEP).round()
@@ -263,6 +271,26 @@ mod tests {
             assert_eq!(restored.last_saved, restored.values());
             assert!(!path.with_extension("json.tmp").exists());
         }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn minimum_reset_replaces_expensive_saved_settings_and_survives_restart() {
+        let path = preference_path();
+        let mut settings = GraphicsSettings::new(GraphicsQuality::High);
+        settings.near_distance = MAX_NEAR_DISTANCE;
+        settings.tree_distance = MAX_TREE_DISTANCE;
+        settings.shadow_distance = MAX_SHADOW_DISTANCE;
+        settings.save_to(&path).unwrap();
+        let mut settings = GraphicsSettings::load_from(&path).unwrap();
+        settings.reset_to_minimum();
+        assert_ne!(settings.values(), settings.last_saved);
+        settings.save_to(&path).unwrap();
+        let restored = GraphicsSettings::load_from(&path).unwrap();
+        assert_eq!(restored.values(), (GraphicsQuality::Low, 24., 8., 128.));
+        assert!(!restored.quality.shadows());
+        assert_eq!(restored.quality.msaa(), Msaa::Off);
+        assert_eq!(restored.near_radius_chunks(), 3);
         std::fs::remove_file(path).unwrap();
     }
 

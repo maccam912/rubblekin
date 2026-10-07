@@ -422,7 +422,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         airships::advance_clock,
                         controls,
                         graphics::apply_settings,
-                        graphics::save_changed,
                         camera,
                     )
                         .chain(),
@@ -446,6 +445,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                     .chain()
                     .run_if(resource_exists::<Session>),
+                graphics::save_changed,
                 join::layout,
                 join::refresh,
                 capture_frame,

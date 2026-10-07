@@ -1,7 +1,7 @@
 //! A guest join screen. DNS, connection, and local-server startup run off the render thread.
 use crate::{
     Avatars, GameEntity, Session, VoxelWorld,
-    graphics::GraphicsQuality,
+    graphics::{GraphicsQuality, GraphicsSettings},
     network::{Connection, ConnectionStage},
     observer::ObserverCamera,
     prediction::Prediction,
@@ -266,6 +266,7 @@ pub(super) enum Action {
     Join,
     Local,
     Cancel,
+    MinimumGraphics,
     Mode(SessionMode),
     DismissKeyboard,
 }
@@ -350,6 +351,9 @@ pub fn setup(
                         }
                     });
                     actions.spawn((Text::new("Observer camera is read-only; the server must allow observers."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+                    actions.spawn((Button, Action::MinimumGraphics, Node { min_height: px(48), padding: UiRect::axes(px(16), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                        .with_child((Text::new("Use minimum graphics"), TextFont::from_font_size(19.).with_font(font.clone()), TextColor(ink())));
+                    actions.spawn((Text::new("Low quality · 24 m detail · 128 m trees\nShadows and antialiasing off · applies before joining"), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
                     actions.spawn((Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() },)).with_children(|row| {
                         for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world"), (Action::Cancel, "Cancel")] {
                             row.spawn((Button, action, Node { display: if matches!(action, Action::Cancel) { Display::None } else { Display::Flex }, min_height: px(48), padding: UiRect::axes(px(20), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
@@ -403,6 +407,7 @@ pub fn native_input(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn interact(
     mut menu: ResMut<JoinScreen>,
+    mut graphics: Option<ResMut<GraphicsSettings>>,
     session: Option<Res<Session>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut keyboard: MessageReader<MenuKey>,
@@ -602,6 +607,14 @@ pub fn interact(
     if let Some(action) = requested {
         menu.next_action = None;
         focus.clear();
+        if matches!(action, Action::MinimumGraphics)
+            && let Some(graphics) = graphics.as_mut()
+        {
+            graphics.reset_to_minimum();
+            menu.graphics = graphics.quality;
+            menu.status =
+                "Minimum graphics applied. Join a server or local world when ready.".into();
+        }
         if matches!(action, Action::Join | Action::Local) {
             menu.start(matches!(action, Action::Local));
         }
@@ -1598,6 +1611,85 @@ pub(crate) mod tests {
         drop(app);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("json.lock"));
+    }
+
+    #[test]
+    fn minimum_graphics_works_from_the_join_menu_with_mouse_and_short_touch() {
+        for touch in [false, true] {
+            let mut app = App::new();
+            let mut graphics = GraphicsSettings::new(GraphicsQuality::High);
+            graphics.near_distance = crate::graphics::MAX_NEAR_DISTANCE;
+            graphics.tree_distance = crate::graphics::MAX_TREE_DISTANCE;
+            graphics.shadow_distance = crate::graphics::MAX_SHADOW_DISTANCE;
+            app.insert_resource(graphics)
+                .insert_resource(JoinScreen::new(
+                    "example.org:7878".into(),
+                    "Tester".into(),
+                    ServerConfig::default(),
+                    GraphicsQuality::High,
+                    SessionMode::Player,
+                ))
+                .insert_resource(crate::touch::TouchControls::new(touch))
+                .init_resource::<InputFocus>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .add_message::<MenuKey>()
+                .add_message::<Ime>()
+                .add_message::<TouchInput>()
+                .add_systems(Update, interact);
+            let window = app
+                .world_mut()
+                .spawn((Window::default(), PrimaryWindow))
+                .id();
+            let button = app
+                .world_mut()
+                .spawn((
+                    Action::MinimumGraphics,
+                    Interaction::None,
+                    Node::default(),
+                    ComputedNode {
+                        size: Vec2::new(240., 48.),
+                        ..default()
+                    },
+                    UiGlobalTransform::from_xy(200., 100.),
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id();
+            app.update();
+            if touch {
+                for phase in [TouchPhase::Started, TouchPhase::Ended] {
+                    app.world_mut().write_message(TouchInput {
+                        phase,
+                        position: Vec2::new(200., 100.),
+                        window,
+                        force: None,
+                        id: 1,
+                    });
+                }
+            } else {
+                *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Pressed;
+            }
+            app.update();
+            app.update(); // All join-menu actions wait for committed text edits.
+            let graphics = app.world().resource::<GraphicsSettings>();
+            assert_eq!(graphics.quality, GraphicsQuality::Low);
+            assert_eq!(graphics.near_distance, crate::graphics::MIN_NEAR_DISTANCE);
+            assert_eq!(graphics.tree_distance, crate::graphics::MIN_TREE_DISTANCE);
+            assert_eq!(
+                graphics.shadow_distance,
+                crate::graphics::MIN_SHADOW_DISTANCE
+            );
+            let menu = app.world().resource::<JoinScreen>();
+            assert_eq!(
+                menu.graphics,
+                GraphicsQuality::Low,
+                "the connection worker must also start with Low"
+            );
+            assert_eq!(menu.address, "example.org:7878");
+            assert_eq!(menu.name, "Tester");
+            assert!(menu.pending.is_none());
+            assert!(menu.status.contains("Minimum graphics applied"));
+            assert!(!app.world().contains_resource::<Session>());
+        }
     }
 
     #[test]

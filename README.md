@@ -287,6 +287,8 @@ The current handshake uses **protocol v9**. Rebuild/restart both client and serv
 
 ## Graphics
 
+Before loading a world, choose **Use minimum graphics** on the main menu to reset quality to Low, near detail to 24 m, and medium trees to 128 m, with dynamic shadows and antialiasing off. This saves immediately for the next launch and can help when expensive saved settings prevent entering a world. It is also available on Android.
+
 All presets include terrain corner shading, darker ground sides, and a subtle top-edge cue at actual drops, so descending steps remain visible without sun shadows. Flat ground has no added edge outlines. Fine world-aligned grain fades below pixel size on nearby voxels; medium/far heightmaps use a generated map atlas. The embedded shader and atlas need no downloaded texture assets. Open **Escape** (desktop) or **Menu / Back** (Android) to choose quality, near-detail distance, medium tree distance, and shadow distance. All distances use meters. Drag a distance bar to preview a value and release to apply it; the − / + buttons retain step adjustment. **Reset distances** restores 48 m detail, 128 m trees, and the selected quality's shadow default without changing quality. Changes apply while the menu is open. Resume returns to play; Leave world returns to the join screen. Player controls stop while the menu is open, and the shared world continues running. F2 still cycles quality, and startup flags override the saved quality:
 
 | Preset | Startup option | Shadows and antialiasing |
