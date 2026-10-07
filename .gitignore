@@ -38,6 +38,8 @@
 !/artifacts/airship-onboard.png
 !/artifacts/world-map.png
 !/artifacts/world-map-touch.png
+!/artifacts/gameplay-review-2026-10-06/
+!/artifacts/gameplay-review-2026-10-06/*.jpg
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env
