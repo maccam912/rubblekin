@@ -7,6 +7,7 @@ mod capture;
 mod crash_reporting;
 mod crops;
 mod follow_camera;
+mod forage;
 mod graphics;
 mod ground_details;
 mod inspection;
@@ -442,6 +443,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         work_animation::animate,
                         work_tools::update,
                         wildlife::update,
+                        forage::update,
                         airships::update_scene,
                         crops::update_crops,
                         inspection::update,

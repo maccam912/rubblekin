@@ -12,6 +12,7 @@ pub(crate) enum InspectTarget {
     Resident(u64),
     Player(u64),
     Wildlife(u64),
+    WildForage { habitat: u32, ground: BlockPos },
     Block(BlockPos),
     FarmPlot { village: u32, field: usize },
 }
@@ -104,6 +105,19 @@ pub(crate) fn update(
             );
             None
         }
+        Some(InspectTarget::WildForage { ground, .. }) => {
+            let base = Vec3::new(
+                (ground.x as f32 + 0.5) * CELL_SIZE,
+                (ground.y + 1) as f32 * CELL_SIZE,
+                (ground.z as f32 + 0.5) * CELL_SIZE,
+            );
+            gizmos.cube(
+                Transform::from_translation(base + Vec3::Y * 0.35)
+                    .with_scale(Vec3::new(0.7, 0.7, 0.7)),
+                color,
+            );
+            None
+        }
         Some(InspectTarget::FarmPlot { village, field }) => {
             if let Some(plot) = world
                 .0
@@ -176,6 +190,28 @@ fn pick(
         if let Some(distance) = box_hit(origin, direction, center, size, closest) {
             closest = distance;
             selected = Some(target);
+        }
+    }
+    for habitat in &session.habitats {
+        if Vec2::new(
+            habitat.position[0] - origin.x,
+            habitat.position[2] - origin.z,
+        )
+        .length()
+            > INSPECT_DISTANCE + 48.
+        {
+            continue;
+        }
+        for (center, size, _) in crate::forage::parts(world, habitat) {
+            if let Some(distance) = box_hit(origin, direction, center, size, closest) {
+                closest = distance;
+                let x = (center.x / CELL_SIZE).floor() as i32;
+                let z = (center.z / CELL_SIZE).floor() as i32;
+                selected = Some(InspectTarget::WildForage {
+                    habitat: habitat.id,
+                    ground: BlockPos::new(x, world.height_at(x, z), z),
+                });
+            }
         }
     }
     if let Some(plan) = world.settlements() {
@@ -293,6 +329,34 @@ mod tests {
             SessionMode::Observer,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn forage_inspection_tracks_actual_plants_and_covering_a_clump_removes_its_target() {
+        let (mut world, mut session) = fixture(WorldGeneration::ValleyV1);
+        let h = rubblekin_core::wildlife::HabitatSnapshot {
+            id: 0,
+            position: world.spawn_position(),
+            forage: 80.,
+            rabbits: 3,
+            wolves: 0,
+        };
+        let first = crate::forage::parts(&world, &h)[0].0;
+        session.habitats.push(h);
+        let camera =
+            Transform::from_translation(first + Vec3::Y * 3.).looking_to(Vec3::NEG_Y, Vec3::Z);
+        assert!(matches!(
+            pick(&world, &session, &camera, []),
+            Some(InspectTarget::WildForage { habitat: 0, .. })
+        ));
+        let x = (first.x / CELL_SIZE).floor() as i32;
+        let z = (first.z / CELL_SIZE).floor() as i32;
+        let cover = BlockPos::new(x, world.height_at(x, z) + 1, z);
+        world.set_block(cover, Block::Brick).unwrap();
+        assert_eq!(
+            pick(&world, &session, &camera, []),
+            Some(InspectTarget::Block(cover))
+        );
     }
 
     #[test]

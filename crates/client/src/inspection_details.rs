@@ -13,12 +13,33 @@ pub(crate) fn text(world: &GameWorld, session: &Session) -> String {
         Some(InspectTarget::Npc) => npc_text(session),
         Some(InspectTarget::Resident(id)) => resident_text(world, session, id),
         Some(InspectTarget::Wildlife(id)) => wildlife_text(session, id),
+        Some(InspectTarget::WildForage { habitat, ground }) => forage_text(world,session,habitat,ground),
         Some(InspectTarget::Player(id)) => player_text(session, id),
         Some(InspectTarget::Block(position)) => block_text(world, session, position),
         Some(InspectTarget::FarmPlot { village, field }) => {
             farm_text(world, session, village, field)
         }
     }
+}
+
+fn forage_text(world: &GameWorld, session: &Session, id: u32, ground: BlockPos) -> String {
+    use rubblekin_core::geography::Biome;
+    let Some(h) = session.habitats.iter().find(|h| h.id == id) else {
+        return "This wild habitat is no longer present.\n\nReopen the inspector to select a new target.".into();
+    };
+    let biome = world.geography().map(|g| {
+        g.sample(ground.x as f32 * CELL_SIZE, ground.z as f32 * CELL_SIZE)
+            .biome
+    });
+    let name = match biome {
+        Some(Biome::Forest | Biome::PineForest | Biome::Rainforest) => "Wild berry bush",
+        Some(Biome::Shrubland) => "Wild herbs",
+        _ => "Flowering clover",
+    };
+    format!(
+        "{name}\nWild forage: {:.0}%\n\nHome range: {} rabbits · {} wolves\n\nWild plants feed rabbits here. Heavy grazing leaves fewer plants until they regrow.",
+        h.forage, h.rabbits, h.wolves
+    )
 }
 
 fn npc_text(session: &Session) -> String {
