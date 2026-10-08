@@ -13,6 +13,8 @@ pub(crate) struct Leg {
     phase: f32,
 }
 #[derive(Component)]
+pub(crate) struct Head;
+#[derive(Component)]
 pub(crate) struct WildlifeShadow;
 #[derive(Default)]
 pub(crate) struct Scene {
@@ -22,6 +24,7 @@ pub(crate) struct Scene {
 #[derive(Clone)]
 struct CachedAssets {
     bodies: [Handle<Mesh>; 2],
+    heads: [Handle<Mesh>; 2],
     legs: [Handle<Mesh>; 2],
     material: Handle<StandardMaterial>,
     shadow_mesh: Handle<Mesh>,
@@ -35,6 +38,29 @@ fn body_mesh(species: Species) -> Mesh {
         let fur = [0.61, 0.51, 0.38, 1.];
         let cream = [0.84, 0.79, 0.66, 1.];
         part([0., 0.23, 0.04], [0.37, 0.32, 0.46], fur);
+        part([0., 0.28, 0.30], [0.13, 0.13, 0.12], cream);
+    } else {
+        let fur = [0.39, 0.42, 0.43, 1.];
+        part([0., 0.53, 0.], [0.40, 0.40, 0.68], fur);
+        part([0., 0.57, -0.23], [0.44, 0.46, 0.29], fur);
+        part([0., 0.45, 0.45], [0.14, 0.17, 0.30], fur);
+        part([0., 0.37, 0.60], [0.12, 0.18, 0.12], fur);
+    }
+    g.into_mesh()
+}
+fn head_pivot(species: Species) -> Vec3 {
+    match species {
+        Species::Rabbit => Vec3::new(0., 0.37, -0.23),
+        Species::Wolf => Vec3::new(0., 0.74, -0.38),
+    }
+}
+fn head_mesh(species: Species) -> Mesh {
+    let mut g = Geometry::default();
+    let pivot = head_pivot(species);
+    let mut part = |p, s, c| g.cuboid(Vec3::from_array(p) - pivot, Vec3::from_array(s), c);
+    if species == Species::Rabbit {
+        let fur = [0.61, 0.51, 0.38, 1.];
+        let cream = [0.84, 0.79, 0.66, 1.];
         part([0., 0.37, -0.23], [0.27, 0.24, 0.26], fur);
         part([0., 0.32, -0.34], [0.19, 0.12, 0.08], cream);
         for x in [-0.085, 0.085] {
@@ -50,7 +76,6 @@ fn body_mesh(species: Species) -> Mesh {
                 [0.06, 0.045, 0.035, 1.],
             );
         }
-        part([0., 0.28, 0.30], [0.13, 0.13, 0.12], cream);
         part(
             [0., 0.34, -0.39],
             [0.055, 0.04, 0.025],
@@ -59,8 +84,6 @@ fn body_mesh(species: Species) -> Mesh {
     } else {
         let fur = [0.39, 0.42, 0.43, 1.];
         let pale = [0.63, 0.64, 0.59, 1.];
-        part([0., 0.53, 0.], [0.40, 0.40, 0.68], fur);
-        part([0., 0.57, -0.23], [0.44, 0.46, 0.29], fur);
         part([0., 0.74, -0.38], [0.34, 0.31, 0.31], fur);
         part([0., 0.67, -0.56], [0.22, 0.17, 0.20], pale);
         part(
@@ -77,8 +100,6 @@ fn body_mesh(species: Species) -> Mesh {
                 [0.84, 0.67, 0.26, 1.],
             );
         }
-        part([0., 0.45, 0.45], [0.14, 0.17, 0.30], fur);
-        part([0., 0.37, 0.60], [0.12, 0.18, 0.12], fur);
     }
     g.into_mesh()
 }
@@ -98,7 +119,7 @@ fn leg_mesh(species: Species) -> Mesh {
 }
 pub(crate) fn rendered_size(species: Species) -> Vec3 {
     match species {
-        Species::Rabbit => Vec3::new(0.48, 0.74, 0.82),
+        Species::Rabbit => Vec3::new(0.48, 0.74, 1.),
         Species::Wolf => Vec3::new(1.38, 1.06, 1.38),
     }
 }
@@ -111,11 +132,31 @@ pub(crate) fn update(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut scene: Local<Scene>,
-    mut roots: Query<(&Wildlife, &mut Transform), (Without<Leg>, Without<WildlifeShadow>)>,
-    mut legs: Query<(&Leg, &ChildOf, &mut Transform), (Without<Wildlife>, Without<WildlifeShadow>)>,
+    mut roots: Query<
+        (&Wildlife, &mut Transform),
+        (Without<Leg>, Without<Head>, Without<WildlifeShadow>),
+    >,
+    mut legs: Query<
+        (&Leg, &ChildOf, &mut Transform),
+        (Without<Wildlife>, Without<Head>, Without<WildlifeShadow>),
+    >,
+    mut heads: Query<
+        (&ChildOf, &mut Transform),
+        (
+            With<Head>,
+            Without<Wildlife>,
+            Without<Leg>,
+            Without<WildlifeShadow>,
+        ),
+    >,
     mut shadows: Query<
         (&ChildOf, &mut Transform, &mut Visibility),
-        (With<WildlifeShadow>, Without<Wildlife>, Without<Leg>),
+        (
+            With<WildlifeShadow>,
+            Without<Wildlife>,
+            Without<Leg>,
+            Without<Head>,
+        ),
     >,
 ) {
     if scene.entities.values().any(|e| roots.get(*e).is_err()) {
@@ -127,6 +168,10 @@ pub(crate) fn update(
             bodies: [
                 meshes.add(body_mesh(Species::Rabbit)),
                 meshes.add(body_mesh(Species::Wolf)),
+            ],
+            heads: [
+                meshes.add(head_mesh(Species::Rabbit)),
+                meshes.add(head_mesh(Species::Wolf)),
             ],
             legs: [
                 meshes.add(leg_mesh(Species::Rabbit)),
@@ -174,6 +219,12 @@ pub(crate) fn update(
                     GameEntity,
                 ))
                 .with_children(|parent| {
+                    parent.spawn((
+                        Head,
+                        Mesh3d(assets.heads[index].clone()),
+                        MeshMaterial3d(assets.material.clone()),
+                        Transform::from_translation(head_pivot(a.species)),
+                    ));
                     parent.spawn((
                         WildlifeShadow,
                         Mesh3d(assets.shadow_mesh.clone()),
@@ -246,6 +297,30 @@ pub(crate) fn update(
         } else {
             0.
         });
+    }
+    for (parent, mut pose) in &mut heads {
+        let Ok((animal, _)) = roots.get(parent.parent()) else {
+            continue;
+        };
+        let Some(a) = visible.iter().find(|a| a.id == animal.id) else {
+            continue;
+        };
+        let phase = time.elapsed_secs() * 3.5 + (a.id % 1024) as f32;
+        let grazing = a.species == Species::Rabbit && a.action == WildlifeAction::Grazing;
+        let mut target = head_pivot(a.species);
+        if grazing {
+            target.y -= 0.07;
+        }
+        let pitch = if grazing {
+            -0.65 + phase.sin() * 0.09
+        } else if a.action == WildlifeAction::Hunting {
+            -0.10
+        } else {
+            0.
+        };
+        let blend = 1. - (-time.delta_secs() * 8.).exp();
+        pose.translation = pose.translation.lerp(target, blend);
+        pose.rotation = pose.rotation.slerp(Quat::from_rotation_x(pitch), blend);
     }
     for (parent, mut shadow, mut visibility) in &mut shadows {
         let Ok((animal, pose)) = roots.get(parent.parent()) else {
@@ -333,6 +408,37 @@ mod tests {
         );
         assert!(app.world().get::<NotShadowCaster>(root).is_none());
         let initial_scale = app.world().get::<Transform>(shadow).unwrap().scale;
+        let head = app
+            .world_mut()
+            .query_filtered::<Entity, With<Head>>()
+            .single(app.world())
+            .unwrap();
+        // Feeding changes the head without tilting the authoritative body or
+        // allocating new meshes. Leaving that activity restores its idle pose.
+        app.world_mut().resource_mut::<Session>().wildlife[0].action = WildlifeAction::Grazing;
+        for _ in 0..5 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_millis(100));
+            app.update();
+        }
+        let pose = app.world().get::<Transform>(head).unwrap();
+        assert!(pose.rotation.to_euler(EulerRot::XYZ).0 < -0.3);
+        assert!(pose.translation.y < head_pivot(Species::Rabbit).y - 0.05);
+        assert_eq!(
+            app.world().get::<Transform>(root).unwrap().rotation,
+            Quat::IDENTITY
+        );
+        app.world_mut().resource_mut::<Session>().wildlife[0].action = WildlifeAction::Resting;
+        for _ in 0..10 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_millis(100));
+            app.update();
+        }
+        let pose = app.world().get::<Transform>(head).unwrap();
+        assert!(pose.rotation.angle_between(Quat::IDENTITY) < 0.001);
+        assert!(pose.translation.distance(head_pivot(Species::Rabbit)) < 0.001);
         // The body hops while its inexpensive shadow stays on the terrain.
         app.world_mut().resource_mut::<Session>().wildlife[0].position[1] += 0.4;
         app.world_mut()
@@ -397,7 +503,7 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 5);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 7);
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 2);
     }
 }

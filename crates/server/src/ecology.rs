@@ -605,7 +605,10 @@ impl Ecology {
                         let h = &mut self.habitats[a.habitat as usize];
                         let cell = BlockPos::new(
                             (a.body.position[0] / CELL_SIZE).floor() as i32,
-                            (a.body.position[1] / CELL_SIZE).floor() as i32 - 1,
+                            // The swept controller's contact skin can settle
+                            // feet just below the exact voxel top. Sample the
+                            // supporting cell, not the soil one layer beneath.
+                            ((a.body.position[1] + 0.01) / CELL_SIZE).floor() as i32 - 1,
                             (a.body.position[2] / CELL_SIZE).floor() as i32,
                         );
                         if a.body.on_ground
@@ -998,12 +1001,20 @@ mod tests {
         assert!(e.animals[0].hunger < before.animals[0].hunger);
         assert!(e.habitats[0].forage < before.habitats[0].forage);
         assert!(e.habitats[1].forage > before.habitats[1].forage);
+        // Real controller contact settles a few millimetres below the exact
+        // voxel top. Feeding must continue after that first grounded tick.
+        for _ in 0..20 {
+            e.tick(&world, 0.05, &[]);
+        }
+        assert!(e.animals[0].body.on_ground);
+        assert!(e.animals[0].hunger < before.animals[0].hunger - 2.);
+        assert!(e.habitats[0].forage < before.habitats[0].forage - 0.4);
         let p = e.animals[0].body.position;
         world
             .set_block(
                 BlockPos::new(
                     (p[0] / CELL_SIZE).floor() as i32,
-                    (p[1] / CELL_SIZE).floor() as i32 - 1,
+                    ((p[1] + 0.01) / CELL_SIZE).floor() as i32 - 1,
                     (p[2] / CELL_SIZE).floor() as i32,
                 ),
                 Block::Brick,
