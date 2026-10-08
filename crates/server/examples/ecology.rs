@@ -40,8 +40,15 @@ fn main() {
         let mut tick_peak_ms = 0_f64;
         let mut ticks_over_25ms = 0_u32;
         let mut ticks_over_50ms = 0_u32;
+        let mut wolf_losses = Vec::new();
         if hour > 0 {
-            for _ in 0..steps_per_hour {
+            for step in 0..steps_per_hour {
+                let predators_before: Vec<_> = ecology
+                    .animals
+                    .iter()
+                    .filter(|a| a.species == Species::Wolf)
+                    .cloned()
+                    .collect();
                 let tick_start = Instant::now();
                 ecology.tick(&world, dt, &[]);
                 let ms = tick_start.elapsed().as_secs_f64() * 1000.;
@@ -54,6 +61,25 @@ fn main() {
                     .iter()
                     .filter(|a| a.species == Species::Wolf && a.age == 0.)
                     .count();
+                for a in predators_before {
+                    if ecology.animals.iter().any(|b| b.id == a.id) {
+                        continue;
+                    }
+                    let home = ecology.habitats[a.habitat as usize].position;
+                    wolf_losses.push(serde_json::json!({
+                        "id":a.id,
+                        "simulation_hour":(hour-1) as f32 + (step+1) as f32 * dt / 3600.,
+                        "cause":if a.hunger >= 100. && a.starving + dt >= 600. {"starvation"} else {"age"},
+                        "age_hours":a.age / 3600.,
+                        "hunger":a.hunger,
+                        "action":a.action,
+                        "position":a.body.position,
+                        "target":a.target,
+                        "habitat":a.habitat,
+                        "destination":a.destination,
+                        "home_distance":(a.body.position[0]-home[0]).hypot(a.body.position[2]-home[2]),
+                    }));
+                }
             }
         }
         assert!(ecology.validate(&world));
@@ -80,9 +106,10 @@ fn main() {
         let wolves_with_mate = predators
             .iter()
             .filter(|a| {
-                predators
-                    .iter()
-                    .any(|b| a.id != b.id && b.hunger < 40. && nearby(a, b, 24., 5.))
+                a.age > 1800.
+                    && predators.iter().any(|b| {
+                        a.id != b.id && b.age > 1800. && b.hunger < 40. && nearby(a, b, 24., 5.)
+                    })
             })
             .count();
         let wolves_with_prey = predators
@@ -100,6 +127,7 @@ fn main() {
         let wolf_details: Vec<_> = predators
             .iter()
             .map(|a| {
+                let home = ecology.habitats[a.habitat as usize].position;
                 let prey_distance = ecology
                     .animals
                     .iter()
@@ -109,7 +137,11 @@ fn main() {
                             .hypot(a.body.position[2] - b.body.position[2])
                     })
                     .fold(f32::INFINITY, f32::min);
-                serde_json::json!({"id":a.id,"hunger":a.hunger,"action":a.action,"habitat":a.habitat,"destination":a.destination,"position":a.body.position,"target":a.target,"prey_distance":prey_distance})
+                let mate_distance = predators.iter()
+                    .filter(|b| b.id != a.id && b.age > 1800. && b.hunger < 40. && (a.body.position[1]-b.body.position[1]).abs() < 5.)
+                    .map(|b| (a.body.position[0]-b.body.position[0]).hypot(a.body.position[2]-b.body.position[2]))
+                    .min_by(f32::total_cmp);
+                serde_json::json!({"id":a.id,"hunger":a.hunger,"age_hours":a.age / 3600.,"breeding_seconds":a.breeding,"action":a.action,"habitat":a.habitat,"destination":a.destination,"position":a.body.position,"target":a.target,"prey_distance":prey_distance,"mate_distance":mate_distance,"home_distance":(a.body.position[0]-home[0]).hypot(a.body.position[2]-home[2])})
             })
             .collect();
         let migrating = ecology
@@ -144,7 +176,7 @@ fn main() {
             .len();
         println!(
             "{}",
-            serde_json::json!({"seed":seed,"hour":hour,"step_seconds":dt,"rabbits":rabbits,"wolves":wolves,"births":ecology.births,"wolf_births":wolf_births,"wolf_fed":wolf_fed,"wolf_starving":wolf_starving,"wolf_max_hunger":wolf_max_hunger,"wolves_with_mate":wolves_with_mate,"wolves_with_prey":wolves_with_prey,"wolf_details":wolf_details,"hunted":ecology.hunted,"deaths":ecology.deaths,"migrations":ecology.migrations,"arrivals":ecology.arrivals,"migrating":migrating,"stationary_migrants":stationary_migrants,"starving":starving,"forage_min":food_min,"forage_mean":food_mean,"packet_bytes":packet_bytes,"ecology_mean_ms":tick_total_ms / steps_per_hour as f64,"ecology_peak_ms":tick_peak_ms,"ticks_over_25ms":ticks_over_25ms,"ticks_over_50ms":ticks_over_50ms,"elapsed_seconds":start.elapsed().as_secs_f32()})
+            serde_json::json!({"seed":seed,"hour":hour,"step_seconds":dt,"rabbits":rabbits,"wolves":wolves,"births":ecology.births,"wolf_births":wolf_births,"wolf_losses":wolf_losses,"wolf_fed":wolf_fed,"wolf_starving":wolf_starving,"wolf_max_hunger":wolf_max_hunger,"wolves_with_mate":wolves_with_mate,"wolves_with_prey":wolves_with_prey,"wolf_details":wolf_details,"hunted":ecology.hunted,"deaths":ecology.deaths,"migrations":ecology.migrations,"arrivals":ecology.arrivals,"migrating":migrating,"stationary_migrants":stationary_migrants,"starving":starving,"forage_min":food_min,"forage_mean":food_mean,"packet_bytes":packet_bytes,"ecology_mean_ms":tick_total_ms / steps_per_hour as f64,"ecology_peak_ms":tick_peak_ms,"ticks_over_25ms":ticks_over_25ms,"ticks_over_50ms":ticks_over_50ms,"elapsed_seconds":start.elapsed().as_secs_f32()})
         );
         previous = ecology
             .animals

@@ -545,10 +545,29 @@ impl Ecology {
                             } else {
                                 8. + (random * 19.).fract() * RANGE
                             };
-                            let center = peer
+                            let radius = if a.species == Species::Wolf {
+                                radius.min(RANGE)
+                            } else {
+                                radius
+                            };
+                            let mut center = peer
                                 .map_or(self.habitats[a.habitat as usize].position, |b| {
                                     b.body.position
                                 });
+                            // Following each other's current position must not
+                            // walk a pair's ordinary roaming range across the
+                            // island. Hunts, threats and explicit journeys may
+                            // leave home; afterwards roaming leads back to it.
+                            if a.species == Species::Wolf {
+                                let home = self.habitats[a.habitat as usize].position;
+                                let d = distance(center, home);
+                                let bound = RANGE - radius;
+                                if d > bound {
+                                    let scale = bound / d;
+                                    center[0] = home[0] + (center[0] - home[0]) * scale;
+                                    center[2] = home[2] + (center[2] - home[2]) * scale;
+                                }
+                            }
                             if let Some(target) = wild_ground(
                                 world,
                                 center[0] + angle.cos() * radius,
@@ -556,14 +575,16 @@ impl Ecology {
                                 a.species,
                             )
                             .or_else(|| {
-                                peer.and_then(|b| {
-                                    wild_ground(
-                                        world,
-                                        b.body.position[0],
-                                        b.body.position[2],
-                                        a.species,
-                                    )
+                                peer.and_then(|_| {
+                                    wild_ground(world, center[0], center[2], a.species)
                                 })
+                            })
+                            .or_else(|| {
+                                if a.species != Species::Wolf {
+                                    return None;
+                                }
+                                let home = self.habitats[a.habitat as usize].position;
+                                wild_ground(world, home[0], home[2], a.species)
                             }) {
                                 a.target = target;
                             }
@@ -1343,6 +1364,50 @@ mod tests {
                 .filter(|a| a.species == Species::Wolf)
                 .any(|a| a.action == WildlifeAction::Fleeing)
         );
+    }
+    #[test]
+    fn a_displaced_pair_returns_to_its_home_range_instead_of_roaming_around_itself() {
+        let (world, mut e) = fixture();
+        let home = e.habitats[0].position;
+        e.habitats.truncate(1);
+        e.animals.clear();
+        for _ in 0..2 {
+            assert!(e.spawn_near(&world, Species::Wolf, 0, home, false));
+        }
+        let away = (-70..70)
+            .flat_map(|x| (-70..70).map(move |z| (x, z)))
+            .filter_map(|(x, z)| wild_ground(&world, x as f32, z as f32, Species::Wolf))
+            .find(|p| distance(*p, home) > RANGE + 20.)
+            .unwrap();
+        for a in &mut e.animals {
+            a.body = Body::new(away);
+            a.body.on_ground = true;
+            a.target = away;
+            a.hunger = 10.;
+            a.decision = 0.;
+            a.action = WildlifeAction::Roaming;
+        }
+        for _ in 0..400 {
+            e.tick(&world, 0.05, &[]);
+            for a in &e.animals {
+                assert!(
+                    distance(a.target, home) <= RANGE + 0.01,
+                    "ordinary roaming target {:?} left home {:?}",
+                    a.target,
+                    home
+                );
+                assert_eq!(a.habitat, 0);
+                assert!(a.destination.is_none());
+            }
+        }
+        assert!(
+            e.animals
+                .iter()
+                .all(|a| distance(a.body.position, home) < distance(away, home))
+        );
+        assert_eq!(e.migrations, 0);
+        assert!(world.edits().is_empty());
+        assert!(e.validate(&world));
     }
     #[test]
     fn seeded_population_moves_hops_and_serializes_below_the_wire_limit() {
