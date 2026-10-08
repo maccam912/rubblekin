@@ -33,11 +33,17 @@ fn main() {
     let initial = ecology.animals.len() as u64;
     let start = Instant::now();
     let mut previous = HashMap::<u64, [f32; 3]>::new();
+    let mut wolf_births = 0;
     let steps_per_hour = (3600. / dt).round() as u32;
     for hour in 0..=hours {
         if hour > 0 {
             for _ in 0..steps_per_hour {
                 ecology.tick(&world, dt, &[]);
+                wolf_births += ecology
+                    .animals
+                    .iter()
+                    .filter(|a| a.species == Species::Wolf && a.age == 0.)
+                    .count();
             }
         }
         assert!(ecology.validate(&world));
@@ -51,6 +57,51 @@ fn main() {
             .filter(|a| a.species == Species::Rabbit)
             .count();
         let wolves = ecology.animals.len() - rabbits;
+        let predators: Vec<_> = ecology
+            .animals
+            .iter()
+            .filter(|a| a.species == Species::Wolf)
+            .collect();
+        let nearby = |a: &ecology::Animal, b: &ecology::Animal, radius: f32, height: f32| {
+            (a.body.position[0] - b.body.position[0]).hypot(a.body.position[2] - b.body.position[2])
+                < radius
+                && (a.body.position[1] - b.body.position[1]).abs() < height
+        };
+        let wolves_with_mate = predators
+            .iter()
+            .filter(|a| {
+                predators
+                    .iter()
+                    .any(|b| a.id != b.id && b.hunger < 40. && nearby(a, b, 24., 5.))
+            })
+            .count();
+        let wolves_with_prey = predators
+            .iter()
+            .filter(|a| {
+                ecology
+                    .animals
+                    .iter()
+                    .any(|b| b.species == Species::Rabbit && nearby(a, b, 120., 20.))
+            })
+            .count();
+        let wolf_starving = predators.iter().filter(|a| a.starving > 0.).count();
+        let wolf_fed = predators.iter().filter(|a| a.hunger < 30.).count();
+        let wolf_max_hunger = predators.iter().map(|a| a.hunger).fold(0., f32::max);
+        let wolf_details: Vec<_> = predators
+            .iter()
+            .map(|a| {
+                let prey_distance = ecology
+                    .animals
+                    .iter()
+                    .filter(|b| b.species == Species::Rabbit)
+                    .map(|b| {
+                        (a.body.position[0] - b.body.position[0])
+                            .hypot(a.body.position[2] - b.body.position[2])
+                    })
+                    .fold(f32::INFINITY, f32::min);
+                serde_json::json!({"id":a.id,"hunger":a.hunger,"action":a.action,"habitat":a.habitat,"position":a.body.position,"target":a.target,"prey_distance":prey_distance})
+            })
+            .collect();
         let migrating = ecology
             .animals
             .iter()
@@ -83,7 +134,7 @@ fn main() {
             .len();
         println!(
             "{}",
-            serde_json::json!({"seed":seed,"hour":hour,"step_seconds":dt,"rabbits":rabbits,"wolves":wolves,"births":ecology.births,"hunted":ecology.hunted,"deaths":ecology.deaths,"migrations":ecology.migrations,"arrivals":ecology.arrivals,"migrating":migrating,"stationary_migrants":stationary_migrants,"starving":starving,"forage_min":food_min,"forage_mean":food_mean,"packet_bytes":packet_bytes,"elapsed_seconds":start.elapsed().as_secs_f32()})
+            serde_json::json!({"seed":seed,"hour":hour,"step_seconds":dt,"rabbits":rabbits,"wolves":wolves,"births":ecology.births,"wolf_births":wolf_births,"wolf_fed":wolf_fed,"wolf_starving":wolf_starving,"wolf_max_hunger":wolf_max_hunger,"wolves_with_mate":wolves_with_mate,"wolves_with_prey":wolves_with_prey,"wolf_details":wolf_details,"hunted":ecology.hunted,"deaths":ecology.deaths,"migrations":ecology.migrations,"arrivals":ecology.arrivals,"migrating":migrating,"stationary_migrants":stationary_migrants,"starving":starving,"forage_min":food_min,"forage_mean":food_mean,"packet_bytes":packet_bytes,"elapsed_seconds":start.elapsed().as_secs_f32()})
         );
         previous = ecology
             .animals

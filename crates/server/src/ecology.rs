@@ -13,6 +13,26 @@ use serde::{Deserialize, Serialize};
 pub(crate) const MAX_ANIMALS: usize = 256;
 const MAX_HABITATS: usize = 64;
 const RANGE: f32 = 48.;
+// Needs are slow relative to travel. Long lives avoid a seeded cohort dying
+// together after a few hours; food, predation and breeding still control numbers.
+const RABBIT_LIFETIME: f32 = 24. * 3600.;
+const WOLF_LIFETIME: f32 = 72. * 3600.;
+const RABBIT_BREEDING: f32 = 2. * 3600.;
+const WOLF_BREEDING: f32 = 6. * 3600.;
+fn lifetime(species: Species) -> f32 {
+    if species == Species::Rabbit {
+        RABBIT_LIFETIME
+    } else {
+        WOLF_LIFETIME
+    }
+}
+fn breeding_period(species: Species) -> f32 {
+    if species == Species::Rabbit {
+        RABBIT_BREEDING
+    } else {
+        WOLF_BREEDING
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Habitat {
@@ -145,9 +165,8 @@ impl Ecology {
             for _ in 0..3 {
                 out.spawn_near(world, Species::Rabbit, index as u32, center, false);
             }
-            if index % 6 == 4 {
-                out.spawn_near(world, Species::Wolf, index as u32, center, false);
-                if index % 12 == 4 {
+            if index % 9 == 4 {
+                for _ in 0..2 {
                     out.spawn_near(world, Species::Wolf, index as u32, center, false);
                 }
             }
@@ -191,9 +210,14 @@ impl Ecology {
                 let age = if young {
                     0.
                 } else {
-                    1200. + self.random() * 1800.
+                    lifetime(species) * (0.15 + self.random() * 0.5)
                 };
-                let breeding = 300. + self.random() * 1500.;
+                let breeding = breeding_period(species)
+                    * if young {
+                        1.
+                    } else {
+                        0.25 + self.random() * 0.75
+                    };
                 let hop = self.random();
                 self.animals.push(Animal {
                     id: self.next_id,
@@ -276,8 +300,8 @@ impl Ecology {
                     && valid_position(a.target)
                     && a.body.velocity.iter().all(|v| finite_range(*v, -30., 30.))
                     && finite_range(a.hunger, 0., 100.)
-                    && finite_range(a.age, 0., 100000.)
-                    && finite_range(a.breeding, 0., 7200.)
+                    && finite_range(a.age, 0., lifetime(a.species))
+                    && finite_range(a.breeding, 0., breeding_period(a.species))
                     && finite_range(a.starving, 0., 601.)
                     && finite_range(a.decision, 0., 31.)
                     && finite_range(a.hop, 0., 2.)
@@ -304,9 +328,9 @@ impl Ecology {
             a.hop = (a.hop - dt).max(0.);
             a.hunger = (a.hunger
                 + dt * if a.species == Species::Rabbit {
-                    0.045
-                } else {
                     0.025
+                } else {
+                    0.006
                 })
             .min(100.);
             if a.hunger >= 100. {
@@ -399,7 +423,9 @@ impl Ecology {
                     a.action = WildlifeAction::Hunting;
                     a.target = prey.body.position;
                     speed = 5.;
-                    if distance(a.body.position, prey.body.position) < 1.0 {
+                    if distance(a.body.position, prey.body.position) < 1.0
+                        && (a.body.position[1] - prey.body.position[1]).abs() < 0.7
+                    {
                         attempted_hunts.push((a.id, prey.id));
                         speed = 0.;
                     }
@@ -412,13 +438,12 @@ impl Ecology {
                         let depleted = if a.species == Species::Rabbit {
                             habitat.forage < 20. || residents > 7
                         } else {
-                            before
-                                .iter()
-                                .filter(|b| b.habitat == a.habitat && b.species == Species::Rabbit)
-                                .count()
-                                < 2
+                            nearby_prey(&before, a.body.position, 120.) < 2
                         };
-                        if depleted {
+                        // Finish the physical journey before choosing another
+                        // habitat. Counting local prey during travel must not
+                        // make the animal alternate destinations every decision.
+                        if depleted && a.action != WildlifeAction::Migrating {
                             let destination = self
                                 .habitats
                                 .iter()
@@ -431,13 +456,7 @@ impl Ecology {
                                     if a.species == Species::Rabbit {
                                         h.forage > habitat.forage + 15.
                                     } else {
-                                        before
-                                            .iter()
-                                            .filter(|b| {
-                                                b.habitat == h.id && b.species == Species::Rabbit
-                                            })
-                                            .count()
-                                            >= 3
+                                        nearby_prey(&before, h.position, RANGE) >= 3
                                     }
                                 })
                                 .min_by(|p, q| {
@@ -453,14 +472,50 @@ impl Ecology {
                         }
                         if a.action != WildlifeAction::Migrating {
                             let angle = random * std::f32::consts::TAU;
-                            let radius = 8. + (random * 19.).fract() * RANGE;
-                            let center = self.habitats[a.habitat as usize].position;
+                            let peer = if a.species == Species::Wolf {
+                                before
+                                    .iter()
+                                    .filter(|b| {
+                                        b.id != a.id
+                                            && b.species == Species::Wolf
+                                            && (b.body.position[1] - a.body.position[1]).abs() < 5.
+                                            && distance(b.body.position, a.body.position)
+                                                < RANGE * 2.
+                                    })
+                                    .min_by(|b, c| {
+                                        distance(b.body.position, a.body.position)
+                                            .total_cmp(&distance(c.body.position, a.body.position))
+                                    })
+                            } else {
+                                None
+                            };
+                            // Loose pairs keep a chance to meet and breed, while
+                            // people avoidance and physical hunting take priority.
+                            let radius = if peer.is_some() {
+                                4. + random * 12.
+                            } else {
+                                8. + (random * 19.).fract() * RANGE
+                            };
+                            let center = peer
+                                .map_or(self.habitats[a.habitat as usize].position, |b| {
+                                    b.body.position
+                                });
                             if let Some(target) = wild_ground(
                                 world,
                                 center[0] + angle.cos() * radius,
                                 center[2] + angle.sin() * radius,
                                 a.species,
-                            ) {
+                            )
+                            .or_else(|| {
+                                peer.and_then(|b| {
+                                    wild_ground(
+                                        world,
+                                        b.body.position[0],
+                                        b.body.position[2],
+                                        a.species,
+                                    )
+                                })
+                            }) {
                                 a.target = target;
                             }
                             a.action = if a.species == Species::Rabbit
@@ -509,7 +564,10 @@ impl Ecology {
                     a.target[0] - a.body.position[0],
                     a.target[2] - a.body.position[2],
                 ];
-                if distance(a.target, a.body.position) < 1. {
+                if distance(a.target, a.body.position) < 1.
+                    && (a.action != WildlifeAction::Hunting
+                        || (a.target[1] - a.body.position[1]).abs() < 0.7)
+                {
                     speed = 0.;
                     if a.action == WildlifeAction::Migrating {
                         self.arrivals += 1;
@@ -602,14 +660,14 @@ impl Ecology {
                 && a.hunger < 30.
                 && mate
                 && count < if a.species == Species::Rabbit { 8 } else { 3 }
-                && self.habitats[a.habitat as usize].forage > 40.
+                && if a.species == Species::Rabbit {
+                    self.habitats[a.habitat as usize].forage > 40.
+                } else {
+                    nearby_prey(&before, a.body.position, RANGE) >= 1
+                }
             {
                 births.push((a.id, a.species, a.habitat, a.body.position));
-                a.breeding = if a.species == Species::Rabbit {
-                    1800.
-                } else {
-                    3600.
-                };
+                a.breeding = breeding_period(a.species);
             }
         }
         // Resolve eating after every body has moved, using the current poses.
@@ -637,15 +695,8 @@ impl Ecology {
         self.hunted += hunted.len() as u64;
         self.animals.retain(|a| !hunted.contains(&a.id));
         let count = self.animals.len();
-        self.animals.retain(|a| {
-            a.starving < 600.
-                && a.age
-                    < if a.species == Species::Rabbit {
-                        14400.
-                    } else {
-                        43200.
-                    }
-        });
+        self.animals
+            .retain(|a| a.starving < 600. && a.age < lifetime(a.species));
         self.deaths += (count - self.animals.len()) as u64;
         for (parent, species, habitat, center) in births {
             if self.animals.iter().any(|a| a.id == parent)
@@ -655,6 +706,18 @@ impl Ecology {
             }
         }
     }
+}
+// Assigned homes include animals still travelling. Predators need actual prey
+// near the current place or proposed destination, within their hunting heights.
+fn nearby_prey(animals: &[Animal], position: [f32; 3], radius: f32) -> usize {
+    animals
+        .iter()
+        .filter(|a| {
+            a.species == Species::Rabbit
+                && distance(a.body.position, position) < radius
+                && (a.body.position[1] - position[1]).abs() < 20.
+        })
+        .count()
 }
 fn finite_range(v: f32, min: f32, max: f32) -> bool {
     v.is_finite() && (min..=max).contains(&v)
@@ -841,11 +904,40 @@ mod tests {
             distance(e.animals[0].body.position, before) < 0.2,
             "migration must walk, not teleport to the destination"
         );
+        let destination = e.animals[0].target;
+        let assigned = e.animals[0].habitat;
+        let migrations = e.migrations;
+        e.habitats[assigned as usize].forage = 0.;
+        for a in &mut e.animals {
+            a.decision = 0.;
+        }
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(
+            e.animals[0].target, destination,
+            "migration must not bounce between food patches before arrival"
+        );
+        assert_eq!(e.animals[0].habitat, assigned);
+        assert_eq!(e.migrations, migrations);
         assert!(e.validate(&world));
     }
     #[test]
     fn starvation_and_age_reduce_population_without_respawning_the_dead() {
         let (world, mut e) = fixture();
+        e.animals[0].age = 4. * 3600.;
+        e.animals[0].hunger = 10.;
+        e.animals[0].action = WildlifeAction::Resting;
+        e.animals[0].decision = 3.;
+        e.tick(&world, 0.25, &[]);
+        assert_eq!(
+            e.animals.len(),
+            1,
+            "four-hour cohort collapse must not return"
+        );
+        let mut old = e.clone();
+        old.animals[0].age = RABBIT_LIFETIME - 0.1;
+        old.tick(&world, 0.25, &[]);
+        assert!(old.animals.is_empty());
+        assert_eq!(old.deaths, 1);
         e.animals[0].hunger = 100.;
         e.animals[0].starving = 599.9;
         e.animals[0].action = WildlifeAction::Resting;
@@ -857,6 +949,156 @@ mod tests {
             e.tick(&world, 0.25, &[]);
         }
         assert!(e.animals.is_empty());
+    }
+
+    #[test]
+    fn wolves_breed_with_mates_and_nearby_prey_even_when_plants_are_depleted() {
+        let (world, mut e) = fixture();
+        let p = e.animals[0].body.position;
+        for _ in 0..2 {
+            assert!(e.spawn_near(&world, Species::Rabbit, 0, p, false));
+        }
+        for _ in 0..2 {
+            assert!(e.spawn_near(&world, Species::Wolf, 0, p, false));
+        }
+        for a in &mut e.animals {
+            a.body = Body::new(p);
+            a.hunger = 10.;
+            a.age = 3600.;
+            a.breeding = if a.species == Species::Wolf {
+                0.
+            } else {
+                1000.
+            };
+            a.action = WildlifeAction::Resting;
+            a.decision = 3.;
+        }
+        e.habitats[0].forage = 0.;
+        let mut scarce = e.clone();
+        scarce.animals.retain(|a| a.species == Species::Wolf);
+        scarce.tick(&world, 0.05, &[]);
+        assert_eq!(scarce.births, 0, "no prey must prevent predator births");
+        let mut distant = e.clone();
+        for a in &mut distant.animals {
+            if a.species == Species::Rabbit {
+                a.body.position[0] += 70.;
+            }
+        }
+        distant.tick(&world, 0.05, &[]);
+        assert_eq!(
+            distant.births, 0,
+            "distant assigned prey are not nearby food"
+        );
+        e.tick(&world, 0.05, &[]);
+        assert!(
+            e.animals
+                .iter()
+                .any(|a| a.species == Species::Wolf && a.age == 0.)
+        );
+        assert!(e.validate(&world));
+    }
+    #[test]
+    fn hunting_keeps_moving_when_close_prey_is_below_a_step() {
+        let (mut world, mut e) = fixture();
+        let p = e.animals[0].body.position;
+        let cell = p.map(|v| (v / CELL_SIZE).floor() as i32);
+        // A one-meter grassy ledge, with both body bounds clear. The wolf's
+        // footprint still rests on the upper lip while its prey is below.
+        for x in -6..=6 {
+            for z in -6..=6 {
+                for y in -1..=8 {
+                    world
+                        .set_block(
+                            BlockPos::new(cell[0] + x, cell[1] + y, cell[2] + z),
+                            if y == -1 || (x < 0 && y < 2) {
+                                Block::Grass
+                            } else {
+                                Block::Air
+                            },
+                        )
+                        .unwrap();
+                }
+            }
+        }
+        let wolf = [p[0] - 0.3, p[1] + 1., p[2] + 0.25];
+        let rabbit = [p[0] + 0.6, p[1], p[2] + 0.25];
+        assert!(position_is_clear(&world, wolf, Species::Wolf));
+        assert!(position_is_clear(&world, rabbit, Species::Rabbit));
+        e.habitats[0].position = wolf;
+        assert!(e.spawn_near(&world, Species::Wolf, 0, wolf, false));
+        for a in &mut e.animals {
+            a.body = Body::new(if a.species == Species::Wolf {
+                wolf
+            } else {
+                rabbit
+            });
+            a.body.on_ground = true;
+            a.hunger = 60.;
+            a.hop = 1.;
+        }
+        e.tick(&world, 0.05, &[]);
+        let wolf = e
+            .animals
+            .iter()
+            .find(|a| a.species == Species::Wolf)
+            .unwrap();
+        assert_eq!(wolf.action, WildlifeAction::Hunting);
+        assert!(
+            wolf.body.velocity[0].hypot(wolf.body.velocity[2]) > 0.,
+            "horizontal proximity must not stop descent toward lower prey"
+        );
+        assert_eq!(e.hunted, 0, "prey below the ledge is not yet within reach");
+    }
+    #[test]
+    fn roaming_wolves_keep_loose_company_while_people_take_priority() {
+        let (world, mut e) = fixture();
+        let p = e.animals[0].body.position;
+        for _ in 0..2 {
+            assert!(e.spawn_near(&world, Species::Rabbit, 0, p, false));
+        }
+        for _ in 0..2 {
+            assert!(e.spawn_near(&world, Species::Wolf, 0, p, false));
+        }
+        for a in e.animals.iter_mut().filter(|a| a.species == Species::Wolf) {
+            a.hunger = 10.;
+            a.decision = 0.;
+            a.action = WildlifeAction::Roaming;
+        }
+        let before = e.clone();
+        e.tick(&world, 0.05, &[]);
+        for a in e.animals.iter().filter(|a| a.species == Species::Wolf) {
+            let peer = before
+                .animals
+                .iter()
+                .find(|b| b.species == Species::Wolf && b.id != a.id)
+                .unwrap();
+            assert!(
+                distance(a.target, peer.body.position) <= 16.01,
+                "wolf {} target {:?}, peer {:?}, body {:?}",
+                a.id,
+                a.target,
+                peer.body.position,
+                a.body.position
+            );
+        }
+        for a in &mut e.animals {
+            a.decision = 0.;
+            a.hunger = 60.;
+        }
+        let wolf = e
+            .animals
+            .iter()
+            .find(|a| a.species == Species::Wolf)
+            .unwrap()
+            .body
+            .position;
+        e.tick(&world, 0.05, &[[wolf[0] - 2., wolf[1], wolf[2]]]);
+        assert!(
+            e.animals
+                .iter()
+                .filter(|a| a.species == Species::Wolf)
+                .any(|a| a.action == WildlifeAction::Fleeing)
+        );
     }
     #[test]
     fn seeded_population_moves_hops_and_serializes_below_the_wire_limit() {
