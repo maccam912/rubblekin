@@ -333,7 +333,9 @@ mod tests {
         assert_eq!(loaded.ecology.animals[0].body.position, position);
         assert_eq!(loaded.ecology.animals[0].destination, Some(1));
         loaded.ecology.tick(&loaded.world, 0.05, &[]);
-        assert_eq!(loaded.ecology.animals[0].target, destination);
+        let target = loaded.ecology.animals[0].target;
+        assert!((target[0] - destination[0]).hypot(target[2] - destination[2]) <= 14.01);
+        assert_eq!(loaded.ecology.animals[0].destination, Some(1));
         loaded.save(&path.0).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
         assert_eq!(saved["version"], 7);

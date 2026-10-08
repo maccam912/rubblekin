@@ -476,7 +476,10 @@ impl Ecology {
                     }
                 } else {
                     if let Some(id) = a.destination {
-                        a.target = self.habitats[id as usize].position;
+                        if a.action != WildlifeAction::Migrating || a.decision <= 0. {
+                            a.target =
+                                arrival_ground(world, a.id, &self.habitats[id as usize], a.species);
+                        }
                         a.action = WildlifeAction::Migrating;
                     }
                     if a.decision <= 0. {
@@ -514,7 +517,7 @@ impl Ecology {
                                 });
                             if let Some(h) = destination {
                                 a.destination = Some(h.id);
-                                a.target = h.position;
+                                a.target = arrival_ground(world, a.id, h, a.species);
                                 a.action = WildlifeAction::Migrating;
                                 self.migrations += 1;
                             }
@@ -839,6 +842,31 @@ fn wild_ground(world: &World, x: f32, z: f32, species: Species) -> Option<[f32; 
         .then_some(p)
 }
 
+// A habitat is a feeding range, not a single shared foot position. Stable
+// individual approaches survive hunts, fleeing and reloads without another
+// persisted coordinate or consuming the biology RNG. Edits can invalidate a
+// candidate; the next supported spot remains within the same home range.
+fn arrival_ground(world: &World, id: u64, habitat: &Habitat, species: Species) -> [f32; 3] {
+    let mut h = id.wrapping_mul(0x9e3779b97f4a7c15)
+        ^ u64::from(habitat.id).wrapping_mul(0xbf58476d1ce4e5b9);
+    for _ in 0..12 {
+        h = h
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let angle = ((h >> 40) as f32 / 16777216.) * std::f32::consts::TAU;
+        let radius = 4. + ((h >> 24) & 65535) as f32 / 65536. * 10.;
+        if let Some(p) = wild_ground(
+            world,
+            habitat.position[0] + angle.cos() * radius,
+            habitat.position[2] + angle.sin() * radius,
+            species,
+        ) {
+            return p;
+        }
+    }
+    habitat.position
+}
+
 fn dry_corridor(world: &World, from: [f32; 3], to: [f32; 3]) -> bool {
     let steps = (distance(from, to) / 12.).ceil() as usize;
     (1..=steps).all(|i| {
@@ -1121,7 +1149,7 @@ mod tests {
         assert_eq!(e.animals[0].destination, Some(1));
         assert_eq!(e.habitat_snapshots()[0].rabbits, 1);
         assert_eq!(e.habitat_snapshots()[1].rabbits, 0);
-        let destination = e.habitats[1].position;
+        let destination = e.animals[0].target;
         let migrations = e.migrations;
         let p = e.animals[0].body.position;
         e.tick(&world, 0.05, &[[p[0] - 2., p[1], p[2]]]);
@@ -1148,6 +1176,70 @@ mod tests {
         assert!(e.validate(&world));
     }
     #[test]
+    fn migrants_choose_stable_supported_arrivals_spread_around_the_habitat() {
+        let (mut world, mut e) = fixture();
+        for _ in 1..8 {
+            let mut a = e.animals[0].clone();
+            a.id = e.next_id;
+            e.next_id += 1;
+            e.animals.push(a);
+        }
+        let center = e.habitats[1].position;
+        for a in &mut e.animals {
+            a.destination = Some(1);
+            a.target = center;
+            a.action = WildlifeAction::Migrating;
+            a.decision = 0.;
+            a.hunger = 10.;
+            a.breeding = 1000.;
+        }
+        e.tick(&world, 0.05, &[]);
+        let targets: Vec<_> = e.animals.iter().map(|a| a.target).collect();
+        for (i, &p) in targets.iter().enumerate() {
+            assert!(distance(p, center) <= 14.01);
+            assert!(position_is_clear(&world, p, Species::Rabbit));
+            assert_eq!(wild_ground(&world, p[0], p[2], Species::Rabbit), Some(p));
+            assert!(targets[..i].iter().all(|q| distance(p, *q) > 0.1));
+        }
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let mut e: Ecology = serde_json::from_slice(&bytes).unwrap();
+        // Activity interruptions overwrite the public target, but each animal
+        // returns to its own deterministic supported arrival after reloading.
+        for a in &mut e.animals {
+            a.action = WildlifeAction::Resting;
+            a.target = a.body.position;
+        }
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(
+            e.animals.iter().map(|a| a.target).collect::<Vec<_>>(),
+            targets
+        );
+        assert!(e.animals.iter().all(|a| a.habitat == 0));
+        assert_eq!(e.arrivals, 0);
+        assert!(world.edits().is_empty());
+        assert!(e.validate(&world));
+        let p = targets[0];
+        world
+            .set_block(
+                BlockPos::new(
+                    (p[0] / CELL_SIZE).floor() as i32,
+                    (p[1] / CELL_SIZE).floor() as i32 - 1,
+                    (p[2] / CELL_SIZE).floor() as i32,
+                ),
+                Block::Brick,
+            )
+            .unwrap();
+        e.animals[0].decision = 0.;
+        e.tick(&world, 0.05, &[]);
+        assert_ne!(e.animals[0].target, p);
+        let target = e.animals[0].target;
+        assert_eq!(
+            wild_ground(&world, target[0], target[2], Species::Rabbit),
+            Some(target)
+        );
+        assert_eq!(world.edits().len(), 1);
+    }
+    #[test]
     fn a_successful_hunt_does_not_discard_the_wolfs_journey() {
         let (world, mut e) = fixture();
         let p = e.animals[0].body.position;
@@ -1171,7 +1263,10 @@ mod tests {
         assert_eq!(e.animals[0].habitat, 0);
         e.tick(&world, 0.05, &[]);
         assert_eq!(e.animals[0].action, WildlifeAction::Migrating);
-        assert_eq!(e.animals[0].target, e.habitats[1].position);
+        assert_eq!(
+            e.animals[0].target,
+            arrival_ground(&world, e.animals[0].id, &e.habitats[1], Species::Wolf)
+        );
         assert_eq!(e.animals[0].destination, Some(1));
     }
     #[test]
