@@ -214,6 +214,50 @@ mod tests {
         )
     }
     #[test]
+    fn mushrooms_and_strawberries_gather_into_the_same_food_cargo_and_habitat_supply() {
+        use rubblekin_core::forage::PlantKind;
+        let (world, mut ecology, _, _) = fixture();
+        let mut ledger = PlayerEconomy::default();
+        for kind in [PlantKind::Mushrooms, PlantKind::Strawberries] {
+            let mut found = None;
+            'search: for x in (-14000..=14000).step_by(1000) {
+                for z in (-14000..=14000).step_by(1000) {
+                    let center = [
+                        x as f32,
+                        world.original_ground_height(x as f32, z as f32),
+                        z as f32,
+                    ];
+                    if let Some(p) = plants(world, 0, center, 80.).into_iter().find(|p| {
+                        p.kind == kind && character_position_is_clear(world, p.position(), &[])
+                    }) {
+                        found = Some((center, p));
+                        break 'search;
+                    }
+                }
+            }
+            let (center, plant) =
+                found.expect("the generated island must have reachable mixed forage");
+            ecology.habitats[0].position = center;
+            ecology.habitats[0].forage = 80.;
+            let site = WorkSite {
+                village_id: 0,
+                kind: WorkKind::GatherForage,
+                index: plant.index,
+            };
+            let position = plant.position();
+            let mut active = start(world, &ecology, site, position, 0.).unwrap();
+            assert!(active.progress.offer.label.starts_with(kind.name()));
+            assert!(advance(world, &ecology, &mut active, position, 6.).unwrap());
+            complete(world, &mut ecology, &mut ledger, &active).unwrap();
+            assert_eq!(ecology.habitats[0].forage, 75.);
+        }
+        assert_eq!(ledger.cargo, [2, 0, 0, 0, 0]);
+        assert_eq!(ledger.revision, 2);
+        assert!(world.edits().is_empty());
+        assert!(ecology.validate(world));
+    }
+
+    #[test]
     fn gathering_takes_six_seconds_and_competitors_cannot_overdraw_shared_food() {
         let (world, mut e, site, position) = fixture();
         let before = world.edits();
