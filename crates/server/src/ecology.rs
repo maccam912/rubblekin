@@ -20,6 +20,10 @@ pub(crate) const MAX_ANIMALS: usize = 256;
 const MAX_RABBITS: usize = MAX_ANIMALS - 32;
 const MAX_HABITATS: usize = 64;
 const RANGE: f32 = 48.;
+// Sparse island habitats can leave predators several kilometers from prey.
+// Their slower hunger permits longer journeys than the grazing rabbits'.
+const RABBIT_MIGRATION_RANGE: f32 = 1800.;
+const WOLF_MIGRATION_RANGE: f32 = 4000.;
 // Needs are slow relative to travel. Long lives avoid a seeded cohort dying
 // together after a few hours; food, predation and breeding still control numbers.
 const RABBIT_LIFETIME: f32 = 24. * 3600.;
@@ -510,8 +514,12 @@ impl Ecology {
                                 .iter()
                                 .filter(|h| {
                                     h.id != a.habitat
-                                        && distance(h.position, a.body.position) < 1800.
-                                        && dry_corridor(world, a.body.position, h.position)
+                                        && distance(h.position, a.body.position)
+                                            < if a.species == Species::Rabbit {
+                                                RABBIT_MIGRATION_RANGE
+                                            } else {
+                                                WOLF_MIGRATION_RANGE
+                                            }
                                 })
                                 .filter(|h| {
                                     if a.species == Species::Rabbit {
@@ -526,6 +534,7 @@ impl Ecology {
                                         nearby_prey(&before, h.position, RANGE) >= 3
                                     }
                                 })
+                                .filter(|h| dry_corridor(world, a.body.position, h.position))
                                 .min_by(|p, q| {
                                     distance(p.position, a.body.position)
                                         .total_cmp(&distance(q.position, a.body.position))
@@ -1430,6 +1439,49 @@ mod tests {
             arrival_ground(&world, e.animals[0].id, &e.habitats[1], Species::Wolf)
         );
         assert_eq!(e.animals[0].destination, Some(1));
+    }
+    #[test]
+    fn wolves_can_leave_an_empty_sparse_range_for_distant_prey() {
+        use rubblekin_core::world::WorldGeneration;
+        let world = World::generate(7, WorldGeneration::GeographyV6);
+        let mut e = Ecology::new(&world);
+        let (p, q) = e
+            .habitats
+            .iter()
+            .flat_map(|p| e.habitats.iter().map(move |q| (p, q)))
+            .find(|(p, q)| {
+                let d = distance(p.position, q.position);
+                d > 2000. && d < 3900. && dry_corridor(&world, p.position, q.position)
+            })
+            .map(|(p, q)| (p.clone(), q.clone()))
+            .expect("sample island needs a dry long-range migration corridor");
+        e.habitats = vec![p, q];
+        e.habitats[0].id = 0;
+        e.habitats[1].id = 1;
+        e.animals.clear();
+        let origin = e.habitats[0].position;
+        let destination = e.habitats[1].position;
+        for _ in 0..3 {
+            assert!(e.spawn_near(&world, Species::Rabbit, 1, destination, false));
+        }
+        assert!(e.spawn_near(&world, Species::Wolf, 0, origin, false));
+        let wolf_id = e.animals.last().unwrap().id;
+        for a in &mut e.animals {
+            a.hunger = 10.;
+            a.breeding = 1000.;
+            a.decision = 0.;
+        }
+        let start = e.animals.last().unwrap().body.position;
+        e.tick(&world, 0.05, &[]);
+        let wolf = e.animals.iter().find(|a| a.id == wolf_id).unwrap();
+        assert_eq!(wolf.destination, Some(1));
+        assert_eq!(wolf.action, WildlifeAction::Migrating);
+        assert_eq!(wolf.habitat, 0);
+        assert!(distance(wolf.body.position, start) < 0.5);
+        assert!(distance(wolf.target, destination) <= 14.01);
+        assert_eq!(e.arrivals, 0);
+        assert!(world.edits().is_empty());
+        assert!(e.validate(&world));
     }
     #[test]
     fn starvation_and_age_reduce_population_without_respawning_the_dead() {
