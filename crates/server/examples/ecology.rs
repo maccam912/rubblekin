@@ -34,6 +34,9 @@ fn main() {
     let start = Instant::now();
     let mut previous = HashMap::<u64, [f32; 3]>::new();
     let mut wolf_births = 0;
+    let mut wolf_migrations = 0_u64;
+    let mut wolf_arrivals = 0_u64;
+    let mut births_by_habitat = vec![[0_u64; 2]; ecology.habitats.len()];
     let steps_per_hour = (3600. / dt).round() as u32;
     for hour in 0..=hours {
         let mut tick_total_ms = 0_f64;
@@ -56,13 +59,17 @@ fn main() {
                 tick_peak_ms = tick_peak_ms.max(ms);
                 ticks_over_25ms += u32::from(ms > 25.);
                 ticks_over_50ms += u32::from(ms > 50.);
-                wolf_births += ecology
-                    .animals
-                    .iter()
-                    .filter(|a| a.species == Species::Wolf && a.age == 0.)
-                    .count();
+                for a in ecology.animals.iter().filter(|a| a.age == 0.) {
+                    births_by_habitat[a.habitat as usize]
+                        [usize::from(a.species == Species::Wolf)] += 1;
+                    wolf_births += usize::from(a.species == Species::Wolf);
+                }
                 for a in predators_before {
-                    if ecology.animals.iter().any(|b| b.id == a.id) {
+                    if let Some(b) = ecology.animals.iter().find(|b| b.id == a.id) {
+                        wolf_migrations +=
+                            u64::from(a.destination.is_none() && b.destination.is_some());
+                        wolf_arrivals +=
+                            u64::from(a.destination == Some(b.habitat) && b.destination.is_none());
                         continue;
                     }
                     let home = ecology.habitats[a.habitat as usize].position;
@@ -97,6 +104,15 @@ fn main() {
             ecology.animals.len() as u64,
             initial + ecology.births - ecology.hunted - ecology.deaths
         );
+        assert_eq!(
+            births_by_habitat.iter().flatten().sum::<u64>(),
+            ecology.births
+        );
+        assert_eq!(
+            births_by_habitat.iter().map(|b| b[1]).sum::<u64>(),
+            wolf_births as u64
+        );
+        assert!(wolf_migrations <= ecology.migrations && wolf_arrivals <= ecology.arrivals);
         let rabbits = ecology
             .animals
             .iter()
@@ -183,7 +199,8 @@ fn main() {
                     && (a.body.position[0]-h.position[0]).hypot(a.body.position[2]-h.position[2]) < 48.
                     && (a.body.position[1]-h.position[1]).abs() < 20.
             }).count();
-            serde_json::json!({"id":h.id,"forage":h.forage,"rabbits":h.rabbits,"wolves":h.wolves,"prey_in_range":prey_in_range})
+            let births = births_by_habitat[h.id as usize];
+            serde_json::json!({"id":h.id,"forage":h.forage,"rabbits":h.rabbits,"wolves":h.wolves,"prey_in_range":prey_in_range,"rabbit_births":births[0],"wolf_births":births[1]})
         }).collect();
         let packet_bytes =
             serde_json::to_vec(&rubblekin_core::protocol::ServerMessage::WildlifeState {
@@ -194,7 +211,7 @@ fn main() {
             .len();
         println!(
             "{}",
-            serde_json::json!({"seed":seed,"hour":hour,"step_seconds":dt,"rabbits":rabbits,"wolves":wolves,"births":ecology.births,"wolf_births":wolf_births,"wolf_losses":wolf_losses,"wolf_fed":wolf_fed,"wolf_starving":wolf_starving,"wolf_max_hunger":wolf_max_hunger,"wolves_with_mate":wolves_with_mate,"wolves_with_prey":wolves_with_prey,"wolf_details":wolf_details,"hunted":ecology.hunted,"deaths":ecology.deaths,"migrations":ecology.migrations,"arrivals":ecology.arrivals,"migrating":migrating,"stationary_migrants":stationary_migrants,"starving":starving,"forage_min":food_min,"forage_mean":food_mean,"habitat_details":habitat_details,"packet_bytes":packet_bytes,"ecology_mean_ms":tick_total_ms / steps_per_hour as f64,"ecology_peak_ms":tick_peak_ms,"ticks_over_25ms":ticks_over_25ms,"ticks_over_50ms":ticks_over_50ms,"elapsed_seconds":start.elapsed().as_secs_f32()})
+            serde_json::json!({"seed":seed,"hour":hour,"step_seconds":dt,"rabbits":rabbits,"wolves":wolves,"births":ecology.births,"wolf_births":wolf_births,"wolf_migrations":wolf_migrations,"wolf_arrivals":wolf_arrivals,"wolf_losses":wolf_losses,"wolf_fed":wolf_fed,"wolf_starving":wolf_starving,"wolf_max_hunger":wolf_max_hunger,"wolves_with_mate":wolves_with_mate,"wolves_with_prey":wolves_with_prey,"wolf_details":wolf_details,"hunted":ecology.hunted,"deaths":ecology.deaths,"migrations":ecology.migrations,"arrivals":ecology.arrivals,"migrating":migrating,"stationary_migrants":stationary_migrants,"starving":starving,"forage_min":food_min,"forage_mean":food_mean,"habitat_details":habitat_details,"packet_bytes":packet_bytes,"ecology_mean_ms":tick_total_ms / steps_per_hour as f64,"ecology_peak_ms":tick_peak_ms,"ticks_over_25ms":ticks_over_25ms,"ticks_over_50ms":ticks_over_50ms,"elapsed_seconds":start.elapsed().as_secs_f32()})
         );
         previous = ecology
             .animals
