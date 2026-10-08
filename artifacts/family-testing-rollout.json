@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-08",
+  "server_commit": "3c614c2f8687e456a22eabb7a71841b2e5922bb5",
+  "pod": "rubblekin-54457484d-kch9t",
+  "ready": true,
+  "restarts": 0,
+  "release_build_seconds": 40.54,
+  "published_client_tag": "client-edc76191c2274dd02ad41d50ca1c0e09e6b2216c",
+  "client_published_at": "2026-10-08T21:03:19Z",
+  "client_release_url": "https://github.com/maccam912/rubblekin/releases/tag/client-edc76191c2274dd02ad41d50ca1c0e09e6b2216c",
+  "client_assets": [
+    "android-manifest.json",
+    "client-manifest.json",
+    "rubblekin-client-aarch64-apple-darwin.zip",
+    "rubblekin-client-aarch64-linux-android.apk",
+    "rubblekin-client-x86_64-apple-darwin.zip",
+    "rubblekin-client-x86_64-pc-windows-msvc.zip",
+    "rubblekin-client-x86_64-unknown-linux-gnu.zip",
+    "rubblekin-launcher-aarch64-apple-darwin.zip",
+    "rubblekin-launcher-x86_64-apple-darwin.zip",
+    "rubblekin-launcher-x86_64-pc-windows-msvc.zip",
+    "rubblekin-launcher-x86_64-unknown-linux-gnu.zip",
+    "SHA256SUMS"
+  ],
+  "public_guest_sample": {
+    "welcome": {
+      "version": 20,
+      "seed": 3527491266,
+      "generation": "GeographyV6",
+      "can_admin": false,
+      "residents": 60
+    },
+    "initial": {
+      "animals": 226,
+      "habitats": 64
+    },
+    "state_samples": 600,
+    "wildlife_samples": 150,
+    "wall_seconds": 29.969094583997503,
+    "simulation_seconds": 29.950000446289778,
+    "simulation_ratio": 0.9993628723866113,
+    "wildlife_median_interval": 0.19989933399483562
+  },
+  "scope": "Read-only guest on a fresh random island, light load. No edits, admin commands or controlled cross-seed load comparison. Native local salvage was verified separately.",
+  "ci": "The edc7619 Linux workspace tests, tooling, formatting, Clippy, all five client builds and client publication passed. Its ARM64 server-image test failed with a Stone salvage-race socket timeout (38/39 TCP pass); AMD64 was cancelled, so no server image was published. The later 268b99c ARM64 job repeats that timeout. The source-built live server succeeds; latest restart-lock cleanup passed 135 server unit and 39 TCP cases locally. Remote verification of that cleanup remains pending."
+}
