@@ -7,7 +7,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 20;
+// V6 wilderness geometry must agree for collision, edits and salvage indices.
+pub const PROTOCOL_VERSION: u32 = 21;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;

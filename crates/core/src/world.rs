@@ -349,6 +349,7 @@ impl World {
                 plan.clear_landing_trees(&transit);
                 if generation == WorldGeneration::GeographyV6 {
                     plan.add_exploration_sites(&world, &transit);
+                    plan.add_wilderness_sites(&world, &transit);
                 }
             }
             // Landing selection sampled columns before its clearings and sites.
@@ -1278,7 +1279,7 @@ mod tests {
                     }
                 }
             }
-            for p in &site.approach.points {
+            for p in site.approach.iter().flat_map(|a| &a.points) {
                 for n in p {
                     add(n.to_bits());
                 }

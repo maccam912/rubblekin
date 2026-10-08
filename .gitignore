@@ -57,6 +57,10 @@ player-profiles.json
 !/artifacts/map-controls-desktop.png
 !/artifacts/gameplay-review-2026-10-06/
 !/artifacts/gameplay-review-2026-10-06/*.jpg
+!/artifacts/wilderness-discovery-checks.json
+!/artifacts/wilderness-map-native.png
+!/artifacts/wilderness-arch-native.png
+!/artifacts/wilderness-inspection-native.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

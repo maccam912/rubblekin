@@ -1203,15 +1203,12 @@ mod tests {
     }
 
     #[test]
-    fn frequent_discoveries_use_small_dots_until_zoom_reveals_their_symbols() {
+    fn pathless_discoveries_use_small_dots_until_zoom_reveals_their_symbols() {
         use rubblekin_core::world::{World, WorldGeneration};
         let mut fixture = fixture();
         let world = World::generate(42, WorldGeneration::GeographyV6);
         let sites = &world.settlements().unwrap().roadside_landmarks;
-        let index = sites
-            .iter()
-            .position(|s| s.building.kind.is_exploration_site())
-            .unwrap();
+        let index = sites.iter().position(|s| s.approach.is_none()).unwrap();
         let symbol = roadside_symbol(sites[index].building.kind);
         let uv = map_uv(&world, sites[index].building.entrance());
         fixture.app.insert_resource(VoxelWorld(world));

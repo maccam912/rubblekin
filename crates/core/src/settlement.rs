@@ -11,6 +11,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 mod exploration;
 #[path = "settlement_scenic.rs"]
 mod scenic;
+#[path = "settlement_wilderness.rs"]
+mod wilderness;
 
 const BUCKET: f32 = 32.0;
 const SITE_SPACING: f32 = 1_600.0;
@@ -215,11 +217,12 @@ enum Feature {
     RoadsidePath(usize, usize),
     LandingClearance(usize),
 }
-/// A generated walking destination, independent of village jobs and transit.
+/// A generated discovery, independent of village jobs and transit.
+/// The historical name also covers wilderness sites with no connecting path.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoadsideLandmark {
     pub building: BuildingPlot,
-    pub approach: Trail,
+    pub approach: Option<Trail>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -608,11 +611,13 @@ impl SettlementPlan {
                 (b.origin.x + w) as f32 * CELL_SIZE + margin,
                 (b.origin.z + d) as f32 * CELL_SIZE + margin,
             ));
-            segment_bounds(
-                &mut bounds,
-                |segment| Feature::RoadsidePath(index, segment),
-                &site.approach,
-            );
+            if let Some(approach) = &site.approach {
+                segment_bounds(
+                    &mut bounds,
+                    |segment| Feature::RoadsidePath(index, segment),
+                    approach,
+                );
+            }
         }
         for (di, d) in self.resources.iter().enumerate() {
             bounds.push((
@@ -669,7 +674,7 @@ impl SettlementPlan {
                 segment_distance(x, z, t.points[si], t.points[si + 1]).0 <= t.width * 0.5 + radius
             }
             Feature::RoadsidePath(index, si) => {
-                let t = &self.roadside_landmarks[index].approach;
+                let t = self.roadside_landmarks[index].approach.as_ref().unwrap();
                 segment_distance(x, z, t.points[si], t.points[si + 1]).0 <= t.width * 0.5 + radius
             }
             Feature::Deposit(_) => false,
@@ -739,9 +744,11 @@ impl SettlementPlan {
             let roadside = matches!(feature, Feature::RoadsidePath(..));
             let (trail, si, village) = match *feature {
                 Feature::Trail(ti, si) => (&self.trails[ti], si, None),
-                Feature::RoadsidePath(index, si) => {
-                    (&self.roadside_landmarks[index].approach, si, None)
-                }
+                Feature::RoadsidePath(index, si) => (
+                    self.roadside_landmarks[index].approach.as_ref().unwrap(),
+                    si,
+                    None,
+                ),
                 Feature::Lane(vi, li, si) => {
                     (&self.villages[vi].lanes[li], si, Some(&self.villages[vi]))
                 }
@@ -841,7 +848,9 @@ impl SettlementPlan {
                     let entry = b.entrance();
                     let ex = (entry[0] / CELL_SIZE).floor() as i32;
                     let ez = (entry[2] / CELL_SIZE).floor() as i32;
-                    if matches!(
+                    let pathless = matches!(*feature, Feature::RoadsideBuilding(index)
+                        if self.roadside_landmarks[index].approach.is_none());
+                    let feather = matches!(
                         b.kind,
                         BuildingKind::StoneArch
                             | BuildingKind::StandingStones
@@ -849,15 +858,22 @@ impl SettlementPlan {
                             | BuildingKind::RidgeCairn
                             | BuildingKind::DeadSnag
                             | BuildingKind::SplitBoulder
-                    ) && !on_road
-                    {
+                    ) || pathless;
+                    if feather && !on_road {
                         // Feather natural discoveries into their surroundings
                         // instead of exposing a rectangular raised grass slab.
                         let dx = (b.origin.x - x).max(0).max(x - (b.origin.x + w - 1)) as f32
                             * CELL_SIZE;
                         let dz = (b.origin.z - z).max(0).max(z - (b.origin.z + d - 1)) as f32
                             * CELL_SIZE;
-                        let distance = dx.hypot(dz);
+                        let mut distance = dx.hypot(dz);
+                        if pathless {
+                            // The entrance's small flat landing is outside the
+                            // asset footprint; blend its edge into the ground too.
+                            let dx = ((x - ex).abs() - 1).max(0) as f32 * CELL_SIZE;
+                            let dz = ((z - ez).abs() - 1).max(0) as f32 * CELL_SIZE;
+                            distance = distance.min(dx.hypot(dz));
+                        }
                         if distance > 0.0 && distance < 8.0 {
                             let blend = 1.0 - distance / 8.0;
                             out.height = (out.height as f32 * (1.0 - blend)

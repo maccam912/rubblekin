@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "roadside_landmarks": plan.roadside_landmarks.iter().map(|site| json!({
                 "kind": format!("{:?}", site.building.kind),
                 "entrance": site.building.entrance(),
-                "approach": site.approach.points,
+                "approach": site.approach.as_ref().map(|a| &a.points),
             })).collect::<Vec<_>>(),
         })
     )?;

@@ -17,11 +17,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let plan = world.settlements().unwrap();
     let sites: Vec<_> = plan.roadside_landmarks.iter().map(|s| json!({
         "kind": s.building.kind, "origin": s.building.origin, "rotation": s.building.rotation,
-        "entrance": s.building.entrance(), "trail_anchor": s.approach.points[0],
+        "entrance": s.building.entrance(), "trail_anchor": s.approach.as_ref().and_then(|a| a.points.first()),
         "ground_at_center_m": world.original_ground_height(
             (s.building.origin.x as f32+s.building.dimensions()[0] as f32*0.5)*0.5,
             (s.building.origin.z as f32+s.building.dimensions()[2] as f32*0.5)*0.5),
-        "approach": s.approach.points,
+        "approach": s.approach.as_ref().map(|a| &a.points),
     })).collect();
     let mut all_gaps = Vec::new();
     let trails: Vec<_> = plan
@@ -38,10 +38,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let length = *distances.last().unwrap();
             let mut stops = vec![0.0, length];
             for site in &plan.roadside_landmarks {
-                if let Some(index) = trail
-                    .points
-                    .iter()
-                    .position(|p| *p == site.approach.points[0])
+                if let Some(approach) = &site.approach
+                    && let Some(index) = trail.points.iter().position(|p| *p == approach.points[0])
                 {
                     stops.push(distances[index]);
                 }
@@ -58,10 +56,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let percentile =
         |fraction: f32| all_gaps[((all_gaps.len() - 1) as f32 * fraction).round() as usize];
     let within_two_minutes = all_gaps.iter().filter(|&&d| d <= 456.0).count();
+    let wilderness: Vec<_> = plan
+        .roadside_landmarks
+        .iter()
+        .filter(|s| s.approach.is_none())
+        .map(|s| s.building.entrance())
+        .collect();
+    let mut nearest: Vec<_> = wilderness
+        .iter()
+        .map(|a| {
+            wilderness
+                .iter()
+                .filter(|b| *b != a)
+                .map(|b| (a[0] - b[0]).hypot(a[2] - b[2]))
+                .min_by(f32::total_cmp)
+                .unwrap_or(0.0)
+        })
+        .collect();
+    nearest.sort_by(f32::total_cmp);
+    let mut coverage = Vec::new();
+    let geo = world.geography().unwrap();
+    for z in (-16_000..16_000).step_by(360) {
+        for x in (-16_000..16_000).step_by(360) {
+            let (x, z) = (x as f32, z as f32);
+            let s = geo.sample(x, z);
+            if s.water.is_none()
+                && [-10.0, 10.0].iter().all(|&offset| {
+                    (geo.sample(x + offset, z).height - s.height).abs() < 2.5
+                        && (geo.sample(x, z + offset).height - s.height).abs() < 2.5
+                })
+                && let Some(distance) = plan
+                    .roadside_landmarks
+                    .iter()
+                    .map(|site| {
+                        let p = site.building.entrance();
+                        (x - p[0]).hypot(z - p[2])
+                    })
+                    .min_by(f32::total_cmp)
+            {
+                coverage.push(distance);
+            }
+        }
+    }
+    coverage.sort_by(f32::total_cmp);
+    let distribution = |values: &[f32]| {
+        (!values.is_empty()).then(|| {
+            json!({
+                "samples": values.len(), "median_m": values[values.len()/2],
+                "p90_m": values[(values.len()-1)*9/10], "max_m": values.last(),
+                "within_300m": values.iter().filter(|&&d| d <= 300.0).count(),
+            })
+        })
+    };
     std::fs::write(
         output,
         serde_json::to_vec_pretty(&json!({"seed": seed,
             "generation": generation, "sites": sites, "trails": trails,
+            "wilderness_sites": wilderness.len(),
+            "wilderness_nearest_neighbor": distribution(&nearest),
+            "gentle_dry_land_nearest_discovery": distribution(&coverage),
             "walking_speed_mps": 3.8, "median_gap_m": percentile(0.5),
             "p90_gap_m": percentile(0.9), "max_gap_m": all_gaps.last(),
             "gaps_at_most_two_minutes": within_two_minutes, "total_gaps": all_gaps.len(),
@@ -72,6 +125,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sites.len(),
         trails.len(),
         start.elapsed()
+    );
+    println!(
+        "Pathless sites: {}; nearest-neighbor spacing {:?}; gentle dry-land coverage {:?}",
+        wilderness.len(),
+        distribution(&nearest),
+        distribution(&coverage)
     );
     println!(
         "Nominal walking gaps: median {:.0}s, p90 {:.0}s, max {:.0}s; {within_two_minutes}/{} within 2 min",
@@ -150,6 +209,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+    }
+    if !args.iter().any(|s| s == "--all-sites") {
+        return Ok(());
     }
     for site in plan
         .roadside_landmarks

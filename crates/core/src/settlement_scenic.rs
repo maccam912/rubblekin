@@ -140,13 +140,13 @@ impl SettlementPlan {
                     }
                     self.roadside_landmarks.push(RoadsideLandmark {
                         building,
-                        approach: Trail {
+                        approach: Some(Trail {
                             from: trail.from,
                             to: trail.from,
                             points,
                             width: 2.0,
                             terrain_heights: Vec::new(),
-                        },
+                        }),
                     });
                     accepted += 1;
                     break;
@@ -312,7 +312,7 @@ mod tests {
                         trail
                             .points
                             .iter()
-                            .position(|p| *p == site.approach.points[0])
+                            .position(|p| *p == site.approach.as_ref().unwrap().points[0])
                             .map(|index| (trail, index))
                     })
                     .expect("approach starts on the unchanged route");
@@ -335,8 +335,8 @@ mod tests {
                 for &p in junction.iter().skip(1).chain(junction.iter().rev().skip(1)) {
                     walk(&world, &mut passerby, p);
                 }
-                let mut body = Body::new(site.approach.points[0]);
-                for &p in site.approach.points.iter().skip(1) {
+                let mut body = Body::new(site.approach.as_ref().unwrap().points[0]);
+                for &p in site.approach.as_ref().unwrap().points.iter().skip(1) {
                     walk(&world, &mut body, p);
                 }
                 let [w, _, d] = village_assets::dimensions(b.kind).map(|n| n as f32);
@@ -375,7 +375,7 @@ mod tests {
                     }
                 }
                 walk(&world, &mut body, entry);
-                for &p in site.approach.points.iter().rev() {
+                for &p in site.approach.as_ref().unwrap().points.iter().rev() {
                     walk(&world, &mut body, p);
                 }
             }

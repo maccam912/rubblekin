@@ -1,0 +1,94 @@
+{
+  "seeds": [
+    {
+      "seed": 42,
+      "wilderness_sites": 1895,
+      "wilderness_nearest_neighbor": {
+        "max_m": 2603.48974609375,
+        "median_m": 305.82879638671875,
+        "p90_m": 395.42413330078125,
+        "samples": 1895,
+        "within_300m": 872
+      },
+      "gentle_dry_land_nearest_discovery": {
+        "max_m": 1559.351806640625,
+        "median_m": 208.95005798339844,
+        "p90_m": 278.30401611328125,
+        "samples": 2014,
+        "within_300m": 1893
+      },
+      "median_gap_m": 360.0,
+      "p90_gap_m": 401.0605163574219,
+      "max_gap_m": 537.8995361328125,
+      "gaps_at_most_two_minutes": 305,
+      "total_gaps": 308
+    },
+    {
+      "seed": 7,
+      "wilderness_sites": 2159,
+      "wilderness_nearest_neighbor": {
+        "max_m": 1391.7911376953125,
+        "median_m": 306.10455322265625,
+        "p90_m": 387.2273254394531,
+        "samples": 2159,
+        "within_300m": 948
+      },
+      "gentle_dry_land_nearest_discovery": {
+        "max_m": 965.4743041992188,
+        "median_m": 210.41180419921875,
+        "p90_m": 275.9848327636719,
+        "samples": 2289,
+        "within_300m": 2147
+      },
+      "median_gap_m": 360.23828125,
+      "p90_gap_m": 400.9111328125,
+      "max_gap_m": 719.4970703125,
+      "gaps_at_most_two_minutes": 245,
+      "total_gaps": 247
+    },
+    {
+      "seed": 99,
+      "wilderness_sites": 1714,
+      "wilderness_nearest_neighbor": {
+        "max_m": 1445.34033203125,
+        "median_m": 309.3291015625,
+        "p90_m": 407.72357177734375,
+        "samples": 1714,
+        "within_300m": 727
+      },
+      "gentle_dry_land_nearest_discovery": {
+        "max_m": 1433.6041259765625,
+        "median_m": 209.0565185546875,
+        "p90_m": 279.9350280761719,
+        "samples": 1830,
+        "within_300m": 1701
+      },
+      "median_gap_m": 360.7490234375,
+      "p90_gap_m": 400.96875,
+      "max_gap_m": 440.9971923828125,
+      "gaps_at_most_two_minutes": 237,
+      "total_gaps": 237
+    }
+  ],
+  "scope": "Generated GeographyV6; gentle dry-land probes use 360 m steps and grade below 0.25 over 10 m. Straight-line distances, not timed travel.",
+  "generation": "GeographyV6",
+  "source": "Uncommitted wilderness additions based on ef8910059aaf4864604354c417f3672f33574dfd",
+  "validation": {
+    "pathless_sites_walked_in_and_out": 5768,
+    "workspace_tests_passed": 494,
+    "protocol": 21,
+    "save_version": 8,
+    "native": {
+      "os": "macOS",
+      "gpu": "Apple M5 Pro",
+      "size": [
+        1440,
+        900
+      ],
+      "quality": "Low",
+      "near_detail_m": 48,
+      "trees_m": 128,
+      "scope": "Whole-world map and local off-path arch access and inspection; not a performance benchmark."
+    }
+  }
+}

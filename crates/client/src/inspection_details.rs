@@ -166,19 +166,23 @@ fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> Strin
             value = format!("{}\n\n{}", tree_name(tree.kind), details);
         }
     }
-    if let Some(building) = world.settlements().and_then(|plan| {
-        plan.roadside_landmarks.iter().find_map(|site| {
+    if let Some(site) = world.settlements().and_then(|plan| {
+        plan.roadside_landmarks.iter().find(|site| {
             let building = &site.building;
             let [_, height, _] = building.dimensions();
-            (building.local_cell(position.x, position.z).is_some()
-                && (building.origin.y..building.origin.y + height).contains(&position.y))
-            .then_some(building)
+            building.local_cell(position.x, position.z).is_some()
+                && (building.origin.y..building.origin.y + height).contains(&position.y)
         })
     }) {
         return format!(
-            "{}\nBeside the village trail\n\n{}\n\n{}",
-            building_name(building.kind),
-            building_description(building.kind),
+            "{}\n{}\n\n{}\n\n{}",
+            building_name(site.building.kind),
+            if site.approach.is_some() {
+                "Beside the village trail"
+            } else {
+                "In the wilderness, away from trails"
+            },
+            building_description(site.building.kind),
             details,
         );
     }
@@ -311,7 +315,7 @@ fn building_description(kind: BuildingKind) -> &'static str {
         BuildingKind::AbandonedKiln => {
             "A cold brick firing chamber and drying racks stand near natural clay. Use Cargo & work beside the old clay stacks to salvage their finite supplies."
         }
-        BuildingKind::RidgeCairn => "Small hand-stacked stones mark a pause beside the trail.",
+        BuildingKind::RidgeCairn => "Small hand-stacked stones mark an old stopping place.",
         BuildingKind::TrailBench => {
             "A rough timber bench and slatted windbreak offer a quiet view."
         }
@@ -322,7 +326,7 @@ fn building_description(kind: BuildingKind) -> &'static str {
             "A survey tripod, sighting stakes and folded tarp overlook the route."
         }
         BuildingKind::DeadSnag => {
-            "A weathered tree skeleton spreads bare branches above the trail."
+            "A weathered tree skeleton spreads bare branches above the surrounding ground."
         }
         BuildingKind::SplitBoulder => {
             "An eroded rock has split into two halves with a narrow passage."
@@ -480,22 +484,34 @@ mod tests {
             .unwrap()
             .roadside_landmarks
             .iter()
-            .map(|site| site.building.clone())
+            .map(|site| (site.building.clone(), site.approach.is_some()))
             .collect();
-        assert!(buildings.iter().any(|b| b.kind == BuildingKind::TrailRuin));
-        assert!(buildings.iter().any(|b| b.kind == BuildingKind::Waystone));
-        assert!(buildings.iter().any(|b| matches!(
+        assert!(
+            buildings
+                .iter()
+                .any(|(b, _)| b.kind == BuildingKind::TrailRuin)
+        );
+        assert!(
+            buildings
+                .iter()
+                .any(|(b, _)| b.kind == BuildingKind::Waystone)
+        );
+        assert!(buildings.iter().any(|(b, _)| matches!(
             b.kind,
             BuildingKind::TrailPavilion | BuildingKind::QuarryYard
         )));
-        for building in &buildings {
+        for (building, beside_trail) in &buildings {
             session.inspected = Some(InspectTarget::Block(building.origin));
             let details = text(&world, &session);
             assert!(
                 details.starts_with(building_name(building.kind)),
                 "{details}"
             );
-            assert!(details.contains("Beside the village trail"));
+            assert_eq!(details.contains("Beside the village trail"), *beside_trail);
+            assert_eq!(
+                details.contains("In the wilderness, away from trails"),
+                !beside_trail
+            );
             world.set_block(building.origin, Block::Air).unwrap();
             let removed = text(&world, &session);
             assert!(removed.contains("was removed"));

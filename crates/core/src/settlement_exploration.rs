@@ -149,10 +149,8 @@ impl SettlementPlan {
             }
             let mut stops = vec![0, trail.points.len() - 1];
             for site in &self.roadside_landmarks {
-                if let Some(index) = trail
-                    .points
-                    .iter()
-                    .position(|p| *p == site.approach.points[0])
+                if let Some(approach) = &site.approach
+                    && let Some(index) = trail.points.iter().position(|p| *p == approach.points[0])
                 {
                     stops.push(index);
                 }
@@ -380,7 +378,7 @@ impl SettlementPlan {
         }
         Some(RoadsideLandmark {
             building,
-            approach: Trail {
+            approach: Some(Trail {
                 from: self
                     .trails
                     .iter()
@@ -394,7 +392,7 @@ impl SettlementPlan {
                 points,
                 width: 2.0,
                 terrain_heights: Vec::new(),
-            },
+            }),
         })
     }
 }
@@ -451,7 +449,7 @@ mod tests {
             let sites: Vec<_> = plan
                 .roadside_landmarks
                 .iter()
-                .filter(|s| s.building.kind.is_exploration_site())
+                .filter(|s| s.building.kind.is_exploration_site() && s.approach.is_some())
                 .collect();
             assert!(
                 sites.len() >= 80,
@@ -462,7 +460,7 @@ mod tests {
             for site in sites {
                 let b = &site.building;
                 kinds.insert(b.kind as u8);
-                let root = site.approach.points[0];
+                let root = site.approach.as_ref().unwrap().points[0];
                 let (through, index) = plan
                     .trails
                     .iter()
@@ -485,7 +483,7 @@ mod tests {
                     }
                 }
                 let mut body = Body::new(root);
-                for &p in site.approach.points.iter().skip(1) {
+                for &p in site.approach.as_ref().unwrap().points.iter().skip(1) {
                     walk(&world, &mut body, p);
                 }
                 let [w, _, d] = village_assets::dimensions(b.kind).map(|n| n as f32);
@@ -528,13 +526,14 @@ mod tests {
                         Block::Air,
                         "under-deck space became a solid foundation"
                     );
-                    for p in site
-                        .approach
-                        .points
-                        .iter()
-                        .skip(2)
-                        .take(site.approach.points.len().saturating_sub(8))
-                    {
+                    for p in site.approach.as_ref().unwrap().points.iter().skip(2).take(
+                        site.approach
+                            .as_ref()
+                            .unwrap()
+                            .points
+                            .len()
+                            .saturating_sub(8),
+                    ) {
                         assert_eq!(
                             world.original_ground_height(p[0], p[2]),
                             old.original_ground_height(p[0], p[2]),
@@ -574,7 +573,7 @@ mod tests {
                     }
                     _ => unreachable!(),
                 }
-                for &p in site.approach.points.iter().rev() {
+                for &p in site.approach.as_ref().unwrap().points.iter().rev() {
                     walk(&world, &mut body, p);
                 }
             }

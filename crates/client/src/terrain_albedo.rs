@@ -349,7 +349,11 @@ fn paint_settlements(world: &World, grid: MapGrid, data: &mut [u8]) {
         plan.trails
             .iter()
             .chain(plan.villages.iter().flat_map(|v| &v.lanes))
-            .chain(plan.roadside_landmarks.iter().map(|site| &site.approach)),
+            .chain(
+                plan.roadside_landmarks
+                    .iter()
+                    .filter_map(|site| site.approach.as_ref()),
+            ),
     );
     for (pixel, coverage) in data.as_chunks_mut::<4>().0.iter_mut().zip(mask) {
         blend_pixel(pixel, ROAD_COLOR, coverage as f32 / 255.0);
