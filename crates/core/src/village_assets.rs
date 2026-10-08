@@ -8,6 +8,8 @@
 use crate::world::Block;
 use serde::{Deserialize, Serialize};
 
+#[path = "village_assets_exploration.rs"]
+mod exploration;
 #[path = "village_assets_regional.rs"]
 mod regional;
 #[path = "village_assets_scenic.rs"]
@@ -28,6 +30,12 @@ pub enum BuildingKind {
     Waystone,
     TrailPavilion,
     QuarryYard,
+    StoneArch,
+    StandingStones,
+    FallenGiant,
+    TrailCamp,
+    RuinedTower,
+    AbandonedKiln,
 }
 
 impl BuildingKind {
@@ -40,6 +48,24 @@ impl BuildingKind {
                 | Self::Waystone
                 | Self::TrailPavilion
                 | Self::QuarryYard
+                | Self::StoneArch
+                | Self::StandingStones
+                | Self::FallenGiant
+                | Self::TrailCamp
+                | Self::RuinedTower
+                | Self::AbandonedKiln
+        )
+    }
+
+    pub const fn is_exploration_site(self) -> bool {
+        matches!(
+            self,
+            Self::StoneArch
+                | Self::StandingStones
+                | Self::FallenGiant
+                | Self::TrailCamp
+                | Self::RuinedTower
+                | Self::AbandonedKiln
         )
     }
 }
@@ -59,6 +85,12 @@ pub const fn dimensions(kind: BuildingKind) -> [i32; 3] {
         BuildingKind::Waystone => [10, 12, 10],
         BuildingKind::TrailPavilion => [24, 16, 20],
         BuildingKind::QuarryYard => [28, 14, 24],
+        BuildingKind::StoneArch => [36, 24, 24],
+        BuildingKind::StandingStones => [30, 18, 30],
+        BuildingKind::FallenGiant => [36, 16, 28],
+        BuildingKind::TrailCamp => [28, 14, 28],
+        BuildingKind::RuinedTower => [26, 28, 30],
+        BuildingKind::AbandonedKiln => [28, 16, 28],
     }
 }
 
@@ -95,6 +127,12 @@ pub fn block_at(kind: BuildingKind, x: i32, y: i32, z: i32) -> Option<Block> {
         BuildingKind::Waystone => scenic::waystone(x, y, z),
         BuildingKind::TrailPavilion => scenic::pavilion(x, y, z),
         BuildingKind::QuarryYard => scenic::quarry(x, y, z),
+        BuildingKind::StoneArch => exploration::arch(x, y, z),
+        BuildingKind::StandingStones => exploration::stones(x, y, z),
+        BuildingKind::FallenGiant => exploration::fallen_giant(x, y, z),
+        BuildingKind::TrailCamp => exploration::camp(x, y, z),
+        BuildingKind::RuinedTower => exploration::tower(x, y, z),
+        BuildingKind::AbandonedKiln => exploration::kiln(x, y, z),
     })
 }
 

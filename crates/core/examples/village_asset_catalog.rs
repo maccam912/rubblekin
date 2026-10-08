@@ -134,6 +134,36 @@ fn main() {
             "Quarry yard",
             "Cut-stone terraces, a covered bench and block stacks",
         ),
+        (
+            BuildingKind::StoneArch,
+            "Stone arch",
+            "A broad natural span with an open passage",
+        ),
+        (
+            BuildingKind::StandingStones,
+            "Standing stones",
+            "Unequal uprights, lintels and broken fragments",
+        ),
+        (
+            BuildingKind::FallenGiant,
+            "Fallen giant",
+            "Hollow trunk, root fan and surviving branches",
+        ),
+        (
+            BuildingKind::TrailCamp,
+            "Traveller camp",
+            "Two canvas tents, benches and a cold hearth",
+        ),
+        (
+            BuildingKind::RuinedTower,
+            "Ruined watchtower",
+            "Broken octagonal walls and a walkable viewing ledge",
+        ),
+        (
+            BuildingKind::AbandonedKiln,
+            "Abandoned kiln",
+            "Cold firing chamber and sheltered drying racks",
+        ),
     ]
     .into_iter()
     .map(|(kind, title, detail)| (Asset::Building(kind), title, detail))
@@ -193,9 +223,17 @@ fn main() {
         })
         .collect();
     }
+    let exploration = std::env::args().any(|arg| arg == "--exploration");
+    if exploration {
+        assets.retain(
+            |(asset, _, _)| matches!(asset, Asset::Building(kind) if kind.is_exploration_site()),
+        );
+    }
     let height = 80 + assets.len().div_ceil(3) * 365;
     let title = if trees {
         "Rubblekin tree silhouettes"
+    } else if exploration {
+        "Rubblekin discoveries along the trail"
     } else {
         "Rubblekin village and trail assets"
     };

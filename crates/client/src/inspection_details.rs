@@ -224,6 +224,12 @@ fn building_name(kind: BuildingKind) -> &'static str {
         BuildingKind::Waystone => "Waystone",
         BuildingKind::TrailPavilion => "Trail shelter",
         BuildingKind::QuarryYard => "Quarry workyard",
+        BuildingKind::StoneArch => "Stone arch",
+        BuildingKind::StandingStones => "Standing stones",
+        BuildingKind::FallenGiant => "Fallen giant",
+        BuildingKind::TrailCamp => "Traveller camp",
+        BuildingKind::RuinedTower => "Ruined watchtower",
+        BuildingKind::AbandonedKiln => "Abandoned kiln",
     }
 }
 
@@ -257,6 +263,24 @@ fn building_description(kind: BuildingKind) -> &'static str {
         }
         BuildingKind::QuarryYard => {
             "A stone cutting terrace and workyard stand near a natural stone deposit."
+        }
+        BuildingKind::StoneArch => {
+            "An uneven natural rock span frames the landscape. Walk beneath it to see the other side."
+        }
+        BuildingKind::StandingStones => {
+            "Unequal uprights and fallen fragments form a broken ring with an open center."
+        }
+        BuildingKind::FallenGiant => {
+            "A hollow old trunk lies among exposed roots and surviving branches."
+        }
+        BuildingKind::TrailCamp => {
+            "Two canvas tents, benches and a cold hearth mark a quiet traveller rest stop."
+        }
+        BuildingKind::RuinedTower => {
+            "A roofless watchtower has a surviving stair to a low viewing ledge."
+        }
+        BuildingKind::AbandonedKiln => {
+            "A cold brick firing chamber and drying racks stand near natural clay."
         }
     }
 }

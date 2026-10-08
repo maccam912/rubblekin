@@ -12,7 +12,7 @@ pub(crate) struct Landing {
     /// Ground marker to the ship center, through the existing road network.
     pub approach: Vec<[f32; 3]>,
     pub ramps: Vec<AirshipRamp>,
-    branch: Option<Vec<[f32; 3]>>,
+    branch: Vec<[f32; 3]>,
 }
 
 pub(crate) fn landings(
@@ -45,7 +45,7 @@ pub(crate) fn landings(
             if travelled < next_probe {
                 continue;
             }
-            if travelled > 1_200.0 {
+            if travelled > 1_600.0 {
                 break;
             }
             next_probe = travelled + 12.0;
@@ -55,22 +55,20 @@ pub(crate) fn landings(
                 anchor[2] - path[index - 1][2],
             ];
             let length = (delta[0] * delta[0] + delta[1] * delta[1]).sqrt().max(0.01);
-            // Prefer side branches. Dense woods can require a road berth; that
-            // fallback gets a descent on the far side to keep traffic flowing.
-            for side in [24.0, -24.0, 12.0, -12.0, 18.0, -18.0, 0.0] {
+            // Every berth is a side branch. A road-centered fallback covers
+            // the through-route with the pier and a turning ship's full deck.
+            for side in [
+                24.0, -24.0, 30.0, -30.0, 36.0, -36.0, 18.0, -18.0, 48.0, -48.0, 60.0, -60.0,
+            ] {
                 let center = [
                     anchor[0] - delta[1] / length * side,
                     anchor[1],
                     anchor[2] + delta[0] / length * side,
                 ];
-                if selected.iter().any(|landing| {
-                    distance(landing.position, center)
-                        < if side == 0.0 && landing.branch.is_none() {
-                            45.0
-                        } else {
-                            25.0
-                        }
-                }) {
+                if selected
+                    .iter()
+                    .any(|landing| distance(landing.position, center) < 25.0)
+                {
                     continue;
                 }
                 let Some(height) = clear_footprint(world, village, center) else {
@@ -83,24 +81,13 @@ pub(crate) fn landings(
                 approach.extend(path[..=index].iter().skip(1));
                 let branch_start = approach.len() - 1;
                 let position = [center[0], height + 0.35, center[2]];
-                let ramps = if side == 0.0 {
-                    let mut ramps = fit_ramp(&mut approach, position, 20.0);
-                    ramps.extend(exit_bridge(&path, index, position));
-                    ramps
-                } else {
-                    let ramp_start = approach.len() + 1;
-                    approach.extend(side_path.iter().skip(1));
-                    fit_ramp(&mut approach[ramp_start..], position, f32::INFINITY)
-                };
-                let branch = (side != 0.0).then(|| approach[branch_start..].to_vec());
+                let ramp_start = approach.len() + 1;
+                approach.extend(side_path.iter().skip(1));
+                let ramps = fit_ramp(&mut approach[ramp_start..], position, f32::INFINITY);
+                let branch = approach[branch_start..].to_vec();
                 if selected.iter().any(|landing| {
-                    landing
-                        .branch
-                        .as_ref()
-                        .is_some_and(|branch| ramps_obstruct_branch(&ramps, branch))
-                        || branch
-                            .as_ref()
-                            .is_some_and(|branch| ramps_obstruct_branch(&landing.ramps, branch))
+                    ramps_obstruct_branch(&ramps, &landing.branch)
+                        || ramps_obstruct_branch(&landing.ramps, &branch)
                 }) {
                     continue;
                 }
@@ -138,6 +125,21 @@ fn ramps_obstruct_branch(ramps: &[AirshipRamp], branch: &[[f32; 3]]) -> bool {
 fn clear_footprint(world: &World, village: &Village, center: [f32; 3]) -> Option<f32> {
     // A turning 8x17m deck fits in this circle. Keep crops out of the landing.
     let radius = 9.75;
+    // Check the whole turning footprint against every nearby trail and lane,
+    // including bends and roads other than the branch's parent segment.
+    let plan = world.settlements()?;
+    if plan
+        .trails
+        .iter()
+        .chain(plan.villages.iter().flat_map(|v| &v.lanes))
+        .any(|road| {
+            road.points.windows(2).any(|p| {
+                segment_distance(center, p[0], p[1]) < radius + road.width * 0.5 + PLAYER_RADIUS
+            })
+        })
+    {
+        return None;
+    }
     if village.fields.iter().any(|field| {
         let min_x = field.origin.x as f32 * CELL_SIZE;
         let min_z = field.origin.z as f32 * CELL_SIZE;
@@ -158,7 +160,7 @@ fn clear_footprint(world: &World, village: &Village, center: [f32; 3]) -> Option
             }
             let p = [center[0] + dx, 0.0, center[2] + dz];
             let ground = terrain_height(world, p);
-            if world.original_surface_height(p[0], p[2]) > ground + 0.01
+            if world.original_structure_height(p[0], p[2]) > ground + 0.01
                 || world.geography().is_some_and(|g| {
                     g.sample(p[0], p[2])
                         .water
@@ -196,7 +198,7 @@ fn ground_link(world: &World, a: [f32; 3], b: [f32; 3]) -> Option<Vec<[f32; 3]>>
             for dz in [-PLAYER_RADIUS, 0.0, PLAYER_RADIUS] {
                 let probe = [p[0] + dx, 0.0, p[2] + dz];
                 let height = terrain_height(world, probe);
-                if world.original_surface_height(probe[0], probe[2]) > height + 0.01 {
+                if world.original_structure_height(probe[0], probe[2]) > height + 0.01 {
                     return None;
                 }
                 floor = floor.max(height);
@@ -243,29 +245,6 @@ fn fit_ramp(path: &mut [[f32; 3]], position: [f32; 3], limit: f32) -> Vec<Airshi
         .collect()
 }
 
-fn exit_bridge(path: &[[f32; 3]], index: usize, position: [f32; 3]) -> Vec<AirshipRamp> {
-    let mut exit = vec![position];
-    let mut length = 0.0;
-    for &point in &path[index + 1..] {
-        length += distance(*exit.last().unwrap(), point);
-        exit.push(point);
-        if length >= 20.0 {
-            break;
-        }
-    }
-    if exit.len() < 2 {
-        return Vec::new();
-    }
-    let end = exit.last().unwrap()[1] + 0.02;
-    let mut travelled = 0.0;
-    for index in 1..exit.len() {
-        travelled += distance(exit[index - 1], exit[index]);
-        let fraction = ((travelled - 10.0) / (length - 10.0).max(1.0)).clamp(0.0, 1.0);
-        exit[index][1] = (position[1] + (end - position[1]) * fraction).max(exit[index][1] + 0.02);
-    }
-    exit.windows(2).map(|p| ramp_segment(p[0], p[1])).collect()
-}
-
 fn ramp_segment(mut from: [f32; 3], mut to: [f32; 3]) -> AirshipRamp {
     // Adjacent finite strips need physical overlap at bends; otherwise a foot
     // can fall through the outside corner and get trapped below the next slab.
@@ -281,6 +260,18 @@ fn ramp_segment(mut from: [f32; 3], mut to: [f32; 3]) -> AirshipRamp {
         to,
         width: 2.0,
     }
+}
+
+fn segment_distance(point: [f32; 3], a: [f32; 3], b: [f32; 3]) -> f32 {
+    let dx = b[0] - a[0];
+    let dz = b[2] - a[2];
+    let squared = dx * dx + dz * dz;
+    let t = if squared > 0.0 {
+        (((point[0] - a[0]) * dx + (point[2] - a[2]) * dz) / squared).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (point[0] - a[0] - t * dx).hypot(point[2] - a[2] - t * dz)
 }
 
 fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -319,6 +310,33 @@ mod tests {
                     let ground = clear_footprint(&world, village, berth.position).unwrap();
                     assert!((berth.position[1] - ground - 0.35).abs() < 0.001);
                     assert!(!berth.ramps.is_empty());
+                    assert!(!berth.branch.is_empty());
+                    for road in plan
+                        .trails
+                        .iter()
+                        .chain(plan.villages.iter().flat_map(|v| &v.lanes))
+                    {
+                        assert!(
+                            road.points.windows(2).all(|p| segment_distance(
+                                berth.position,
+                                p[0],
+                                p[1]
+                            ) >= 9.75
+                                + road.width * 0.5
+                                + PLAYER_RADIUS),
+                            "seed {seed}: berth covers a trail"
+                        );
+                    }
+                    for dx in [-8.0, 0.0, 8.0] {
+                        for dz in [-4.0, 0.0, 4.0] {
+                            let p = [berth.position[0] + dx, 0.0, berth.position[2] + dz];
+                            assert!(
+                                world.original_surface_height(p[0], p[2])
+                                    <= terrain_height(&world, p) + 0.01,
+                                "landing clearing left a tree or roof inside the deck"
+                            );
+                        }
+                    }
                     assert_eq!(berth.approach.last().unwrap(), &berth.position);
                     assert!(
                         berth

@@ -230,7 +230,13 @@ mod tests {
                 "seed{seed}: {generation:?} changed transit trails"
             );
             assert!(
-                (4..=plan.trails.len() * max_per_trail).contains(&plan.roadside_landmarks.len())
+                (4..=plan.trails.len() * max_per_trail).contains(
+                    &plan
+                        .roadside_landmarks
+                        .iter()
+                        .filter(|s| !s.building.kind.is_exploration_site())
+                        .count()
+                )
             );
             assert_eq!(plan.resources, old.resources);
             assert_eq!(
@@ -274,7 +280,11 @@ mod tests {
                 }
             }
             crate::airships::AirshipNetwork::try_new(&world).unwrap();
-            for site in &plan.roadside_landmarks {
+            for site in plan
+                .roadside_landmarks
+                .iter()
+                .filter(|s| !s.building.kind.is_exploration_site())
+            {
                 let b = &site.building;
                 let entry = b.entrance();
                 assert!(plan.villages.iter().all(|v| distance2(

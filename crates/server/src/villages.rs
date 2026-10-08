@@ -3575,8 +3575,9 @@ mod tests {
             .position(|r| r.snapshot.id == 2310)
             .unwrap();
         let resident = &mut life.residents[index];
-        // Exact transit/body state from a native session closed normally at a
-        // shared landing. Physics contacted route 0 while exiting route 7.
+        // Transit state from a native shared-landing contact: physics boarded
+        // route 0 while exiting route 7. Use its current generated ship pose;
+        // the October 8 side-berth repair deliberately moved old landings.
         resident.phase = Phase::ToTrade;
         resident.waypoint = 5595;
         resident.body = Body {
@@ -3600,6 +3601,9 @@ mod tests {
             }),
             deck_position: Some([0.022818793, 0.0, 0.5619632]),
         });
+        let transit = resident.transit.as_ref().unwrap();
+        let ship = network.ship(transit.ride.unwrap().ship_id, time).unwrap();
+        resident.body.position = deck_position(&ship, transit.deck_position.unwrap());
         let cargo = Some(ResourceCargo {
             kind: ResourceKind::Stone,
             amount: 6.0,

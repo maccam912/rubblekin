@@ -8,8 +8,8 @@ use bevy::{
 };
 use rubblekin_core::{
     geography::{Biome, GRID_SIDE, GRID_SPACING, GeoSample, Geography, WORLD_SIZE},
-    settlement::Trail,
-    village_assets::BuildingKind,
+    settlement::{BuildingPlot, Trail},
+    village_assets::{self, BuildingKind},
     world::{CELL_SIZE, GeneratedTree, World, WorldGeneration},
 };
 
@@ -360,6 +360,10 @@ fn paint_settlements(world: &World, grid: MapGrid, data: &mut [u8]) {
         .flat_map(|v| &v.buildings)
         .chain(plan.roadside_landmarks.iter().map(|site| &site.building))
     {
+        if building.kind.is_exploration_site() {
+            paint_discovery(data, grid, building);
+            continue;
+        }
         let [width, _, depth] = building.dimensions();
         paint_rect(
             data,
@@ -376,10 +380,75 @@ fn paint_settlements(world: &World, grid: MapGrid, data: &mut [u8]) {
                 BuildingKind::MasonryCottage
                 | BuildingKind::TrailRuin
                 | BuildingKind::Waystone
-                | BuildingKind::QuarryYard => [139, 142, 133, 255],
+                | BuildingKind::QuarryYard
+                | BuildingKind::StoneArch
+                | BuildingKind::StandingStones
+                | BuildingKind::RuinedTower => [139, 142, 133, 255],
+                BuildingKind::FallenGiant => [111, 100, 64, 255],
+                BuildingKind::TrailCamp => [202, 193, 159, 255],
+                BuildingKind::AbandonedKiln => [149, 100, 71, 255],
                 _ => ROOF_COLOR,
             },
         );
+    }
+}
+
+/// Average actual topmost source-cell colors into each covered map texel.
+/// Open grassy sites must not become solid rectangular grey roofs at distance.
+fn paint_discovery(data: &mut [u8], grid: MapGrid, building: &BuildingPlot) {
+    let [width, height, depth] = building.dimensions();
+    let min = [
+        building.origin.x as f32 * CELL_SIZE,
+        building.origin.z as f32 * CELL_SIZE,
+    ];
+    let max = [
+        min[0] + width as f32 * CELL_SIZE,
+        min[1] + depth as f32 * CELL_SIZE,
+    ];
+    let [x0, x1] = grid.bounds(min[0], max[0]);
+    let [z0, z1] = grid.bounds(min[1], max[1]);
+    let stride = (x1 - x0 + 1) as usize;
+    let mut colors = vec![[0.0_f32; 4]; stride * (z1 - z0 + 1) as usize];
+    for x in building.origin.x..building.origin.x + width {
+        for z in building.origin.z..building.origin.z + depth {
+            let [local_x, local_z] = building.local_cell(x, z).unwrap();
+            let block = (0..height).rev().find_map(|y| {
+                village_assets::block_at(building.kind, local_x, y, local_z)
+                    .filter(|b| b.is_solid())
+            });
+            let Some(block) = block else {
+                continue;
+            };
+            let color = block.color();
+            let cell_min = [x as f32 * CELL_SIZE, z as f32 * CELL_SIZE];
+            let cell_max = cell_min.map(|v| v + CELL_SIZE);
+            let [cx0, cx1] = grid.bounds(cell_min[0], cell_max[0]);
+            let [cz0, cz1] = grid.bounds(cell_min[1], cell_max[1]);
+            for cz in cz0..=cz1 {
+                for cx in cx0..=cx1 {
+                    let weight = rect_coverage(grid, grid.center(cx, cz), cell_min, cell_max);
+                    let sum = &mut colors[(cz - z0) as usize * stride + (cx - x0) as usize];
+                    for axis in 0..3 {
+                        sum[axis] += color[axis] * weight;
+                    }
+                    sum[3] += weight;
+                }
+            }
+        }
+    }
+    for z in z0..=z1 {
+        for x in x0..=x1 {
+            let sum = colors[(z - z0) as usize * stride + (x - x0) as usize];
+            if sum[3] > 0.0 {
+                let color = [0, 1, 2].map(|i| (sum[i] / sum[3] * 255.0).round() as u8);
+                let offset = ((z * grid.side + x) * 4) as usize;
+                blend_pixel(
+                    &mut data[offset..offset + 4],
+                    [color[0], color[1], color[2], 255],
+                    sum[3].min(1.0),
+                );
+            }
+        }
     }
 }
 
@@ -535,6 +604,63 @@ fn append_mips_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovery_atlas_keeps_open_grass_and_actual_rotated_materials() {
+        use rubblekin_core::world::{Block, BlockPos};
+        let grid = MapGrid {
+            side: 64,
+            texel_meters: 1.0,
+        };
+        for kind in [
+            BuildingKind::StoneArch,
+            BuildingKind::StandingStones,
+            BuildingKind::FallenGiant,
+        ] {
+            for rotation in 0..4 {
+                let building = BuildingPlot {
+                    kind,
+                    origin: BlockPos::new(-32760, 0, -32760),
+                    rotation,
+                };
+                let mut pixels = vec![0; (grid.side * grid.side * 4) as usize];
+                paint_discovery(&mut pixels, grid, &building);
+                let grass = Block::Grass.color().map(|c| (c * 255.0).round() as u8);
+                assert!(
+                    pixels
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|p| p[..3] == grass[..3]),
+                    "{kind:?}/{rotation}: open ground became a roof"
+                );
+                assert!(
+                    pixels
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|p| p[0] > grass[0] + 3),
+                    "{kind:?}/{rotation}: structure lost its material"
+                );
+                let [w, _, d] = building.dimensions();
+                for z in 0..grid.side {
+                    for x in 0..grid.side {
+                        let point = grid.center(x, z);
+                        if point[0] < -16380.0
+                            || point[1] < -16380.0
+                            || point[0] > -16380.0 + w as f32 * CELL_SIZE
+                            || point[1] > -16380.0 + d as f32 * CELL_SIZE
+                        {
+                            assert_eq!(
+                                &pixels[((z * grid.side + x) * 4) as usize..][..3],
+                                &[0; 3],
+                                "paint escaped footprint"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     use rubblekin_core::world::{Block, BlockPos, TreeKind};
 
     const ATLAS_SIDE: u32 = BASE_SIDE;

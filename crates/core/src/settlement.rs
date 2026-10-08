@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
+#[path = "settlement_exploration.rs"]
+mod exploration;
 #[path = "settlement_scenic.rs"]
 mod scenic;
 
@@ -195,6 +197,7 @@ enum Feature {
     Deposit(usize),
     RoadsideBuilding(usize),
     RoadsidePath(usize, usize),
+    LandingClearance(usize),
 }
 /// A generated walking destination, independent of village jobs and transit.
 #[derive(Debug, Clone, PartialEq)]
@@ -209,6 +212,7 @@ pub struct SettlementPlan {
     pub trails: Vec<Trail>,
     pub resources: Vec<ResourceDeposit>,
     pub roadside_landmarks: Vec<RoadsideLandmark>,
+    landing_clearances: Vec<[f32; 4]>,
     buckets: HashMap<(i32, i32), Vec<Feature>>,
 }
 
@@ -291,6 +295,7 @@ impl SettlementPlan {
             trails: Vec::new(),
             resources,
             roadside_landmarks: Vec::new(),
+            landing_clearances: Vec::new(),
             buckets: HashMap::new(),
         };
         let freshwater = freshwater_index(geography);
@@ -530,6 +535,15 @@ impl SettlementPlan {
 
     fn build_index(&mut self) {
         let mut bounds = Vec::new();
+        for (index, [x0, z0, x1, z1]) in self.landing_clearances.iter().copied().enumerate() {
+            bounds.push((
+                Feature::LandingClearance(index),
+                x0 - 3.0,
+                z0 - 3.0,
+                x1 + 3.0,
+                z1 + 3.0,
+            ));
+        }
         for (vi, v) in self.villages.iter().enumerate() {
             for (bi, b) in v.buildings.iter().enumerate() {
                 let [w, _, d] = b.dimensions();
@@ -638,6 +652,10 @@ impl SettlementPlan {
                 segment_distance(x, z, t.points[si], t.points[si + 1]).0 <= t.width * 0.5 + radius
             }
             Feature::Deposit(_) => false,
+            Feature::LandingClearance(index) => {
+                let [x0, z0, x1, z1] = self.landing_clearances[index];
+                x >= x0 - radius && x <= x1 + radius && z >= z0 - radius && z <= z1 + radius
+            }
         })
     }
 
@@ -775,6 +793,28 @@ impl SettlementPlan {
                     let entry = b.entrance();
                     let ex = (entry[0] / CELL_SIZE).floor() as i32;
                     let ez = (entry[2] / CELL_SIZE).floor() as i32;
+                    if matches!(
+                        b.kind,
+                        BuildingKind::StoneArch
+                            | BuildingKind::StandingStones
+                            | BuildingKind::FallenGiant
+                    ) && !on_road
+                    {
+                        // Feather natural discoveries into their surroundings
+                        // instead of exposing a rectangular raised grass slab.
+                        let dx = (b.origin.x - x).max(0).max(x - (b.origin.x + w - 1)) as f32
+                            * CELL_SIZE;
+                        let dz = (b.origin.z - z).max(0).max(z - (b.origin.z + d - 1)) as f32
+                            * CELL_SIZE;
+                        let distance = dx.hypot(dz);
+                        if distance > 0.0 && distance < 8.0 {
+                            let blend = 1.0 - distance / 8.0;
+                            out.height = (out.height as f32 * (1.0 - blend)
+                                + b.origin.y as f32 * blend)
+                                .round() as i32;
+                            out.deposit = None;
+                        }
+                    }
                     if (x >= b.origin.x
                         && x < b.origin.x + w
                         && z >= b.origin.z

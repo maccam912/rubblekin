@@ -1049,6 +1049,12 @@ fn add_regional_building_proxy(
             | BuildingKind::Waystone
             | BuildingKind::TrailPavilion
             | BuildingKind::QuarryYard
+            | BuildingKind::StoneArch
+            | BuildingKind::StandingStones
+            | BuildingKind::FallenGiant
+            | BuildingKind::TrailCamp
+            | BuildingKind::RuinedTower
+            | BuildingKind::AbandonedKiln
     ) {
         return false;
     }
@@ -1190,9 +1196,16 @@ fn add_regional_building_proxy(
         BuildingKind::TrailRuin
         | BuildingKind::Waystone
         | BuildingKind::TrailPavilion
-        | BuildingKind::QuarryYard => {
+        | BuildingKind::QuarryYard
+        | BuildingKind::StoneArch
+        | BuildingKind::StandingStones
+        | BuildingKind::FallenGiant
+        | BuildingKind::TrailCamp
+        | BuildingKind::RuinedTower
+        | BuildingKind::AbandonedKiln => {
             let exact_floor =
-                matches!(kind, BuildingKind::TrailPavilion | BuildingKind::QuarryYard);
+                matches!(kind, BuildingKind::TrailPavilion | BuildingKind::QuarryYard)
+                    || kind.is_exploration_site();
             if !exact_floor {
                 part(
                     [0.0; 3],
@@ -3574,6 +3587,12 @@ mod tests {
             BuildingKind::Waystone,
             BuildingKind::TrailPavilion,
             BuildingKind::QuarryYard,
+            BuildingKind::StoneArch,
+            BuildingKind::StandingStones,
+            BuildingKind::FallenGiant,
+            BuildingKind::TrailCamp,
+            BuildingKind::RuinedTower,
+            BuildingKind::AbandonedKiln,
         ] {
             for rotation in 0..4 {
                 let building = BuildingPlot {
@@ -3615,7 +3634,9 @@ mod tests {
                         .iter()
                         .map(|p| p[1])
                         .fold(f32::NEG_INFINITY, f32::max);
-                    if matches!(kind, BuildingKind::TrailPavilion | BuildingKind::QuarryYard) {
+                    if matches!(kind, BuildingKind::TrailPavilion | BuildingKind::QuarryYard)
+                        || kind.is_exploration_site()
+                    {
                         // The quarry's front has a low covered bench; its tall
                         // cut face is at the back. A clipped front half must
                         // match the source there, not an arbitrary full-height

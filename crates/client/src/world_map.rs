@@ -152,6 +152,8 @@ pub(super) enum MapMarker {
     Spawn,
 }
 #[derive(Component)]
+pub(super) struct MapRoadsideGlyph(usize);
+#[derive(Component)]
 pub(super) struct MapPosition;
 #[derive(Component)]
 pub(super) struct MapTownDistance(usize);
@@ -361,7 +363,10 @@ pub(crate) fn setup(
                                     BackgroundColor(Color::srgb(0.23, 0.15, 0.28)),
                                     BorderColor::all(Color::srgb(0.83, 0.65, 0.92)),
                                 ))
-                                .with_child(label(roadside_symbol(site.building.kind), &font, 11.));
+                                .with_child((
+                                    label(roadside_symbol(site.building.kind), &font, 11.),
+                                    MapRoadsideGlyph(index),
+                                ));
                         }
                         for (index, town) in towns.iter().enumerate() {
                             canvas
@@ -718,8 +723,14 @@ pub(crate) fn refresh(
             Option<&MapPosition>,
             Option<&MapTownDistance>,
             Option<&MapScale>,
+            Option<&MapRoadsideGlyph>,
         ),
-        Or<(With<MapPosition>, With<MapTownDistance>, With<MapScale>)>,
+        Or<(
+            With<MapPosition>,
+            With<MapTownDistance>,
+            With<MapScale>,
+            With<MapRoadsideGlyph>,
+        )>,
     >,
 ) {
     let (side, compact) = layout(&window);
@@ -780,7 +791,15 @@ pub(crate) fn refresh(
                     roadside.get(*index).and_then(|site| {
                         map.point(map_uv(&world.0, site.building.entrance()), side)
                     }),
-                    8.,
+                    if map.zoom < 3.0
+                        && roadside
+                            .get(*index)
+                            .is_some_and(|s| s.building.kind.is_exploration_site())
+                    {
+                        3.0
+                    } else {
+                        8.0
+                    },
                 ),
                 MapMarker::You => (you_point, 8.),
                 MapMarker::Spawn => {
@@ -791,6 +810,10 @@ pub(crate) fn refresh(
                     )
                 }
             };
+            if matches!(marker, MapMarker::Roadside(_)) {
+                node.width = px(radius * 2.0);
+                node.height = px(radius * 2.0);
+            }
             node.display = if point.is_some() {
                 Display::Flex
             } else {
@@ -823,7 +846,16 @@ pub(crate) fn refresh(
             image.rect = Some(Rect::from_corners(view.min * size, view.max * size));
         }
     }
-    for (mut text, mut font, location, town, scale) in &mut texts {
+    for (mut text, mut font, location, town, scale, glyph) in &mut texts {
+        if let Some(glyph) = glyph {
+            text.0 = roadside.get(glyph.0).map_or_else(String::new, |site| {
+                if map.zoom < 3.0 && site.building.kind.is_exploration_site() {
+                    String::new()
+                } else {
+                    roadside_symbol(site.building.kind).into()
+                }
+            });
+        }
         if location.is_some() {
             font.font_size = (if side < 280. { 13. } else { 15. }).into();
             text.0 = format!(
@@ -877,7 +909,20 @@ pub(crate) fn refresh(
                     BuildingKind::TrailPavilion | BuildingKind::QuarryYard
                 )
             });
-            text.0 = if extended && compact {
+            let discoveries = roadside
+                .iter()
+                .any(|site| site.building.kind.is_exploration_site());
+            text.0 = if discoveries && compact {
+                format!("{span} · Cyan: you · Gold: towns · Violet: places · Drag/pinch")
+            } else if discoveries && map.zoom < 3.0 {
+                format!(
+                    "{span} · Cyan: you · Gold: towns · Violet: places (zoom for symbols) | Drag/scroll · C/R: center/world"
+                )
+            } else if discoveries {
+                format!(
+                    "{span} · A arch · S stone · F trunk · T camp · O tower · K kiln | R ruin · P shelter · Q quarry | Drag/scroll · C/R: center/world"
+                )
+            } else if extended && compact {
                 format!("{span} · Cyan: you · Gold: towns · R/S/P/Q: places · Drag/pinch")
             } else if extended {
                 format!(
@@ -908,6 +953,12 @@ fn roadside_symbol(kind: BuildingKind) -> &'static str {
         BuildingKind::Waystone => "S",
         BuildingKind::TrailPavilion => "P",
         BuildingKind::QuarryYard => "Q",
+        BuildingKind::StoneArch => "A",
+        BuildingKind::StandingStones => "S",
+        BuildingKind::FallenGiant => "F",
+        BuildingKind::TrailCamp => "T",
+        BuildingKind::RuinedTower => "O",
+        BuildingKind::AbandonedKiln => "K",
         _ => "?",
     }
 }
@@ -918,6 +969,12 @@ fn roadside_name(kind: BuildingKind) -> &'static str {
         BuildingKind::Waystone => "waystone",
         BuildingKind::TrailPavilion => "trail shelter",
         BuildingKind::QuarryYard => "quarry workyard",
+        BuildingKind::StoneArch => "stone arch",
+        BuildingKind::StandingStones => "standing stones",
+        BuildingKind::FallenGiant => "fallen giant",
+        BuildingKind::TrailCamp => "traveller camp",
+        BuildingKind::RuinedTower => "ruined watchtower",
+        BuildingKind::AbandonedKiln => "abandoned kiln",
         _ => "place",
     }
 }
@@ -1127,6 +1184,53 @@ mod tests {
             fixture.app.world().get::<Node>(site).unwrap().display,
             Display::None
         );
+    }
+
+    #[test]
+    fn frequent_discoveries_use_small_dots_until_zoom_reveals_their_symbols() {
+        use rubblekin_core::world::{World, WorldGeneration};
+        let mut fixture = fixture();
+        let world = World::generate(42, WorldGeneration::GeographyV6);
+        let sites = &world.settlements().unwrap().roadside_landmarks;
+        let index = sites
+            .iter()
+            .position(|s| s.building.kind.is_exploration_site())
+            .unwrap();
+        let symbol = roadside_symbol(sites[index].building.kind);
+        let uv = map_uv(&world, sites[index].building.entrance());
+        fixture.app.insert_resource(VoxelWorld(world));
+        let marker = fixture
+            .app
+            .world_mut()
+            .spawn((MapMarker::Roadside(index), Node::default()))
+            .id();
+        let glyph = fixture
+            .app
+            .world_mut()
+            .spawn((
+                MapRoadsideGlyph(index),
+                Text::new(symbol),
+                TextFont::from_font_size(11.),
+            ))
+            .id();
+        fixture.app.world_mut().resource_mut::<WorldMap>().open = true;
+        fixture.app.update();
+        assert_eq!(
+            fixture.app.world().get::<Node>(marker).unwrap().width,
+            px(6.)
+        );
+        assert!(fixture.app.world().get::<Text>(glyph).unwrap().0.is_empty());
+        {
+            let mut map = fixture.app.world_mut().resource_mut::<WorldMap>();
+            map.zoom = 4.;
+            map.center = uv;
+        }
+        fixture.app.update();
+        assert_eq!(
+            fixture.app.world().get::<Node>(marker).unwrap().width,
+            px(16.)
+        );
+        assert_eq!(fixture.app.world().get::<Text>(glyph).unwrap().0, symbol);
     }
 
     fn clear_keys(fixture: &mut Fixture) {

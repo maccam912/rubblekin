@@ -344,6 +344,15 @@ impl World {
             if generation == WorldGeneration::GeographyV6 {
                 plan.add_roadside_workyards(&world);
             }
+            world.settlements = Some(Arc::new(plan.clone()));
+            if let Ok(transit) = crate::airships::AirshipNetwork::try_new(&world) {
+                plan.clear_landing_trees(&transit);
+                if generation == WorldGeneration::GeographyV6 {
+                    plan.add_exploration_sites(&world, &transit);
+                }
+            }
+            // Landing selection sampled columns before its clearings and sites.
+            world.geographic_columns.write().unwrap().clear();
             world.settlements = Some(Arc::new(plan));
         }
         world
@@ -579,6 +588,20 @@ impl World {
             })
         };
         (top + 1) as f32 * CELL_SIZE
+    }
+
+    /// Landing construction can clear generated trees, but must avoid roofs.
+    pub(crate) fn original_structure_height(&self, x: f32, z: f32) -> f32 {
+        let x = (x / CELL_SIZE).floor() as i32;
+        let z = (z / CELL_SIZE).floor() as i32;
+        self.geographic_column(x, z)
+            .map_or(self.min_y() as f32 * CELL_SIZE, |column| {
+                (column
+                    .height
+                    .max(column.construction.map_or(column.height, |c| c.top))
+                    + 1) as f32
+                    * CELL_SIZE
+            })
     }
 
     pub fn spawn_position(&self) -> [f32; 3] {
@@ -1255,18 +1278,18 @@ mod tests {
     }
 
     #[test]
-    fn geography_v4_buildings_lanes_and_tree_identity_stay_frozen() {
+    fn geography_v4_geometry_with_side_landing_clearings_is_reproducible() {
         assert_eq!(
             world_identity(WorldGeneration::GeographyV4),
-            12_027_093_260_194_524_862
+            10_415_806_305_234_660_094
         );
     }
 
     #[test]
-    fn geography_v5_buildings_lanes_trees_and_roadside_identity_stay_frozen() {
+    fn geography_v5_geometry_with_side_landing_clearings_is_reproducible() {
         assert_eq!(
             world_identity(WorldGeneration::GeographyV5),
-            5_569_002_593_533_730_321
+            1_214_427_176_827_204_515
         );
     }
 
