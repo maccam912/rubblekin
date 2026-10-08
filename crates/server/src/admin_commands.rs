@@ -57,6 +57,51 @@ fn execute(
     sim: &Simulation,
     airships: &AirshipNetwork,
 ) -> Result<String, String> {
+    if command == AdminCommand::Wildlife {
+        let ecology = &sim.ecology;
+        let origin = connections[&id]
+            .player
+            .as_ref()
+            .map_or(sim.world.spawn_position(), |p| p.body.position);
+        let mut animals = ecology.snapshots();
+        animals.sort_by(|a, b| {
+            let distance = |p: [f32; 3]| (p[0] - origin[0]).hypot(p[2] - origin[2]);
+            distance(a.position).total_cmp(&distance(b.position))
+        });
+        let mut text = format!(
+            "Wildlife: {} rabbits, {} wolves in {} habitats\nBirths {} · hunted {} · other deaths {} · migrations {}",
+            animals
+                .iter()
+                .filter(|a| a.species == rubblekin_core::wildlife::Species::Rabbit)
+                .count(),
+            animals
+                .iter()
+                .filter(|a| a.species == rubblekin_core::wildlife::Species::Wolf)
+                .count(),
+            ecology.habitats.len(),
+            ecology.births,
+            ecology.hunted,
+            ecology.deaths,
+            ecology.migrations
+        );
+        for species in [
+            rubblekin_core::wildlife::Species::Rabbit,
+            rubblekin_core::wildlife::Species::Wolf,
+        ] {
+            for a in animals.iter().filter(|a| a.species == species).take(2) {
+                text.push_str(&format!(
+                    "\n{} #{}: {:.2} {:.2} {:.2} · {}",
+                    species.name(),
+                    a.id,
+                    a.position[0],
+                    a.position[1],
+                    a.position[2],
+                    a.action.label()
+                ));
+            }
+        }
+        return Ok(text);
+    }
     let AdminCommand::Teleport {
         player,
         destination,

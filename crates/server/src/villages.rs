@@ -3665,6 +3665,7 @@ mod tests {
         let simulation = crate::persistence::Simulation {
             profiles: Default::default(),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             world: world.clone(),
             npc: crate::npc::Forager::new(&world),
             world_time: time,
@@ -3819,6 +3820,7 @@ mod tests {
             let simulation = crate::persistence::Simulation {
                 profiles: Default::default(),
                 consumed_quarry_cells: Vec::new(),
+                ecology: crate::ecology::Ecology::default(),
                 world: world.clone(),
                 npc: crate::npc::Forager::new(&world),
                 world_time: saved_time,
@@ -3910,6 +3912,7 @@ mod tests {
         let simulation = crate::persistence::Simulation {
             profiles: Default::default(),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             world: world.clone(),
             npc: crate::npc::Forager::new(&world),
             world_time: 120.0,
@@ -4609,6 +4612,7 @@ mod tests {
         let sim = Simulation {
             profiles: Default::default(),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             npc: Forager::new(&world),
             world,
             world_time: 123.0,

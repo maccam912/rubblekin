@@ -2458,3 +2458,60 @@ fn quarry_save_failure_confirms_neither_block_removal_nor_cargo_and_restart_keep
     drop(client);
     server.stop().unwrap();
 }
+
+#[test]
+fn wildlife_replicates_advances_without_clients_and_keeps_its_saved_population() {
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV6;
+    let server = spawn(config.clone()).unwrap();
+    let (mut observer, _) =
+        Client::connect_mode(server.addr, "Wildlife review", SessionMode::Observer);
+    let first = observer.until(|m| matches!(m, ServerMessage::WildlifeState { .. }));
+    let ServerMessage::WildlifeState { animals, habitats } = first else {
+        unreachable!()
+    };
+    assert!(animals.len() > 100);
+    assert!(habitats.len() > 40);
+    let first_hunger = animals[0].hunger;
+    drop(observer);
+    thread::sleep(Duration::from_millis(1100));
+    let (mut observer, _) =
+        Client::connect_mode(server.addr, "Wildlife return", SessionMode::Observer);
+    let next = observer.until(|m| matches!(m, ServerMessage::WildlifeState { .. }));
+    let ServerMessage::WildlifeState { animals: next, .. } = next else {
+        unreachable!()
+    };
+    assert!(
+        next.iter()
+            .any(|a| a.id == animals[0].id && a.hunger != first_hunger),
+        "wildlife needs must advance with nobody connected"
+    );
+    drop(observer);
+    server.stop().unwrap();
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(saved["version"], 6);
+    saved["ecology"]["animals"][0]["hunger"] = 12.345.into();
+    fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let (mut observer, _) =
+        Client::connect_mode(server.addr, "Wildlife restart", SessionMode::Observer);
+    let message = observer.until(|m| matches!(m, ServerMessage::WildlifeState { .. }));
+    let ServerMessage::WildlifeState { animals, .. } = message else {
+        unreachable!()
+    };
+    assert!(
+        animals[0].hunger < 15.,
+        "restart must load needs instead of reseeding animals"
+    );
+    observer.send(ClientMessage::AdminCommand {
+        command: "wildlife".into(),
+    });
+    let reply = observer.until(|m| matches!(m, ServerMessage::AdminCommandResult { .. }));
+    assert!(
+        matches!(reply,ServerMessage::AdminCommandResult{text} if text.contains("rabbits")&&text.contains("wolves"))
+    );
+    drop(observer);
+    server.stop().unwrap();
+}

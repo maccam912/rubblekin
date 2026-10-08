@@ -11,6 +11,7 @@ pub(crate) enum InspectTarget {
     Npc,
     Resident(u64),
     Player(u64),
+    Wildlife(u64),
     Block(BlockPos),
     FarmPlot { village: u32, field: usize },
 }
@@ -22,6 +23,7 @@ pub(crate) fn update(
     mut session: ResMut<Session>,
     avatars: Res<Avatars>,
     transforms: Query<&Transform, With<Avatar>>,
+    wildlife: Query<(&crate::wildlife::Wildlife, &Transform)>,
     pause: Option<Res<pause::PauseMenu>>,
     mut gizmos: Gizmos,
 ) {
@@ -33,6 +35,12 @@ pub(crate) fn update(
         entity
             .and_then(|entity| transforms.get(*entity).ok())
             .map_or(Vec3::from_array(fallback), |pose| pose.translation)
+    };
+    let animal_pose = |id, fallback| {
+        wildlife
+            .iter()
+            .find(|(a, _)| a.id == id)
+            .map_or(Vec3::from_array(fallback), |(_, p)| p.translation)
     };
     if session.inspect_requested {
         let characters = std::iter::once((
@@ -57,6 +65,12 @@ pub(crate) fn update(
                     )
                 }),
         );
+        let characters = characters.chain(
+            session
+                .wildlife
+                .iter()
+                .map(|a| (InspectTarget::Wildlife(a.id), animal_pose(a.id, a.position))),
+        );
         let selected = pick(&world.0, &session, &camera, characters);
         session.inspected = selected;
         session.inspect_requested = false;
@@ -77,6 +91,11 @@ pub(crate) fn update(
             .iter()
             .find(|p| p.id == id)
             .map(|p| (rendered(avatars.players.get(&id), p.body.position), None)),
+        Some(InspectTarget::Wildlife(id)) => session
+            .wildlife
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| (animal_pose(id, a.position), None)),
         Some(InspectTarget::Block(position)) => {
             gizmos.cube(
                 Transform::from_translation(block_center(position))
@@ -109,9 +128,9 @@ pub(crate) fn update(
         None => None,
     };
     if let Some((feet, target)) = character {
+        let size = target_size(&session, session.inspected.unwrap());
         gizmos.cube(
-            Transform::from_translation(feet + Vec3::Y * CHARACTER_SIZE.y * 0.5)
-                .with_scale(CHARACTER_SIZE),
+            Transform::from_translation(feet + Vec3::Y * size.y * 0.5).with_scale(size),
             color,
         );
         if let Some(target) = target {
@@ -121,6 +140,20 @@ pub(crate) fn update(
                 color,
             );
         }
+    }
+}
+
+fn target_size(session: &Session, target: InspectTarget) -> Vec3 {
+    if let InspectTarget::Wildlife(id) = target {
+        session
+            .wildlife
+            .iter()
+            .find(|a| a.id == id)
+            .map_or(CHARACTER_SIZE, |a| {
+                crate::wildlife::rendered_size(a.species)
+            })
+    } else {
+        CHARACTER_SIZE
     }
 }
 
@@ -138,8 +171,9 @@ fn pick(
         .map_or(INSPECT_DISTANCE, |hit| hit.distance);
     let mut selected = terrain.map(|hit| block_target(world, hit.position));
     for (target, feet) in characters {
-        let center = feet + Vec3::Y * CHARACTER_SIZE.y * 0.5;
-        if let Some(distance) = box_hit(origin, direction, center, CHARACTER_SIZE, closest) {
+        let size = target_size(session, target);
+        let center = feet + Vec3::Y * size.y * 0.5;
+        if let Some(distance) = box_hit(origin, direction, center, size, closest) {
             closest = distance;
             selected = Some(target);
         }
@@ -259,6 +293,41 @@ mod tests {
             SessionMode::Observer,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn wildlife_uses_its_small_aimed_bounds_and_cannot_be_inspected_through_a_wall() {
+        use rubblekin_core::wildlife::{Species, WildlifeAction, WildlifeSnapshot};
+        let (mut world, mut session) = fixture(WorldGeneration::ValleyV1);
+        session.wildlife.push(WildlifeSnapshot {
+            id: 7,
+            species: Species::Rabbit,
+            position: [1., 50., 0.],
+            velocity: [0.; 3],
+            action: WildlifeAction::Grazing,
+            hunger: 40.,
+            habitat: 0,
+        });
+        let target = (InspectTarget::Wildlife(7), Vec3::new(1., 50., 0.));
+        let camera = Transform::from_xyz(-2., 50.4, 0.).looking_to(Vec3::X, Vec3::Y);
+        assert_eq!(
+            pick(&world, &session, &camera, [target]),
+            Some(InspectTarget::Wildlife(7))
+        );
+        let high = Transform::from_xyz(-2., 51.2, 0.).looking_to(Vec3::X, Vec3::Y);
+        assert_eq!(
+            pick(&world, &session, &high, [target]),
+            None,
+            "the rabbit must not have human-sized aimed bounds"
+        );
+        let wall = BlockPos::new(0, 100, 0);
+        world
+            .set_block(wall, rubblekin_core::world::Block::Brick)
+            .unwrap();
+        assert_eq!(
+            pick(&world, &session, &camera, [target]),
+            Some(InspectTarget::Block(wall))
+        );
     }
 
     #[test]

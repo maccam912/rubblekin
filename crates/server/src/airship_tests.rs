@@ -16,6 +16,7 @@ impl Fixture {
         let sim = Simulation {
             profiles: Default::default(),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             npc: npc::Forager::new(&world),
             villages: villages::VillageLife::new(&world),
             world,

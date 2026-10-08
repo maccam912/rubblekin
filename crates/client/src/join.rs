@@ -1237,6 +1237,8 @@ pub(crate) fn session_from_welcome(
             npc,
             residents,
             villages,
+            wildlife: Vec::new(),
+            habitats: Vec::new(),
             players,
             world_time,
             airships,

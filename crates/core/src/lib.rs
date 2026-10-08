@@ -8,4 +8,5 @@ pub mod physics;
 pub mod protocol;
 pub mod settlement;
 pub mod village_assets;
+pub mod wildlife;
 pub mod world;

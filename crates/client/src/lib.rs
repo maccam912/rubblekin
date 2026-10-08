@@ -26,6 +26,7 @@ mod terrain_material;
 mod touch;
 mod ui;
 mod village_details;
+mod wildlife;
 mod work_animation;
 mod work_tools;
 mod world_map;
@@ -85,6 +86,8 @@ pub struct Session {
     pub npc: NpcSnapshot,
     pub residents: Vec<ResidentSnapshot>,
     pub villages: Vec<VillageSnapshot>,
+    pub wildlife: Vec<rubblekin_core::wildlife::WildlifeSnapshot>,
+    pub habitats: Vec<rubblekin_core::wildlife::HabitatSnapshot>,
     pub players: Vec<PlayerSnapshot>,
     pub world_time: f64,
     pub(crate) airships: AirshipNetwork,
@@ -438,6 +441,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         update_avatars,
                         work_animation::animate,
                         work_tools::update,
+                        wildlife::update,
                         airships::update_scene,
                         crops::update_crops,
                         inspection::update,
@@ -597,6 +601,10 @@ fn receive_network(
                 session
                     .airship_clock
                     .observe(world_time, time.elapsed_secs_f64());
+            }
+            ServerMessage::WildlifeState { animals, habitats } => {
+                session.wildlife = animals;
+                session.habitats = habitats;
             }
             ServerMessage::BlockChanged { edit, .. } => {
                 if world.0.set_block(edit.position, edit.block).is_ok() {

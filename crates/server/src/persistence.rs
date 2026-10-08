@@ -17,7 +17,7 @@ use crate::{
     villages::VillageLife,
 };
 
-const SAVE_VERSION: u32 = 5;
+const SAVE_VERSION: u32 = 6;
 pub(crate) const MAX_EDITS: usize = 100_000;
 
 /// The sidecar remains on disk, but its OS lock is released on close or crash.
@@ -62,6 +62,8 @@ struct Save {
     profiles: Option<Profiles>,
     #[serde(default)]
     consumed_quarry_cells: Option<Vec<BlockPos>>,
+    #[serde(default)]
+    ecology: Option<crate::ecology::Ecology>,
 }
 
 pub(crate) struct Simulation {
@@ -71,6 +73,7 @@ pub(crate) struct Simulation {
     pub villages: VillageLife,
     pub profiles: Profiles,
     pub consumed_quarry_cells: Vec<BlockPos>,
+    pub ecology: crate::ecology::Ecology,
 }
 
 impl Simulation {
@@ -80,6 +83,7 @@ impl Simulation {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let world = World::generate(seed, generation);
                 return Ok(Self {
+                    ecology: crate::ecology::Ecology::new(&world),
                     npc: Forager::new(&world),
                     villages: VillageLife::new(&world),
                     profiles: Profiles::default(),
@@ -99,7 +103,7 @@ impl Simulation {
                 path.display()
             ))
         })?;
-        if ![1, 2, 3, 4, SAVE_VERSION].contains(&save.version) {
+        if ![1, 2, 3, 4, 5, SAVE_VERSION].contains(&save.version) {
             return Err(invalid(format!(
                 "Unsupported save version {}",
                 save.version
@@ -115,7 +119,7 @@ impl Simulation {
         let generation = match (save.version, save.generation) {
             (1, None | Some(WorldGeneration::ValleyV1)) => WorldGeneration::ValleyV1,
             (2, Some(generation)) if !generation.has_settlements() => generation,
-            (3..=5, Some(generation)) => generation,
+            (3..=6, Some(generation)) => generation,
             _ => {
                 return Err(invalid(
                     "Save has an invalid or missing terrain generation version",
@@ -172,7 +176,17 @@ impl Simulation {
                 "Save contains invalid or duplicate consumed quarry cells; original left untouched",
             ));
         }
+        let ecology = match save.ecology {
+            Some(ecology) if ecology.validate(&world) => ecology,
+            None if save.version < 6 => crate::ecology::Ecology::new(&world),
+            _ => {
+                return Err(invalid(
+                    "Save contains invalid or missing wildlife; original left untouched",
+                ));
+            }
+        };
         Ok(Self {
+            ecology,
             world,
             npc: save.npc,
             world_time: save.world_time,
@@ -214,6 +228,7 @@ impl Simulation {
                 villages: Some(self.villages.clone()),
                 profiles: Some(self.profiles.clone()),
                 consumed_quarry_cells: Some(self.consumed_quarry_cells.clone()),
+                ecology: Some(self.ecology.clone()),
             };
             write_save(&mut file, &save)?;
             file.sync_all()?;
@@ -247,6 +262,35 @@ mod tests {
     use super::*;
     use rubblekin_core::world::{Block, BlockPos};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn wildlife_round_trips_and_current_missing_or_corrupt_state_fails_untouched() {
+        let path = TestPath::new();
+        let mut sim = Simulation::load(&path.0, 42, WorldGeneration::GeographyV6).unwrap();
+        for _ in 0..40 {
+            sim.ecology.tick(&sim.world, 0.05, &[]);
+        }
+        sim.save(&path.0).unwrap();
+        let loaded = Simulation::load(&path.0, 0, WorldGeneration::ValleyV1).unwrap();
+        assert_eq!(
+            serde_json::to_value(&loaded.ecology).unwrap(),
+            serde_json::to_value(&sim.ecology).unwrap()
+        );
+        let original: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        for missing in [true, false] {
+            let mut invalid = original.clone();
+            if missing {
+                invalid.as_object_mut().unwrap().remove("ecology");
+            } else {
+                invalid["ecology"]["animals"][0]["habitat"] = 9999.into();
+            }
+            let bytes = serde_json::to_vec(&invalid).unwrap();
+            fs::write(&path.0, &bytes).unwrap();
+            assert!(Simulation::load(&path.0, 0, WorldGeneration::ValleyV1).is_err());
+            assert_eq!(fs::read(&path.0).unwrap(), bytes);
+        }
+    }
 
     #[test]
     fn old_saves_gain_empty_profiles_but_current_missing_or_invalid_progress_fails_untouched() {
@@ -424,6 +468,7 @@ mod tests {
             villages: Some(VillageLife::default()),
             profiles: Some(Profiles::default()),
             consumed_quarry_cells: Some(Vec::new()),
+            ecology: Some(crate::ecology::Ecology::default()),
         };
         // This entire save fits in the buffer. Serialization succeeds before
         // the explicit final flush tries to write it; dropping BufWriter alone
@@ -446,6 +491,7 @@ mod tests {
         let sim = Simulation {
             profiles: Default::default(),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             world,
             npc,
             world_time: 1234.0,
@@ -470,7 +516,7 @@ mod tests {
         loaded.save(&path.0).unwrap();
         let updated: serde_json::Value =
             serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        assert_eq!(updated["version"], 5);
+        assert_eq!(updated["version"], SAVE_VERSION);
         let again = Simulation::load(&path.0, 999, WorldGeneration::GeographyV2).unwrap();
         assert_eq!(again.world.generation(), WorldGeneration::ValleyV1);
         assert_eq!(again.world.edits(), sim.world.edits());
@@ -495,6 +541,7 @@ mod tests {
         let sim = Simulation {
             profiles: Default::default(),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             npc: Forager::new(&world),
             world,
             world_time: 217.5,
@@ -525,7 +572,7 @@ mod tests {
         assert_eq!(loaded.world.block(placed), Block::Brick);
         loaded.save(&path.0).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        assert_eq!(saved["version"], 5);
+        assert_eq!(saved["version"], SAVE_VERSION);
         assert_eq!(saved["generation"], "GeographyV1");
         // An actual pre-village version-2 save has no village state field.
         let mut pre_villages = saved;
@@ -553,7 +600,7 @@ mod tests {
         sim.world_time = 412.5;
         sim.save(&path.0).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        assert_eq!(saved["version"], 5);
+        assert_eq!(saved["version"], SAVE_VERSION);
         assert_eq!(saved["generation"], "GeographyV2");
 
         let loaded = Simulation::load(&path.0, 999, WorldGeneration::ValleyV1).unwrap();
@@ -574,6 +621,7 @@ mod tests {
         let sim = Simulation {
             profiles: Default::default(),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             npc: Forager::new(&world),
             world,
             world_time: 0.0,

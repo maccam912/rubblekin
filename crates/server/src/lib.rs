@@ -3,6 +3,7 @@
 
 mod admin_commands;
 mod airships;
+mod ecology;
 mod local_work;
 mod navigation;
 mod npc;
@@ -452,7 +453,7 @@ fn run(
         let mut npc_obstacles = player_positions.clone();
         npc_obstacles.extend(sim.villages.positions());
         sim.npc.tick_with_obstacles(&sim.world, DT, &npc_obstacles);
-        let mut resident_obstacles = player_positions;
+        let mut resident_obstacles = player_positions.clone();
         resident_obstacles.push(sim.npc.snapshot.position);
         let passenger_seats: Vec<_> = connections
             .values()
@@ -466,6 +467,10 @@ fn run(
             next_world_time,
             &passenger_seats,
         );
+        let mut wildlife_people = player_positions;
+        wildlife_people.push(sim.npc.snapshot.position);
+        wildlife_people.extend(sim.villages.positions());
+        sim.ecology.tick(&sim.world, DT, &wildlife_people);
         sim.world_time = next_world_time;
         advance_local_work(&mut connections, &mut sim, config)?;
         checkpoint_players(&connections, &mut sim);
@@ -477,6 +482,9 @@ fn run(
             world_time: sim.world_time,
         };
         broadcast(&mut connections, &state);
+        if (sim.world_time / 0.2).floor() != ((sim.world_time - DT as f64) / 0.2).floor() {
+            broadcast_wildlife(&mut connections, &sim);
+        }
         if last_save.elapsed() >= Duration::from_secs(5) {
             sim.save(&config.save_path)?;
             last_save = Instant::now();
@@ -593,6 +601,30 @@ fn free_player_spawn(world: &World, obstacles: &[[f32; 3]]) -> Option<[f32; 3]> 
         }
     }
     None
+}
+
+fn broadcast_wildlife(connections: &mut BTreeMap<u64, Connection>, sim: &Simulation) {
+    let animals = sim.ecology.snapshots();
+    let habitats = sim.ecology.habitat_snapshots();
+    for connection in connections
+        .values_mut()
+        .filter(|c| c.mode.is_some() && c.closing_at.is_none() && !c.dead)
+    {
+        let nearby = animals
+            .iter()
+            .filter(|a| {
+                connection.player.as_ref().is_none_or(|p| {
+                    (a.position[0] - p.body.position[0]).hypot(a.position[2] - p.body.position[2])
+                        < 320.
+                })
+            })
+            .cloned()
+            .collect();
+        connection.send(&ServerMessage::WildlifeState {
+            animals: nearby,
+            habitats: habitats.clone(),
+        });
+    }
 }
 
 fn broadcast(connections: &mut BTreeMap<u64, Connection>, message: &ServerMessage) {
@@ -745,6 +777,13 @@ fn handle_message(
             can_admin: config.allow_admin && mode == SessionMode::Player,
         };
         connections.get_mut(&id).unwrap().send(&welcome);
+        connections
+            .get_mut(&id)
+            .unwrap()
+            .send(&ServerMessage::WildlifeState {
+                animals: sim.ecology.snapshots(),
+                habitats: sim.ecology.habitat_snapshots(),
+            });
         if profile_id.is_some() {
             send_market_state(connections, sim, id, 0, None, String::new(), true);
             send_work_state(connections, sim, id, 0, String::new(), true);
@@ -779,6 +818,12 @@ fn handle_message(
                     });
                 return Ok(());
             }
+            ClientMessage::AdminCommand { command }
+                if matches!(
+                    rubblekin_core::admin_commands::parse_admin_command(command),
+                    Ok(rubblekin_core::admin_commands::AdminCommand::Help
+                        | rubblekin_core::admin_commands::AdminCommand::Wildlife)
+                ) => {}
             ClientMessage::AdminCommand { .. } => {
                 connections
                     .get_mut(&id)
@@ -1441,6 +1486,7 @@ mod tests {
             world,
             profiles: BTreeMap::from([(profile, saved)]),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             world_time: 0.0,
         };
         let mut budget = 1;

@@ -12,6 +12,7 @@ pub(crate) fn text(world: &GameWorld, session: &Session) -> String {
         None => "Nothing under the center dot.\n\nAim at a character, block, or farm plot, then reopen the inspector.".into(),
         Some(InspectTarget::Npc) => npc_text(session),
         Some(InspectTarget::Resident(id)) => resident_text(world, session, id),
+        Some(InspectTarget::Wildlife(id)) => wildlife_text(session, id),
         Some(InspectTarget::Player(id)) => player_text(session, id),
         Some(InspectTarget::Block(position)) => block_text(world, session, position),
         Some(InspectTarget::FarmPlot { village, field }) => {
@@ -379,6 +380,29 @@ fn plant_sites(world: &GameWorld, field: &FieldPlot) -> (usize, usize) {
                 total + 1,
             )
         })
+}
+
+fn wildlife_text(session: &Session, id: u64) -> String {
+    let Some(a) = session.wildlife.iter().find(|a| a.id == id) else {
+        return "This animal has moved away or is no longer alive.\n\nReopen the inspector to select a new target.".into();
+    };
+    let habitat = session
+        .habitats
+        .iter()
+        .find(|h| h.id == a.habitat)
+        .map_or(String::new(), |h| {
+            format!(
+                "\n\nHome range: {} rabbits · {} wolves\nWild forage: {:.0}%",
+                h.rabbits, h.wolves, h.forage
+            )
+        });
+    format!(
+        "{}\n{}\n\nHunger: {:.0}%{}\n\nWildlife keeps its distance from people. Rabbits graze wild plants; wolves hunt rabbits. Populations breed and move as food changes.",
+        a.species.name(),
+        a.action.label(),
+        a.hunger,
+        habitat
+    )
 }
 
 #[cfg(test)]

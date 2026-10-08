@@ -16,6 +16,7 @@ impl Fixture {
         let sim = Simulation {
             profiles: Default::default(),
             consumed_quarry_cells: Vec::new(),
+            ecology: crate::ecology::Ecology::default(),
             npc: npc::Forager::new(&world),
             villages: villages::VillageLife::new(&world),
             world,
@@ -500,6 +501,7 @@ fn named_airship_teleports_attach_inside_rotated_deck_and_follow_its_fast_motion
     f.sim = Simulation {
         profiles: Default::default(),
         consumed_quarry_cells: Vec::new(),
+        ecology: crate::ecology::Ecology::default(),
         npc: npc::Forager::new(&world),
         villages: villages::VillageLife::new(&world),
         world,

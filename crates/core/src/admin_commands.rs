@@ -2,6 +2,7 @@
 
 pub const MAX_ADMIN_COMMAND_BYTES: usize = 256;
 pub const ADMIN_COMMAND_HELP: &str = "help — show commands\n\
+wildlife — show populations and nearby animal coordinates\n\
 teleport X Y Z — teleport yourself to coordinates\n\
 teleport PLAYER X Y Z — teleport a player to coordinates\n\
 teleport DESTINATION — teleport yourself beside a player\n\
@@ -12,6 +13,7 @@ Player names match exactly, ignoring case. Quote names with spaces: teleport \"I
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdminCommand {
     Help,
+    Wildlife,
     Teleport {
         /// None means the player who entered the command.
         player: Option<String>,
@@ -40,6 +42,8 @@ pub fn parse_admin_command(command: &str) -> Result<AdminCommand, String> {
     };
     let name = name.strip_prefix('/').unwrap_or(name).to_ascii_lowercase();
     match (name.as_str(), &words[1..]) {
+        ("wildlife", []) => Ok(AdminCommand::Wildlife),
+        ("wildlife", _) => Err("Usage: wildlife".into()),
         ("help", []) => Ok(AdminCommand::Help),
         ("help", _) => Err("Usage: help".into()),
         ("teleport" | "tp", [destination]) => Ok(AdminCommand::Teleport {
