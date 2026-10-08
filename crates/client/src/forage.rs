@@ -2,9 +2,9 @@
 use crate::{GameEntity, Session, VoxelWorld, terrain::Geometry};
 use bevy::{light::NotShadowCaster, prelude::*};
 use rubblekin_core::{
-    geography::Biome,
+    forage::{self, PlantKind},
     wildlife::HabitatSnapshot,
-    world::{Block, BlockPos, CELL_SIZE, World},
+    world::World,
 };
 use std::collections::HashMap;
 
@@ -20,45 +20,12 @@ struct Patch {
     mesh: Handle<Mesh>,
     stage: u8,
 }
-fn stage(forage: f32) -> u8 {
-    (forage.clamp(0., 100.) / 5.).floor() as u8
-}
-fn hash(seed: u32, id: u32, index: u32) -> u32 {
-    let mut h = seed ^ id.wrapping_mul(0x9e3779b9) ^ index.wrapping_mul(0x85ebca6b);
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x7feb352d);
-    h ^= h >> 15;
-    h
-}
 /// Actual supported plant cuboids, shared by rendering and aimed inspection.
 pub(crate) fn parts(world: &World, habitat: &HabitatSnapshot) -> Vec<(Vec3, Vec3, [f32; 4])> {
     let mut out = Vec::new();
-    let count = usize::from(stage(habitat.forage)) * 2;
-    for index in 0..count {
-        let h = hash(world.seed, habitat.id, index as u32);
-        let angle = (h & 65535) as f32 / 65536. * std::f32::consts::TAU;
-        let radius = 4. + ((h >> 16) & 65535) as f32 / 65536. * 38.;
-        let x = habitat.position[0] + angle.cos() * radius;
-        let z = habitat.position[2] + angle.sin() * radius;
-        let cx = (x / CELL_SIZE).floor() as i32;
-        let cz = (z / CELL_SIZE).floor() as i32;
-        let cy = world.height_at(cx, cz);
-        let biome = world.geography().map(|g| g.sample(x, z).biome);
-        let berries = matches!(
-            biome,
-            Some(Biome::Forest | Biome::Rainforest | Biome::PineForest)
-        );
-        if world.block(BlockPos::new(cx, cy, cz)) != Block::Grass
-            || !(1..=if berries { 2 } else { 1 })
-                .all(|dy| world.block(BlockPos::new(cx, cy + dy, cz)) == Block::Air)
-        {
-            continue;
-        }
-        let base = Vec3::new(
-            (cx as f32 + 0.5) * CELL_SIZE,
-            (cy + 1) as f32 * CELL_SIZE,
-            (cz as f32 + 0.5) * CELL_SIZE,
-        );
+    for plant in forage::plants(world, habitat.id, habitat.position, habitat.forage) {
+        let base = Vec3::from_array(plant.position());
+        let berries = plant.kind == PlantKind::Berries;
         let mut part = |p, s, c| out.push((base + Vec3::from_array(p), Vec3::from_array(s), c));
         if berries {
             let green = [0.25, 0.40, 0.20, 1.];
@@ -73,7 +40,7 @@ pub(crate) fn parts(world: &World, habitat: &HabitatSnapshot) -> Vec<(Vec3, Vec3
                 part(p, [0.085, 0.085, 0.085], [0.62, 0.19, 0.21, 1.]);
             }
         } else {
-            let dry = matches!(biome, Some(Biome::Shrubland));
+            let dry = plant.kind == PlantKind::Herbs;
             let green = if dry {
                 [0.46, 0.49, 0.29, 1.]
             } else {
@@ -132,7 +99,7 @@ pub(crate) fn update(
         })
         .clone();
     for h in visible {
-        let band = stage(h.forage);
+        let band = forage::density(h.forage);
         if scene.patches.get(&h.id).is_some_and(|p| p.stage == band) && !world.is_changed() {
             continue;
         }
@@ -179,6 +146,7 @@ pub(crate) fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rubblekin_core::world::{Block, BlockPos, CELL_SIZE};
     #[test]
     fn food_thins_regrows_at_stable_places_and_edits_remove_actual_plants() {
         let mut world = World::new(42);

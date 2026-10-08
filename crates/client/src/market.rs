@@ -883,7 +883,7 @@ fn work_text(panel: &MarketPanel, session: &Session) -> String {
         );
     }
     let Some(offer) = &panel.work.offer else {
-        return "LOCAL WORK · Visit fields or workshops for work, or collect stone at a quarry and sell it at a market.".into();
+        return "LOCAL WORK · Visit fields or workshops for work, gather wild food, or collect quarry stone to sell at a market.".into();
     };
     let distance = Vec2::new(
         offer.position[0] - session.body.position[0],
@@ -891,6 +891,9 @@ fn work_text(panel: &MarketPanel, session: &Session) -> String {
     )
     .length();
     let task = match offer.site.kind {
+        WorkKind::GatherForage => {
+            "Gather 1 Food from the wild plant. Rabbits share this supply; heavy gathering leaves less food until it regrows. Sell it at a village market."
+        }
         WorkKind::TendField => "Plant and tend the village's real crops.",
         WorkKind::HarvestField => {
             "Gather ripe Food into your cargo. Sell it at a village market to earn coins; village food reserves stay protected."
@@ -987,6 +990,7 @@ pub(crate) fn hud_text(
     if let Some(offer) = panel.nearby_work(session, now) {
         let activity = match offer.site.kind {
             WorkKind::TendField => "Tend field",
+            WorkKind::GatherForage => "Gather wild food",
             WorkKind::HarvestField => "Harvest field",
             WorkKind::QuarryStone => "Collect stone",
             WorkKind::WorkshopMaintenance => "Workshop maintenance",

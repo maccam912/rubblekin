@@ -4,6 +4,7 @@
 mod admin_commands;
 mod airships;
 mod ecology;
+mod forage_work;
 mod local_work;
 mod navigation;
 mod npc;
@@ -1177,13 +1178,29 @@ fn send_work_state(
         .map_or_else(PlayerEconomy::default, |saved| saved.ledger.clone());
     let work = WorkState {
         offer: connection.player.as_ref().and_then(|player| {
-            local_work::nearest_offer(
+            let position = player.body.position;
+            let village = local_work::nearest_offer(
                 &sim.world,
                 &sim.villages,
                 &sim.consumed_quarry_cells,
-                player.body.position,
+                position,
                 &ledger,
-            )
+            );
+            let wild = forage_work::nearest_offer(&sim.world, &sim.ecology, position, &ledger);
+            village.into_iter().chain(wild).min_by(|a, b| {
+                a.unavailable_reason
+                    .is_some()
+                    .cmp(&b.unavailable_reason.is_some())
+                    .then_with(|| {
+                        let distance = |p: [f32; 3]| {
+                            p.iter()
+                                .zip(position)
+                                .map(|(a, b)| (a - b).powi(2))
+                                .sum::<f32>()
+                        };
+                        distance(a.position).total_cmp(&distance(b.position))
+                    })
+            })
         }),
         active: connection
             .active_work
@@ -1209,12 +1226,12 @@ fn handle_work(
     let result = (|| -> Result<String, String> {
         let connection = connections.get_mut(&id).unwrap();
         if connection.profile_id.is_none() {
-            return Err("Rejoin with a saved guest profile to do village work.".into());
+            return Err("Rejoin with a saved guest profile to work or gather.".into());
         }
         let player = connection
             .player
             .as_ref()
-            .ok_or("Only players can do village work.")?;
+            .ok_or("Only players can work or gather.")?;
         if action != WorkAction::View {
             if request_id == 0
                 || connection
@@ -1254,14 +1271,24 @@ fn handle_work(
                 if connection.active_work.is_some() {
                     return Err("Finish or cancel your current work first.".into());
                 }
-                let active = local_work::start(
-                    &sim.world,
-                    &sim.villages,
-                    &sim.consumed_quarry_cells,
-                    site,
-                    player.body.position,
-                    sim.world_time,
-                )?;
+                let active = if site.kind == WorkKind::GatherForage {
+                    forage_work::start(
+                        &sim.world,
+                        &sim.ecology,
+                        site,
+                        player.body.position,
+                        sim.world_time,
+                    )?
+                } else {
+                    local_work::start(
+                        &sim.world,
+                        &sim.villages,
+                        &sim.consumed_quarry_cells,
+                        site,
+                        player.body.position,
+                        sim.world_time,
+                    )?
+                };
                 let ledger = &sim.profiles[connection.profile_id.as_ref().unwrap()].ledger;
                 local_work::check_reward(ledger, active.progress.offer.reward)?;
                 connection.active_work = Some(active);
@@ -1291,14 +1318,25 @@ fn advance_local_work(
         let (Some(profile), Some(player)) = (&connection.profile_id, &connection.player) else {
             continue;
         };
-        match local_work::advance(
-            &sim.world,
-            &sim.villages,
-            &sim.consumed_quarry_cells,
-            &mut active,
-            player.body.position,
-            sim.world_time,
-        ) {
+        let progress = if active.progress.offer.site.kind == WorkKind::GatherForage {
+            forage_work::advance(
+                &sim.world,
+                &sim.ecology,
+                &mut active,
+                player.body.position,
+                sim.world_time,
+            )
+        } else {
+            local_work::advance(
+                &sim.world,
+                &sim.villages,
+                &sim.consumed_quarry_cells,
+                &mut active,
+                player.body.position,
+                sim.world_time,
+            )
+        };
+        match progress {
             Err(reason) => replies.push((id, format!("Work stopped: {reason}"), false)),
             Ok(true) => {
                 let ledger = &mut sim.profiles.get_mut(profile).unwrap().ledger;
@@ -1313,6 +1351,8 @@ fn advance_local_work(
                         block_changes.push((id, edit));
                         notice
                     })
+                } else if active.progress.offer.site.kind == WorkKind::GatherForage {
+                    forage_work::complete(&sim.world, &mut sim.ecology, ledger, &active)
                 } else {
                     local_work::complete(&sim.world, &mut sim.villages, ledger, &active)
                 };

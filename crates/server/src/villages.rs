@@ -286,6 +286,7 @@ impl VillageLife {
             .find(|village| village.snapshot.id == village_id)
             .ok_or("That village is unavailable.")?;
         match kind {
+            WorkKind::GatherForage => Err("Wild food comes from its shared habitat.".into()),
             WorkKind::QuarryStone => Err("Quarry stone comes from its physical pile.".into()),
             WorkKind::TendField if economy.planted && economy.snapshot.crop_growth >= 1.0 => {
                 Err("These crops are ready to harvest.".into())
@@ -314,6 +315,7 @@ impl VillageLife {
         kind: WorkKind,
     ) -> Result<WorkReward, String> {
         Ok(match kind {
+            WorkKind::GatherForage => return Err("Wild food comes from its shared habitat.".into()),
             WorkKind::QuarryStone => {
                 return Err("Quarry stone comes from its physical pile.".into());
             }
@@ -361,6 +363,7 @@ impl VillageLife {
             .find(|village| village.snapshot.id == village_id)
             .unwrap();
         match kind {
+            WorkKind::GatherForage => return Err("Wild food comes from its shared habitat.".into()),
             WorkKind::QuarryStone => {
                 return Err("Quarry stone comes from its physical pile.".into());
             }

@@ -197,6 +197,214 @@ fn nearby_air() -> BlockPos {
     )
 }
 
+fn wild_foraging_fixture(
+    config: &ServerConfig,
+) -> (World, rubblekin_core::economy::WorkSite, [f32; 3], [f32; 3]) {
+    use rubblekin_core::{
+        economy::{WorkKind, WorkSite},
+        forage::{GATHER_COST, plants},
+        physics::character_position_is_clear,
+    };
+    spawn(config.clone()).unwrap().stop().unwrap();
+    let mut save: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    save["ecology"]["habitats"][0]["forage"] = GATHER_COST.into();
+    // Controlled shared-food race, without unrelated grazing during the six seconds.
+    save["ecology"]["animals"] = serde_json::json!([]);
+    let h = &save["ecology"]["habitats"][0];
+    let id = h["id"].as_u64().unwrap() as u32;
+    let center: [f32; 3] = serde_json::from_value(h["position"].clone()).unwrap();
+    let world = World::generate(config.seed, config.generation);
+    let (p, second) = plants(&world, id, center, GATHER_COST)
+        .into_iter()
+        .find_map(|p| {
+            if !character_position_is_clear(&world, p.position(), &[]) {
+                return None;
+            }
+            [(-1., 0.), (1., 0.), (0., -1.), (0., 1.)]
+                .into_iter()
+                .map(|(x, z)| [p.position()[0] + x, p.position()[1], p.position()[2] + z])
+                .find(|q| {
+                    character_position_is_clear(&world, *q, &[])
+                        && world
+                            .raycast([q[0], q[1] + 0.05, q[2]], [0., -1., 0.], 0.1)
+                            .is_some()
+                })
+                .map(|q| (p, q))
+        })
+        .unwrap();
+    fs::write(&config.save_path, serde_json::to_vec(&save).unwrap()).unwrap();
+    (
+        world,
+        WorkSite {
+            village_id: id,
+            kind: WorkKind::GatherForage,
+            index: p.index,
+        },
+        p.position(),
+        second,
+    )
+}
+
+#[test]
+fn wild_foraging_race_saves_food_and_depletion_together_and_sells_at_market() {
+    use rubblekin_core::{
+        economy::{MarketAction, WorkAction, WorkKind},
+        settlement::ResourceKind,
+    };
+    const FIRST: &str = "00000000000000000000000000000062";
+    const SECOND: &str = "00000000000000000000000000000063";
+    let save = TestSave::new();
+    let config = ServerConfig {
+        generation: WorldGeneration::GeographyV6,
+        ..save.config(true)
+    };
+    let (world, site, position, second_position) = wild_foraging_fixture(&config);
+    let server = spawn(config.clone()).unwrap();
+    let (mut first, _) = Client::connect_profile(server.addr, FIRST);
+    let (mut second, _) = Client::connect_profile(server.addr, SECOND);
+    assert!(matches!(
+        first.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState {
+            accepted: false,
+            ..
+        }
+    ));
+    first.teleport(position);
+    second.teleport(second_position);
+    assert!(
+        matches!(first.work(2,WorkAction::View),ServerMessage::WorkState {work,..} if work.offer.as_ref().is_some_and(|o|o.site.kind==WorkKind::GatherForage && o.unavailable_reason.is_none()))
+    );
+    let start = first.work(3, WorkAction::Start { site });
+    assert!(
+        matches!(start, ServerMessage::WorkState { accepted: true, .. }),
+        "{start:?}"
+    );
+    let start = second.work(1, WorkAction::Start { site });
+    assert!(
+        matches!(start, ServerMessage::WorkState { accepted: true, .. }),
+        "{start:?}"
+    );
+    assert!(
+        matches!(first.until_for(|m|matches!(m,ServerMessage::WorkState {request_id:0,work,ledger,..} if work.active.is_none() && ledger.cargo[0]==1),Duration::from_secs(15)),ServerMessage::WorkState {accepted:true,ledger,..} if ledger.revision==1 && ledger.coins==0)
+    );
+    assert!(
+        matches!(second.until_for(|m|matches!(m,ServerMessage::WorkState {request_id:0,work,accepted:false,..} if work.active.is_none()),Duration::from_secs(5)),ServerMessage::WorkState {ledger,..} if ledger.cargo_total()==0)
+    );
+    let durable: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(durable["profiles"][FIRST]["ledger"]["cargo"][0], 1);
+    assert_eq!(durable["profiles"][SECOND]["ledger"]["cargo"][0], 0);
+    assert!(
+        durable["ecology"]["habitats"][0]["forage"]
+            .as_f64()
+            .unwrap()
+            < 1.
+    );
+    assert!(durable["edits"].as_array().unwrap().is_empty());
+    assert!(
+        matches!(first.work(3,WorkAction::Start {site}),ServerMessage::WorkState {accepted:false,ledger,..} if ledger.cargo[0]==1)
+    );
+    let town = &world.settlements().unwrap().villages[0];
+    first.teleport(town.market);
+    let ServerMessage::MarketState {
+        market: Some(market),
+        ..
+    } = first.market(4, Some(town.id), 1, MarketAction::View)
+    else {
+        panic!("Expected quote")
+    };
+    let price = market.goods[0].sell_price;
+    assert!(
+        matches!(first.market(5,Some(town.id),1,MarketAction::Sell {kind:ResourceKind::Food,quantity:1,unit_price:price}),ServerMessage::MarketState {accepted:true,ledger,..} if ledger.cargo[0]==0 && ledger.coins==price && ledger.revision==2)
+    );
+    drop((first, second));
+    server.stop().unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let (mut first, _) = Client::connect_profile(server.addr, FIRST);
+    assert!(
+        matches!(first.until(|m|matches!(m,ServerMessage::WorkState {request_id:0,..})),ServerMessage::WorkState {ledger,..} if ledger.cargo_total()==0 && ledger.coins==price && ledger.revision==2)
+    );
+    first.teleport(position);
+    assert!(matches!(
+        first.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState {
+            accepted: false,
+            ..
+        }
+    ));
+    drop(first);
+    server.stop().unwrap();
+}
+
+#[test]
+fn wild_foraging_save_failure_confirms_neither_food_nor_shared_depletion() {
+    use rubblekin_core::economy::WorkAction;
+    const PROFILE: &str = "00000000000000000000000000000064";
+    let save = TestSave::new();
+    let config = ServerConfig {
+        generation: WorldGeneration::GeographyV6,
+        ..save.config(true)
+    };
+    let (_, site, position, _) = wild_foraging_fixture(&config);
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    client.teleport(position);
+    assert!(matches!(
+        client.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState { accepted: true, .. }
+    ));
+    client.until_for(|m|matches!(m,ServerMessage::WorkState {work,..} if work.active.as_ref().is_some_and(|a|a.elapsed_seconds>=5.25)),Duration::from_secs(15));
+    let before = fs::read(&config.save_path).unwrap();
+    let temporary = save
+        .0
+        .join(format!(".world.json.{}.tmp", std::process::id()));
+    fs::create_dir(&temporary).unwrap();
+    loop {
+        let mut line = String::new();
+        match client.reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let message = match serde_json::from_str::<ServerMessage>(&line) {
+                    Ok(m) => m,
+                    Err(e) if !line.ends_with('\n') && e.is_eof() => break,
+                    Err(e) => panic!("Invalid complete frame: {e}"),
+                };
+                match message {
+                    ServerMessage::WorkState { ledger, .. } => assert_eq!(ledger.cargo_total(), 0),
+                    ServerMessage::WildlifeState { habitats, .. } => assert!(
+                        habitats
+                            .iter()
+                            .find(|h| h.id == site.village_id)
+                            .unwrap()
+                            .forage
+                            >= 5.
+                    ),
+                    _ => {}
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break,
+            Err(e) => panic!("Expected save-failure disconnect: {e}"),
+        }
+    }
+    assert!(server.stop().is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), before);
+    fs::remove_dir(&temporary).unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
+    assert!(
+        matches!(client.until(|m|matches!(m,ServerMessage::WorkState {request_id:0,..})),ServerMessage::WorkState {ledger,..} if ledger.cargo_total()==0 && ledger.revision==0)
+    );
+    client.teleport(position);
+    assert!(matches!(
+        client.work(1, WorkAction::Start { site }),
+        ServerMessage::WorkState { accepted: true, .. }
+    ));
+    client.work(2, WorkAction::Cancel);
+    drop(client);
+    server.stop().unwrap();
+}
+
 #[test]
 fn local_work_times_cancels_and_persists_only_completed_useful_activity() {
     use rubblekin_core::economy::{WorkAction, WorkKind, WorkSite};

@@ -16,7 +16,7 @@ fn tool_index(kind: WorkKind) -> usize {
     match kind {
         WorkKind::TendField => 0,
         WorkKind::WorkshopMaintenance | WorkKind::QuarryStone => 1,
-        WorkKind::HarvestField => 2,
+        WorkKind::HarvestField | WorkKind::GatherForage => 2,
     }
 }
 
@@ -266,6 +266,7 @@ mod tests {
             WorkKind::WorkshopMaintenance,
             WorkKind::QuarryStone,
             WorkKind::HarvestField,
+            WorkKind::GatherForage,
         ] {
             work.offer.site.kind = kind;
             confirm(&mut app, Some(work.clone()));

@@ -23,21 +23,21 @@ pub(crate) fn text(world: &GameWorld, session: &Session) -> String {
 }
 
 fn forage_text(world: &GameWorld, session: &Session, id: u32, ground: BlockPos) -> String {
-    use rubblekin_core::geography::Biome;
     let Some(h) = session.habitats.iter().find(|h| h.id == id) else {
         return "This wild habitat is no longer present.\n\nReopen the inspector to select a new target.".into();
     };
-    let biome = world.geography().map(|g| {
-        g.sample(ground.x as f32 * CELL_SIZE, ground.z as f32 * CELL_SIZE)
-            .biome
-    });
-    let name = match biome {
-        Some(Biome::Forest | Biome::PineForest | Biome::Rainforest) => "Wild berry bush",
-        Some(Biome::Shrubland) => "Wild herbs",
-        _ => "Flowering clover",
+    let Some(plant) = rubblekin_core::forage::plants(world, h.id, h.position, h.forage)
+        .into_iter()
+        .find(|p| p.ground == ground)
+    else {
+        return format!(
+            "These wild plants were grazed, gathered or covered.\nWild forage: {:.0}%\n\nFind another clump or let this habitat regrow.",
+            h.forage
+        );
     };
+    let name = plant.kind.name();
     format!(
-        "{name}\nWild forage: {:.0}%\n\nHome range: {} rabbits · {} wolves\n\nWild plants feed rabbits here. Heavy grazing leaves fewer plants until they regrow.",
+        "{name}\nWild forage: {:.0}%\n\nHome range: {} rabbits · {} wolves\n\nWild plants feed rabbits here. Grazing and gathering leave fewer plants until they regrow.\n\nMove close and open B: cargo & work to gather Food.",
         h.forage, h.rabbits, h.wolves
     )
 }

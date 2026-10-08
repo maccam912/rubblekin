@@ -85,6 +85,7 @@ fn site_target(
                 building.origin.z + z,
             )
         }
+        WorkKind::GatherForage => return Err("Wild food comes from its shared habitat.".into()),
         WorkKind::QuarryStone => return Err("Quarry work needs its shared supply record.".into()),
     };
     let target = [
@@ -101,6 +102,7 @@ fn site_target(
         WorkKind::WorkshopMaintenance => "Workshop maintenance",
         WorkKind::HarvestField => "Harvest surplus crops",
         WorkKind::QuarryStone => "Collect stone",
+        WorkKind::GatherForage => "Gather wild food",
     };
     Ok((anchor, target, format!("{} · {activity}", village.name)))
 }
@@ -121,12 +123,14 @@ fn access(
                 && world.block(BlockPos::new(anchor.x, anchor.y - 1, anchor.z)) == Block::Wood
         }
         WorkKind::QuarryStone => world.block(anchor) == Block::Stone,
+        WorkKind::GatherForage => false,
     };
     if !intact {
         return Err(match site.kind {
             WorkKind::TendField | WorkKind::HarvestField => "This plot needs intact planting soil.",
             WorkKind::WorkshopMaintenance => "The workshop needs its intact workbench.",
             WorkKind::QuarryStone => "This quarry stone is no longer here.",
+            WorkKind::GatherForage => "Wild food comes from its shared habitat.",
         }
         .into());
     }

@@ -103,6 +103,7 @@ pub enum WorkKind {
     WorkshopMaintenance,
     HarvestField,
     QuarryStone,
+    GatherForage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +114,7 @@ pub enum WorkReward {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkSite {
+    /// Village ID for village/quarry work; habitat ID for GatherForage.
     pub village_id: u32,
     pub kind: WorkKind,
     pub index: u32,
