@@ -11,6 +11,7 @@ mod npc;
 mod persistence;
 mod player_economy;
 mod quarry_work;
+mod tick_schedule;
 mod villages;
 
 #[cfg(test)]
@@ -344,10 +345,14 @@ fn run(
     let mut connections = BTreeMap::<u64, Connection>::new();
     let mut next_id = 1_u64;
     let mut last_save = Instant::now();
+    let loop_started = Instant::now();
+    let mut schedule = tick_schedule::TickSchedule::new();
     let mut timing_started = Instant::now();
     let mut timing_ticks = 0_u64;
     let mut timing_overruns = 0_u64;
     let mut timing_peak = Duration::ZERO;
+    let mut timing_peak_phases = [Duration::ZERO; 4];
+    let mut timing_discarded = Duration::ZERO;
     // Total work, input/player movement, inhabitants, wildlife, autosave.
     let mut timing_sums = [Duration::ZERO; 5];
     while !stop.load(Ordering::Relaxed) {
@@ -514,7 +519,15 @@ fn run(
         let elapsed = tick_started.elapsed();
         timing_ticks += 1;
         timing_overruns += u64::from(elapsed > TICK);
-        timing_peak = timing_peak.max(elapsed);
+        if elapsed > timing_peak {
+            timing_peak = elapsed;
+            timing_peak_phases = [
+                input_elapsed,
+                inhabitants_elapsed,
+                wildlife_elapsed,
+                save_elapsed,
+            ];
+        }
         for (sum, value) in timing_sums.iter_mut().zip([
             elapsed,
             input_elapsed,
@@ -531,7 +544,7 @@ fn run(
                 let mean_ms = |i: usize| timing_sums[i].as_secs_f64() * 1000. / timing_ticks as f64;
                 let other = timing_sums[0].saturating_sub(timing_sums[1..].iter().sum());
                 eprintln!(
-                    "Server timing: ticks={timing_ticks} hz={hz:.2} work_mean_ms={:.2} work_peak_ms={:.2} over_50ms={timing_overruns} input_mean_ms={:.2} inhabitants_mean_ms={:.2} wildlife_mean_ms={:.2} autosave_mean_ms={:.2} other_mean_ms={:.2} connections={} residents={} animals={}",
+                    "Server timing: ticks={timing_ticks} hz={hz:.2} work_mean_ms={:.2} work_peak_ms={:.2} over_50ms={timing_overruns} input_mean_ms={:.2} inhabitants_mean_ms={:.2} wildlife_mean_ms={:.2} autosave_mean_ms={:.2} other_mean_ms={:.2} peak_phases_ms={:?} discarded_lag_ms={:.2} connections={} residents={} animals={}",
                     mean_ms(0),
                     timing_peak.as_secs_f64() * 1000.,
                     mean_ms(1),
@@ -539,6 +552,8 @@ fn run(
                     mean_ms(3),
                     mean_ms(4),
                     other.as_secs_f64() * 1000. / timing_ticks as f64,
+                    timing_peak_phases.map(|phase| phase.as_secs_f64() * 1000.),
+                    timing_discarded.as_secs_f64() * 1000.,
                     connections.len(),
                     sim.villages.residents().len(),
                     sim.ecology.animals.len(),
@@ -548,11 +563,16 @@ fn run(
             timing_ticks = 0;
             timing_overruns = 0;
             timing_peak = Duration::ZERO;
+            timing_peak_phases.fill(Duration::ZERO);
+            timing_discarded = Duration::ZERO;
             timing_sums.fill(Duration::ZERO);
         }
-        // Deliberately no unbounded catch-up loop when the server is overloaded.
-        if let Some(remaining) = TICK.checked_sub(tick_started.elapsed()) {
-            thread::sleep(remaining);
+        // Recover short overruns without changing physics dt. Every catch-up
+        // tick still services sockets and shutdown; long outages discard debt.
+        let (sleep, discarded) = schedule.finish_tick(loop_started.elapsed());
+        timing_discarded += discarded;
+        if !sleep.is_zero() {
+            thread::sleep(sleep);
         }
     }
     sim.save(&config.save_path)

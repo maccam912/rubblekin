@@ -1,0 +1,62 @@
+{
+  "source_commit": "d7adb29059e63d3c2cf9f48f9f31a1fcb84ac671",
+  "pod": "rubblekin-54457484d-5mlt2",
+  "notes": "Read-only guest connection, no movement or edits. Three successive live minute windows from the same random world. Mean inhabitant work dominates the later windows; peak phases were not yet recorded. This is a short baseline, not sustained-load or cross-seed performance proof.",
+  "stream": {
+    "welcome": {
+      "version": 19,
+      "seed": 2461067749,
+      "generation": "GeographyV6",
+      "can_admin": false,
+      "residents": 54
+    },
+    "initial": {
+      "animals": 222,
+      "habitats": 64
+    },
+    "state_samples": 518,
+    "wildlife_samples": 131,
+    "wall_seconds": 29.9465179159306,
+    "simulation_seconds": 25.850000385195017,
+    "simulation_ratio": 0.8632055472280347,
+    "wildlife_median_interval": 0.20187766657909378
+  },
+  "timing_windows": [
+    {
+      "ticks": 1179,
+      "hz": 19.65,
+      "work_mean_ms": 6.76,
+      "work_peak_ms": 202.86,
+      "over_50ms": 13,
+      "input_mean_ms": 0.04,
+      "inhabitants_mean_ms": 4.33,
+      "wildlife_mean_ms": 2.32,
+      "autosave_mean_ms": 0.05,
+      "other_mean_ms": 0.03
+    },
+    {
+      "ticks": 1023,
+      "hz": 17.04,
+      "work_mean_ms": 19.11,
+      "work_peak_ms": 183.28,
+      "over_50ms": 118,
+      "input_mean_ms": 0.04,
+      "inhabitants_mean_ms": 16.43,
+      "wildlife_mean_ms": 2.52,
+      "autosave_mean_ms": 0.09,
+      "other_mean_ms": 0.03
+    },
+    {
+      "ticks": 1052,
+      "hz": 17.52,
+      "work_mean_ms": 16.07,
+      "work_peak_ms": 253.6,
+      "over_50ms": 99,
+      "input_mean_ms": 0.07,
+      "inhabitants_mean_ms": 13.05,
+      "wildlife_mean_ms": 2.73,
+      "autosave_mean_ms": 0.1,
+      "other_mean_ms": 0.12
+    }
+  ]
+}
