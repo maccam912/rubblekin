@@ -798,6 +798,9 @@ impl SettlementPlan {
                         BuildingKind::StoneArch
                             | BuildingKind::StandingStones
                             | BuildingKind::FallenGiant
+                            | BuildingKind::RidgeCairn
+                            | BuildingKind::DeadSnag
+                            | BuildingKind::SplitBoulder
                     ) && !on_road
                     {
                         // Feather natural discoveries into their surroundings

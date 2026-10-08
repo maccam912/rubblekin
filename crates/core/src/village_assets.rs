@@ -36,6 +36,12 @@ pub enum BuildingKind {
     TrailCamp,
     RuinedTower,
     AbandonedKiln,
+    RidgeCairn,
+    TrailBench,
+    CartWreck,
+    SurveyPost,
+    DeadSnag,
+    SplitBoulder,
 }
 
 impl BuildingKind {
@@ -54,6 +60,24 @@ impl BuildingKind {
                 | Self::TrailCamp
                 | Self::RuinedTower
                 | Self::AbandonedKiln
+                | Self::RidgeCairn
+                | Self::TrailBench
+                | Self::CartWreck
+                | Self::SurveyPost
+                | Self::DeadSnag
+                | Self::SplitBoulder
+        )
+    }
+
+    pub const fn is_small_discovery(self) -> bool {
+        matches!(
+            self,
+            Self::RidgeCairn
+                | Self::TrailBench
+                | Self::CartWreck
+                | Self::SurveyPost
+                | Self::DeadSnag
+                | Self::SplitBoulder
         )
     }
 
@@ -66,6 +90,12 @@ impl BuildingKind {
                 | Self::TrailCamp
                 | Self::RuinedTower
                 | Self::AbandonedKiln
+                | Self::RidgeCairn
+                | Self::TrailBench
+                | Self::CartWreck
+                | Self::SurveyPost
+                | Self::DeadSnag
+                | Self::SplitBoulder
         )
     }
 }
@@ -91,6 +121,12 @@ pub const fn dimensions(kind: BuildingKind) -> [i32; 3] {
         BuildingKind::TrailCamp => [28, 14, 28],
         BuildingKind::RuinedTower => [26, 28, 30],
         BuildingKind::AbandonedKiln => [28, 16, 28],
+        BuildingKind::RidgeCairn => [10, 9, 12],
+        BuildingKind::TrailBench => [12, 11, 12],
+        BuildingKind::CartWreck => [20, 10, 16],
+        BuildingKind::SurveyPost => [12, 13, 14],
+        BuildingKind::DeadSnag => [12, 24, 12],
+        BuildingKind::SplitBoulder => [16, 15, 16],
     }
 }
 
@@ -133,6 +169,12 @@ pub fn block_at(kind: BuildingKind, x: i32, y: i32, z: i32) -> Option<Block> {
         BuildingKind::TrailCamp => exploration::camp(x, y, z),
         BuildingKind::RuinedTower => exploration::tower(x, y, z),
         BuildingKind::AbandonedKiln => exploration::kiln(x, y, z),
+        BuildingKind::RidgeCairn => exploration::cairn(x, y, z),
+        BuildingKind::TrailBench => exploration::bench(x, y, z),
+        BuildingKind::CartWreck => exploration::cart(x, y, z),
+        BuildingKind::SurveyPost => exploration::survey(x, y, z),
+        BuildingKind::DeadSnag => exploration::snag(x, y, z),
+        BuildingKind::SplitBoulder => exploration::boulder(x, y, z),
     })
 }
 

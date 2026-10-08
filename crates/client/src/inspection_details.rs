@@ -230,6 +230,12 @@ fn building_name(kind: BuildingKind) -> &'static str {
         BuildingKind::TrailCamp => "Traveller camp",
         BuildingKind::RuinedTower => "Ruined watchtower",
         BuildingKind::AbandonedKiln => "Abandoned kiln",
+        BuildingKind::RidgeCairn => "Ridge cairns",
+        BuildingKind::TrailBench => "Trail bench",
+        BuildingKind::CartWreck => "Broken waycart",
+        BuildingKind::SurveyPost => "Survey post",
+        BuildingKind::DeadSnag => "Dead snag",
+        BuildingKind::SplitBoulder => "Split boulder",
     }
 }
 
@@ -281,6 +287,22 @@ fn building_description(kind: BuildingKind) -> &'static str {
         }
         BuildingKind::AbandonedKiln => {
             "A cold brick firing chamber and drying racks stand near natural clay."
+        }
+        BuildingKind::RidgeCairn => "Small hand-stacked stones mark a pause beside the trail.",
+        BuildingKind::TrailBench => {
+            "A rough timber bench and slatted windbreak offer a quiet view."
+        }
+        BuildingKind::CartWreck => {
+            "A broken waycart has lost a wheel and both its cargo and travellers."
+        }
+        BuildingKind::SurveyPost => {
+            "A survey tripod, sighting stakes and folded tarp overlook the route."
+        }
+        BuildingKind::DeadSnag => {
+            "A weathered tree skeleton spreads bare branches above the trail."
+        }
+        BuildingKind::SplitBoulder => {
+            "An eroded rock has split into two halves with a narrow passage."
         }
     }
 }

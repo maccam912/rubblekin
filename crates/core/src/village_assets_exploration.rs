@@ -188,3 +188,125 @@ pub(super) fn kiln(x: i32, y: i32, z: i32) -> Block {
     }
     Block::Air
 }
+
+pub(super) fn cairn(x: i32, y: i32, z: i32) -> Block {
+    if y == 0 {
+        return Block::Grass;
+    }
+    // Several hand-stacked piles, with a clear middle aisle.
+    for (cx, cz, height) in [(1, 8, 7), (8, 9, 4), (1, 3, 2)] {
+        let radius = if y < 3 { 2 } else { 1 };
+        if y <= height && (x - cx).abs() + (z - cz).abs() <= radius {
+            return Block::Stone;
+        }
+    }
+    Block::Air
+}
+
+pub(super) fn bench(x: i32, y: i32, z: i32) -> Block {
+    if y == 0 {
+        return Block::Grass;
+    }
+    // A small resting spot with a slatted windbreak and a low canopy.
+    if (1..=3).contains(&x) && (4..=10).contains(&z) && y == 2
+        || x == 2 && (z == 4 || z == 10) && y == 1
+        || x == 0 && (4..=11).contains(&z) && (3..=5).contains(&y) && z % 2 == 0
+        || (x == 0 || x == 4) && (z == 3 || z == 11) && y <= 8
+        || y == 9 && x <= 4 && (3..=11).contains(&z) && z % 3 != 0
+    {
+        return Block::Wood;
+    }
+    Block::Air
+}
+
+pub(super) fn cart(x: i32, y: i32, z: i32) -> Block {
+    if y == 0 {
+        return if x > 12 && z > 4 {
+            Block::Dirt
+        } else {
+            Block::Grass
+        };
+    }
+    // One wheel has fallen off; broken shafts point back toward the road.
+    if (14..=19).contains(&x) && (6..=13).contains(&z) && y == 3
+        || (x == 14 || x == 19) && (7..=13).contains(&z) && (4..=5).contains(&y) && (x + z) % 5 != 0
+        || z == 13 && (14..=19).contains(&x) && (4..=6).contains(&y)
+        || x == 14 && (1..=5).contains(&z) && y == 2
+        || x == 19 && (3..=5).contains(&z) && y == 2
+        || x == 1 && (8..=10).contains(&z) && y <= 2
+    {
+        return Block::Wood;
+    }
+    for (cx, cz) in [(13, 8), (13, 12), (19, 12)] {
+        if x == cx && (y - 2).pow(2) + (z - cz).pow(2) <= 4 {
+            return if y == 2 && z == cz {
+                Block::Stone
+            } else {
+                Block::Wood
+            };
+        }
+    }
+    Block::Air
+}
+
+pub(super) fn survey(x: i32, y: i32, z: i32) -> Block {
+    if y == 0 {
+        return Block::Grass;
+    }
+    // Three separate legs converge below the small sighting instrument.
+    for (foot_x, foot_z) in [(0, 8), (4, 8), (2, 13)] {
+        if (1..=8).contains(&y)
+            && x == foot_x + (2 - foot_x) * y / 8
+            && z == foot_z + (10 - foot_z) * y / 8
+        {
+            return Block::Wood;
+        }
+    }
+    if x == 9 && z == 11 && y <= 11 || x == 0 && z == 2 && y <= 4 {
+        return Block::Wood;
+    }
+    if y == 9 && (1..=4).contains(&x) && z == 10 {
+        return Block::Stone;
+    }
+    if (1..=3).contains(&x) && (6..=8).contains(&z) && y == 1 {
+        return Block::Snow;
+    }
+    Block::Air
+}
+
+pub(super) fn snag(x: i32, y: i32, z: i32) -> Block {
+    if y == 0 {
+        return Block::Grass;
+    }
+    let dx = x - 2;
+    let dz = z - 8;
+    if dx * dx + dz * dz <= if y < 4 { 6 } else { 2 } && y <= 20 - (x + z) % 3
+        || (3..=7).contains(&x) && z == 8 && y == 12 + (x - 3) / 2
+        || x == 2 && (3..=7).contains(&z) && y == 9 + (7 - z) / 2
+        || (8..=17).contains(&y) && x == 2 + (y - 8) / 2 && (7..=8).contains(&z)
+        || (7..=15).contains(&y) && z == 8 - (y - 7) / 2 && (2..=3).contains(&x)
+        || (0..=3).contains(&x) && z == 10 && y <= 2
+    {
+        return Block::Wood;
+    }
+    Block::Air
+}
+
+pub(super) fn boulder(x: i32, y: i32, z: i32) -> Block {
+    if y == 0 {
+        return Block::Grass;
+    }
+    // Two eroded halves leave a shoulder-width crack to walk through.
+    for (cx, cz, rx, rz, height) in [(2, 9, 4, 6, 12), (13, 10, 3, 5, 9)] {
+        let dx = x - cx;
+        let dz = z - cz;
+        if dx * dx * rz * rz * height * height
+            + dz * dz * rx * rx * height * height
+            + y * y * rx * rx * rz * rz
+            <= rx * rx * rz * rz * height * height
+        {
+            return Block::Stone;
+        }
+    }
+    Block::Air
+}

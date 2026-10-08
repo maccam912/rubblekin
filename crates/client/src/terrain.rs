@@ -1055,6 +1055,12 @@ fn add_regional_building_proxy(
             | BuildingKind::TrailCamp
             | BuildingKind::RuinedTower
             | BuildingKind::AbandonedKiln
+            | BuildingKind::RidgeCairn
+            | BuildingKind::TrailBench
+            | BuildingKind::CartWreck
+            | BuildingKind::SurveyPost
+            | BuildingKind::DeadSnag
+            | BuildingKind::SplitBoulder
     ) {
         return false;
     }
@@ -1202,7 +1208,13 @@ fn add_regional_building_proxy(
         | BuildingKind::FallenGiant
         | BuildingKind::TrailCamp
         | BuildingKind::RuinedTower
-        | BuildingKind::AbandonedKiln => {
+        | BuildingKind::AbandonedKiln
+        | BuildingKind::RidgeCairn
+        | BuildingKind::TrailBench
+        | BuildingKind::CartWreck
+        | BuildingKind::SurveyPost
+        | BuildingKind::DeadSnag
+        | BuildingKind::SplitBoulder => {
             let exact_floor =
                 matches!(kind, BuildingKind::TrailPavilion | BuildingKind::QuarryYard)
                     || kind.is_exploration_site();
@@ -3593,6 +3605,12 @@ mod tests {
             BuildingKind::TrailCamp,
             BuildingKind::RuinedTower,
             BuildingKind::AbandonedKiln,
+            BuildingKind::RidgeCairn,
+            BuildingKind::TrailBench,
+            BuildingKind::CartWreck,
+            BuildingKind::SurveyPost,
+            BuildingKind::DeadSnag,
+            BuildingKind::SplitBoulder,
         ] {
             for rotation in 0..4 {
                 let building = BuildingPlot {

@@ -123,8 +123,96 @@ impl SettlementPlan {
                 }
             }
         }
+        self.fill_discovery_gaps(world, transit);
         self.buckets.clear();
         self.build_index();
+    }
+
+    fn fill_discovery_gaps(&mut self, world: &World, transit: &AirshipNetwork) {
+        const SMALL: [BuildingKind; 6] = [
+            BuildingKind::RidgeCairn,
+            BuildingKind::TrailBench,
+            BuildingKind::CartWreck,
+            BuildingKind::SurveyPost,
+            BuildingKind::DeadSnag,
+            BuildingKind::SplitBoulder,
+        ];
+        for ti in 0..self.trails.len() {
+            let trail = &self.trails[ti];
+            let mut distances = vec![0.0_f32];
+            for pair in trail.points.windows(2) {
+                distances.push(
+                    distances.last().unwrap()
+                        + distance2(pair[0][0], pair[0][2], pair[1][0], pair[1][2]).sqrt(),
+                );
+            }
+            let mut stops = vec![0, trail.points.len() - 1];
+            for site in &self.roadside_landmarks {
+                if let Some(index) = trail
+                    .points
+                    .iter()
+                    .position(|p| *p == site.approach.points[0])
+                {
+                    stops.push(index);
+                }
+            }
+            stops.sort_unstable();
+            stops.dedup();
+            for gap in stops.windows(2) {
+                let mut target = distances[gap[0]] + 360.0;
+                while distances[gap[1]] - target > 140.0 {
+                    let h = hash(ti as i32, target as i32, world.seed.wrapping_add(9813));
+                    let mut placed = false;
+                    for offset in [0.0, -20.0, 20.0, -40.0, 40.0, -60.0, 60.0, -90.0, 90.0] {
+                        let index = distances
+                            .partition_point(|d| *d < target + offset)
+                            .clamp(gap[0] + 1, gap[1]);
+                        let anchor = self.trails[ti].points[index];
+                        let previous = self.trails[ti].points[index - 1];
+                        let dx = anchor[0] - previous[0];
+                        let dz = anchor[2] - previous[2];
+                        let run = dx.hypot(dz).max(0.01);
+                        for kind_offset in 0..SMALL.len() {
+                            let kind = SMALL[(h as usize + kind_offset) % SMALL.len()];
+                            if kind == BuildingKind::DeadSnag
+                                && matches!(
+                                    world
+                                        .geography()
+                                        .unwrap()
+                                        .sample(anchor[0], anchor[2])
+                                        .biome,
+                                    Biome::Ocean
+                                        | Biome::Beach
+                                        | Biome::Desert
+                                        | Biome::Alpine
+                                        | Biome::Snow
+                                )
+                            {
+                                continue;
+                            }
+                            for side in [8.0, -8.0, 10.0, -10.0, 12.0, -12.0, 16.0, -16.0] {
+                                let center =
+                                    [anchor[0] - dz / run * side, anchor[2] + dx / run * side];
+                                if let Some(site) =
+                                    self.exploration_site(world, transit, kind, anchor, center)
+                                {
+                                    self.roadside_landmarks.push(site);
+                                    placed = true;
+                                    break;
+                                }
+                            }
+                            if placed {
+                                break;
+                            }
+                        }
+                        if placed {
+                            break;
+                        }
+                    }
+                    target += 360.0;
+                }
+            }
+        }
     }
 
     fn exploration_site(
@@ -135,9 +223,14 @@ impl SettlementPlan {
         anchor: [f32; 3],
         center: [f32; 2],
     ) -> Option<RoadsideLandmark> {
+        let separation = if kind.is_small_discovery() {
+            90.0_f32
+        } else {
+            SITE_SEPARATION
+        };
         if self.roadside_landmarks.iter().any(|site| {
             let p = site.building.entrance();
-            distance2(center[0], center[1], p[0], p[2]) < SITE_SEPARATION.powi(2)
+            distance2(center[0], center[1], p[0], p[2]) < separation.powi(2)
         }) || self
             .villages
             .iter()
@@ -159,11 +252,18 @@ impl SettlementPlan {
         {
             return None;
         }
+        let [w, _, d] = village_assets::dimensions(kind);
+        let radius = (w as f32).hypot(d as f32) * CELL_SIZE * 0.5;
         if self.trails.iter().any(|trail| {
+            let clearance = if kind.is_small_discovery() {
+                radius + trail.width * 0.5 + 0.5
+            } else {
+                16.0
+            };
             trail
                 .points
                 .windows(2)
-                .any(|p| segment_distance(center[0], center[1], p[0], p[1]).0 < 16.0)
+                .any(|p| segment_distance(center[0], center[1], p[0], p[1]).0 < clearance)
         }) {
             return None;
         }
@@ -276,6 +376,7 @@ mod tests {
 
     #[test]
     fn discoveries_keep_transit_clear_and_every_generated_approach_walkable() {
+        let mut all_kinds = HashSet::new();
         for seed in [42, 7, 99] {
             let world = World::generate(seed, WorldGeneration::GeographyV6);
             let old = World::generate(seed, WorldGeneration::GeographyV5);
@@ -368,13 +469,19 @@ mod tests {
                             walk(&world, &mut body, local(w * 0.5 + 0.5, z, rise));
                         }
                     }
+                    kind if kind.is_small_discovery() => {
+                        walk(&world, &mut body, local(w * 0.5, (d - 3.0).min(9.0), 0.0));
+                        walk(&world, &mut body, local(w * 0.5, 3.0, 0.0));
+                    }
                     _ => unreachable!(),
                 }
                 for &p in site.approach.points.iter().rev() {
                     walk(&world, &mut body, p);
                 }
             }
-            assert_eq!(kinds.len(), 6, "seed {seed}: discovery variety missing");
+            assert!(kinds.len() >= 10, "seed {seed}: discovery variety missing");
+            all_kinds.extend(kinds);
         }
+        assert_eq!(all_kinds.len(), 12, "some discovery assets never place");
     }
 }

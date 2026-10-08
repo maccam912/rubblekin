@@ -164,6 +164,36 @@ fn main() {
             "Abandoned kiln",
             "Cold firing chamber and sheltered drying racks",
         ),
+        (
+            BuildingKind::RidgeCairn,
+            "Ridge cairns",
+            "Hand-stacked stones beside the trail",
+        ),
+        (
+            BuildingKind::TrailBench,
+            "Trail bench",
+            "A small bench, windbreak and slatted canopy",
+        ),
+        (
+            BuildingKind::CartWreck,
+            "Broken waycart",
+            "Lost wheel, splintered shafts and empty bed",
+        ),
+        (
+            BuildingKind::SurveyPost,
+            "Survey post",
+            "Survey tripod, sighting stakes and a folded tarp",
+        ),
+        (
+            BuildingKind::DeadSnag,
+            "Dead snag",
+            "Bare branches and exposed roots",
+        ),
+        (
+            BuildingKind::SplitBoulder,
+            "Split boulder",
+            "Eroded rock halves and a narrow walking crack",
+        ),
     ]
     .into_iter()
     .map(|(kind, title, detail)| (Asset::Building(kind), title, detail))
@@ -223,10 +253,11 @@ fn main() {
         })
         .collect();
     }
-    let exploration = std::env::args().any(|arg| arg == "--exploration");
+    let small = std::env::args().any(|arg| arg == "--small");
+    let exploration = small || std::env::args().any(|arg| arg == "--exploration");
     if exploration {
         assets.retain(
-            |(asset, _, _)| matches!(asset, Asset::Building(kind) if kind.is_exploration_site()),
+            |(asset, _, _)| matches!(asset, Asset::Building(kind) if if small {kind.is_small_discovery()} else {kind.is_exploration_site()}),
         );
     }
     let height = 80 + assets.len().div_ceil(3) * 365;

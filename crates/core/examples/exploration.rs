@@ -77,6 +77,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         all_gaps.last().unwrap() / 3.8,
         all_gaps.len()
     );
+    if args.iter().any(|s| s == "--diagnose") {
+        for trail in &trails {
+            let gaps = trail["gaps_m"].as_array().unwrap();
+            let stops = trail["stops_m"].as_array().unwrap();
+            let points = trail["points"].as_array().unwrap();
+            for (i, gap) in gaps
+                .iter()
+                .enumerate()
+                .filter(|(_, g)| g.as_f64().unwrap() > 750.0)
+            {
+                let middle = stops[i].as_f64().unwrap() + gap.as_f64().unwrap() * 0.5;
+                let mut distance = 0.0;
+                let mut index = 1;
+                while index < points.len() - 1 && distance < middle {
+                    distance += (points[index][0].as_f64().unwrap()
+                        - points[index - 1][0].as_f64().unwrap())
+                    .hypot(
+                        points[index][2].as_f64().unwrap() - points[index - 1][2].as_f64().unwrap(),
+                    );
+                    index += 1;
+                }
+                let anchor: [f32; 3] = serde_json::from_value(points[index].clone())?;
+                let previous: [f32; 3] = serde_json::from_value(points[index - 1].clone())?;
+                let dx = anchor[0] - previous[0];
+                let dz = anchor[2] - previous[2];
+                let run = dx.hypot(dz).max(0.01);
+                println!(
+                    "Gap {}->{} {:.0}m at {anchor:?}",
+                    trail["from"],
+                    trail["to"],
+                    gap.as_f64().unwrap()
+                );
+                for side in [-30.0, -16.0, -8.0, 0.0, 8.0, 16.0, 30.0] {
+                    let sample = world
+                        .geography()
+                        .unwrap()
+                        .sample(anchor[0] - dz / run * side, anchor[2] + dx / run * side);
+                    println!(
+                        "  side {side}: ground delta {:.1}m, water {:?}, {:?}",
+                        sample.height + 0.5 - anchor[1],
+                        sample.water,
+                        sample.biome
+                    );
+                }
+            }
+        }
+    }
     for site in plan
         .roadside_landmarks
         .iter()
