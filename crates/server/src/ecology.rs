@@ -358,6 +358,12 @@ impl Ecology {
             h.forage = (h.forage + dt * 0.012 * h.fertility).min(100.);
         }
         let before = self.animals.clone();
+        // Reserve space for journeys already underway and departures chosen in
+        // this tick. These are travel plans, not physically arrived residents.
+        let mut planned_rabbits = vec![0_usize; self.habitats.len()];
+        for a in before.iter().filter(|a| a.species == Species::Rabbit) {
+            planned_rabbits[a.destination.unwrap_or(a.habitat) as usize] += 1;
+        }
         // Bound expensive local searches across the entire population. Longest
         // waiting animals go first without changing biology/RNG iteration order.
         let mut searches: Vec<_> = self
@@ -489,12 +495,9 @@ impl Ecology {
                         a.action = WildlifeAction::Migrating;
                     }
                     if a.decision <= 0. {
-                        let residents = before
-                            .iter()
-                            .filter(|b| b.habitat == a.habitat && b.species == a.species)
-                            .count();
+                        let crowded = planned_rabbits[a.habitat as usize] > 7;
                         let depleted = if a.species == Species::Rabbit {
-                            habitat.forage < 20. || residents > 7
+                            habitat.forage < 20. || crowded
                         } else {
                             nearby_prey(&before, a.body.position, 120.) < 2
                         };
@@ -512,7 +515,13 @@ impl Ecology {
                                 })
                                 .filter(|h| {
                                     if a.species == Species::Rabbit {
-                                        h.forage > habitat.forage + 15.
+                                        let planned = planned_rabbits[h.id as usize];
+                                        planned < home_capacity(Species::Rabbit)
+                                            && (h.forage > habitat.forage + 15.
+                                                || (crowded
+                                                    && h.forage >= 20.
+                                                    && planned + 1
+                                                        < planned_rabbits[a.habitat as usize]))
                                     } else {
                                         nearby_prey(&before, h.position, RANGE) >= 3
                                     }
@@ -522,6 +531,10 @@ impl Ecology {
                                         .total_cmp(&distance(q.position, a.body.position))
                                 });
                             if let Some(h) = destination {
+                                if a.species == Species::Rabbit {
+                                    planned_rabbits[a.habitat as usize] -= 1;
+                                    planned_rabbits[h.id as usize] += 1;
+                                }
                                 a.destination = Some(h.id);
                                 a.target = arrival_ground(world, a.id, h, a.species);
                                 a.action = WildlifeAction::Migrating;
@@ -1211,6 +1224,82 @@ mod tests {
         assert_eq!(e.animals[0].habitat, 0);
         assert_eq!(e.animals[0].destination, Some(assigned));
         assert_eq!(e.migrations, migrations);
+        assert!(e.validate(&world));
+    }
+    #[test]
+    fn crowded_rabbits_spread_to_available_space_even_when_food_is_abundant() {
+        let (world, mut e) = fixture();
+        for h in &mut e.habitats {
+            h.forage = 100.;
+        }
+        while e.animals.len() < 8 {
+            let mut a = e.animals[0].clone();
+            a.id = e.next_id;
+            e.next_id += 1;
+            e.animals.push(a);
+        }
+        for a in &mut e.animals {
+            a.hunger = 10.;
+            a.breeding = 1000.;
+            a.decision = 0.;
+        }
+        let positions: Vec<_> = e.animals.iter().map(|a| a.body.position).collect();
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.migrations, 1, "only the excess animal needs to leave");
+        assert_eq!(
+            e.animals
+                .iter()
+                .filter(|a| a.destination == Some(1))
+                .count(),
+            1
+        );
+        for (a, p) in e.animals.iter().zip(positions) {
+            assert_eq!(a.habitat, 0);
+            assert!(distance(a.body.position, p) < 0.5);
+        }
+        assert_eq!(e.arrivals, 0);
+        assert!(world.edits().is_empty());
+        assert!(e.validate(&world));
+    }
+    #[test]
+    fn rabbit_departures_account_for_incoming_animals_without_overbooking_a_range() {
+        let (world, mut e) = fixture();
+        while e.animals.len() < 15 {
+            let mut a = e.animals[0].clone();
+            a.id = e.next_id;
+            e.next_id += 1;
+            if e.animals.len() >= 8 {
+                a.habitat = 1;
+                a.body = Body::new(e.habitats[1].position);
+                a.body.on_ground = true;
+            }
+            e.animals.push(a);
+        }
+        for a in &mut e.animals {
+            a.hunger = 10.;
+            a.breeding = 1000.;
+            a.decision = 0.;
+        }
+        e.habitats[0].forage = 0.;
+        e.habitats[1].forage = 100.;
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.migrations, 1);
+        assert_eq!(e.animals.iter().filter(|a| a.habitat == 1).count(), 7);
+        assert_eq!(
+            e.animals
+                .iter()
+                .filter(|a| a.destination.unwrap_or(a.habitat) == 1)
+                .count(),
+            8
+        );
+        let mut e: Ecology = serde_json::from_slice(&serde_json::to_vec(&e).unwrap()).unwrap();
+        for a in &mut e.animals {
+            a.decision = 0.;
+        }
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.migrations, 1, "reload must retain incoming commitments");
+        assert_eq!(e.arrivals, 0);
+        assert!(world.edits().is_empty());
         assert!(e.validate(&world));
     }
     #[test]

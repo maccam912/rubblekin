@@ -47,7 +47,7 @@ impl WildlifeAction {
             Self::Grazing => "Grazing wild forage",
             Self::Fleeing => "Keeping a safe distance",
             Self::Hunting => "Hunting a rabbit",
-            Self::Migrating => "Moving to a richer habitat",
+            Self::Migrating => "Moving to another home range",
         }
     }
 }
