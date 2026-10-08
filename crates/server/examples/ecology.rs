@@ -99,7 +99,7 @@ fn main() {
                             .hypot(a.body.position[2] - b.body.position[2])
                     })
                     .fold(f32::INFINITY, f32::min);
-                serde_json::json!({"id":a.id,"hunger":a.hunger,"action":a.action,"habitat":a.habitat,"position":a.body.position,"target":a.target,"prey_distance":prey_distance})
+                serde_json::json!({"id":a.id,"hunger":a.hunger,"action":a.action,"habitat":a.habitat,"destination":a.destination,"position":a.body.position,"target":a.target,"prey_distance":prey_distance})
             })
             .collect();
         let migrating = ecology

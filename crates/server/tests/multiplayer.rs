@@ -2699,7 +2699,7 @@ fn wildlife_replicates_advances_without_clients_and_keeps_its_saved_population()
     server.stop().unwrap();
     let mut saved: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    assert_eq!(saved["version"], 6);
+    assert_eq!(saved["version"], 7);
     saved["ecology"]["animals"][0]["hunger"] = 12.345.into();
     fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
     let server = spawn(config.clone()).unwrap();

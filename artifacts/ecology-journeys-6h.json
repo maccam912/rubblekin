@@ -1,0 +1,1743 @@
+{
+  "description": "Seed42, six simulation hours at the server 20Hz step after saving independent migration destinations and changing homes on actual arrival. No clients, save writes or population floors.",
+  "limits": "This is a correctness/behavior observation, not balanced predator populations or a production-load benchmark. Local obstacle detours remain a follow-up.",
+  "samples": [
+    {
+      "arrivals": 0,
+      "births": 0,
+      "deaths": 0,
+      "elapsed_seconds": 0.0001367499935440719,
+      "forage_mean": 80.0,
+      "forage_min": 80.0,
+      "hour": 0,
+      "hunted": 0,
+      "migrating": 0,
+      "migrations": 0,
+      "packet_bytes": 35170,
+      "rabbits": 192,
+      "seed": 42,
+      "starving": 0,
+      "stationary_migrants": 0,
+      "step_seconds": 0.05000000074505806,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 4,
+          "hunger": 35.03022766113281,
+          "id": 16,
+          "position": [
+            -12097.193359375,
+            142.0,
+            -1097.9510498046875
+          ],
+          "prey_distance": 15.642240524291992,
+          "target": [
+            -12097.193359375,
+            142.0,
+            -1097.9510498046875
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 4,
+          "hunger": 48.746334075927734,
+          "id": 17,
+          "position": [
+            -12126.322265625,
+            147.0,
+            -1100.0928955078125
+          ],
+          "prey_distance": 1.9750231504440308,
+          "target": [
+            -12126.322265625,
+            147.0,
+            -1100.0928955078125
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 13,
+          "hunger": 57.457279205322266,
+          "id": 45,
+          "position": [
+            6619.013671875,
+            99.0,
+            -6509.60498046875
+          ],
+          "prey_distance": 4.360406398773193,
+          "target": [
+            6619.013671875,
+            99.0,
+            -6509.60498046875
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 13,
+          "hunger": 31.469093322753906,
+          "id": 46,
+          "position": [
+            6619.83544921875,
+            99.5,
+            -6492.529296875
+          ],
+          "prey_distance": 6.171485900878906,
+          "target": [
+            6619.83544921875,
+            99.5,
+            -6492.529296875
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 22,
+          "hunger": 58.98604965209961,
+          "id": 74,
+          "position": [
+            2192.613525390625,
+            264.5,
+            2639.82666015625
+          ],
+          "prey_distance": 8.788958549499512,
+          "target": [
+            2192.613525390625,
+            264.5,
+            2639.82666015625
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 22,
+          "hunger": 51.246795654296875,
+          "id": 75,
+          "position": [
+            2178.701171875,
+            264.0,
+            2630.4833984375
+          ],
+          "prey_distance": 13.104081153869629,
+          "target": [
+            2178.701171875,
+            264.0,
+            2630.4833984375
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 31,
+          "hunger": 32.357421875,
+          "id": 103,
+          "position": [
+            4268.25732421875,
+            163.5,
+            -6336.595703125
+          ],
+          "prey_distance": 3.005361557006836,
+          "target": [
+            4268.25732421875,
+            163.5,
+            -6336.595703125
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 31,
+          "hunger": 45.38728332519531,
+          "id": 104,
+          "position": [
+            4293.75,
+            163.5,
+            -6328.44482421875
+          ],
+          "prey_distance": 21.005216598510742,
+          "target": [
+            4293.75,
+            163.5,
+            -6328.44482421875
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 37.78413391113281,
+          "id": 132,
+          "position": [
+            4350.37939453125,
+            93.5,
+            -10430.970703125
+          ],
+          "prey_distance": 5.1623969078063965,
+          "target": [
+            4350.37939453125,
+            93.5,
+            -10430.970703125
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 27.881568908691406,
+          "id": 133,
+          "position": [
+            4351.34375,
+            94.0,
+            -10424.2490234375
+          ],
+          "prey_distance": 9.093585014343262,
+          "target": [
+            4351.34375,
+            94.0,
+            -10424.2490234375
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 46.56067657470703,
+          "id": 161,
+          "position": [
+            -6816.59326171875,
+            22.5,
+            8386.7373046875
+          ],
+          "prey_distance": 13.798165321350098,
+          "target": [
+            -6816.59326171875,
+            22.5,
+            8386.7373046875
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 48.340538024902344,
+          "id": 162,
+          "position": [
+            -6800.8505859375,
+            23.0,
+            8370.5751953125
+          ],
+          "prey_distance": 8.919317245483398,
+          "target": [
+            -6800.8505859375,
+            23.0,
+            8370.5751953125
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 42.211082458496094,
+          "id": 190,
+          "position": [
+            11259.494140625,
+            92.5,
+            -5520.30322265625
+          ],
+          "prey_distance": 11.358429908752441,
+          "target": [
+            11259.494140625,
+            92.5,
+            -5520.30322265625
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 26.717844009399414,
+          "id": 191,
+          "position": [
+            11266.017578125,
+            92.5,
+            -5517.46630859375
+          ],
+          "prey_distance": 6.458806991577148,
+          "target": [
+            11266.017578125,
+            92.5,
+            -5517.46630859375
+          ]
+        }
+      ],
+      "wolf_fed": 2,
+      "wolf_max_hunger": 58.98604965209961,
+      "wolf_starving": 0,
+      "wolves": 14,
+      "wolves_with_mate": 4,
+      "wolves_with_prey": 14
+    },
+    {
+      "arrivals": 14,
+      "births": 56,
+      "deaths": 0,
+      "elapsed_seconds": 32.449623107910156,
+      "forage_mean": 66.12775421142578,
+      "forage_min": 37.882328033447266,
+      "hour": 1,
+      "hunted": 13,
+      "migrating": 5,
+      "migrations": 19,
+      "packet_bytes": 45708,
+      "rabbits": 235,
+      "seed": 42,
+      "starving": 0,
+      "stationary_migrants": 0,
+      "step_seconds": 0.05000000074505806,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Migrating",
+          "destination": 37,
+          "habitat": 4,
+          "hunger": 21.434690475463867,
+          "id": 16,
+          "position": [
+            -11266.2763671875,
+            167.4980010986328,
+            -127.30396270751953
+          ],
+          "prey_distance": 111.14761352539062,
+          "target": [
+            -11186.7001953125,
+            185.0,
+            -40.935020446777344
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 37,
+          "habitat": 4,
+          "hunger": 21.58112335205078,
+          "id": 17,
+          "position": [
+            -11266.2900390625,
+            167.4980010986328,
+            -127.30711364746094
+          ],
+          "prey_distance": 111.16011810302734,
+          "target": [
+            -11186.7001953125,
+            185.0,
+            -40.935020446777344
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 24,
+          "habitat": 52,
+          "hunger": 21.575733184814453,
+          "id": 45,
+          "position": [
+            8712.6796875,
+            35.99801254272461,
+            -6505.00244140625
+          ],
+          "prey_distance": 151.46258544921875,
+          "target": [
+            8871.3896484375,
+            33.0,
+            -6492.89111328125
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 24,
+          "habitat": 52,
+          "hunger": 17.712181091308594,
+          "id": 46,
+          "position": [
+            8712.6767578125,
+            35.99801254272461,
+            -6505.00244140625
+          ],
+          "prey_distance": 151.46551513671875,
+          "target": [
+            8871.3896484375,
+            33.0,
+            -6492.89111328125
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 41,
+          "hunger": 21.50236701965332,
+          "id": 74,
+          "position": [
+            2144.5322265625,
+            267.4980163574219,
+            2870.185302734375
+          ],
+          "prey_distance": 12.022664070129395,
+          "target": [
+            2128.548828125,
+            268.0,
+            2871.7431640625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 30,
+          "hunger": 19.76194190979004,
+          "id": 75,
+          "position": [
+            2003.7640380859375,
+            243.4980010986328,
+            2158.762451171875
+          ],
+          "prey_distance": 24.052919387817383,
+          "target": [
+            2003.85107421875,
+            244.0,
+            2166.30615234375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 8,
+          "hunger": 14.091415405273438,
+          "id": 103,
+          "position": [
+            5192.01220703125,
+            143.99801635742188,
+            -8067.11572265625
+          ],
+          "prey_distance": 86.97709655761719,
+          "target": [
+            5207.6962890625,
+            143.5,
+            -8065.4375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 57,
+          "hunger": 21.53680419921875,
+          "id": 104,
+          "position": [
+            4436.1943359375,
+            216.9980010986328,
+            -8314.91796875
+          ],
+          "prey_distance": 24.055543899536133,
+          "target": [
+            4432.27783203125,
+            217.5,
+            -8279.9658203125
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 8,
+          "hunger": 21.490388870239258,
+          "id": 132,
+          "position": [
+            5204.95654296875,
+            143.4980010986328,
+            -8064.87744140625
+          ],
+          "prey_distance": 81.23114776611328,
+          "target": [
+            5184.60009765625,
+            144.0,
+            -8060.7119140625
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 8,
+          "habitat": 57,
+          "hunger": 14.366288185119629,
+          "id": 133,
+          "position": [
+            4612.81005859375,
+            189.49803161621094,
+            -8324.6943359375
+          ],
+          "prey_distance": 165.2017822265625,
+          "target": [
+            5223.5166015625,
+            143.5,
+            -7954.98583984375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 21.461341857910156,
+          "id": 161,
+          "position": [
+            -6784.77685546875,
+            24.498008728027344,
+            8275.28125
+          ],
+          "prey_distance": 101.75334167480469,
+          "target": [
+            -6785.65087890625,
+            24.5,
+            8275.7216796875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 21.480806350708008,
+          "id": 162,
+          "position": [
+            -6782.51416015625,
+            24.498008728027344,
+            8273.537109375
+          ],
+          "prey_distance": 103.95064544677734,
+          "target": [
+            -6782.923828125,
+            24.5,
+            8274.359375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 21.288856506347656,
+          "id": 190,
+          "position": [
+            11115.78125,
+            23.99801254272461,
+            -6473.90576171875
+          ],
+          "prey_distance": 944.9912719726562,
+          "target": [
+            11130.7490234375,
+            24.0,
+            -6467.86865234375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 48.382198333740234,
+          "id": 191,
+          "position": [
+            11130.6396484375,
+            23.99800682067871,
+            -6474.99658203125
+          ],
+          "prey_distance": 944.1048583984375,
+          "target": [
+            11104.6943359375,
+            24.0,
+            -6473.23291015625
+          ]
+        }
+      ],
+      "wolf_fed": 13,
+      "wolf_max_hunger": 48.382198333740234,
+      "wolf_starving": 0,
+      "wolves": 14,
+      "wolves_with_mate": 9,
+      "wolves_with_prey": 9
+    },
+    {
+      "arrivals": 39,
+      "births": 70,
+      "deaths": 1,
+      "elapsed_seconds": 69.58001708984375,
+      "forage_mean": 49.878231048583984,
+      "forage_min": 0.42443886399269104,
+      "hour": 2,
+      "hunted": 19,
+      "migrating": 12,
+      "migrations": 54,
+      "packet_bytes": 46860,
+      "rabbits": 242,
+      "seed": 42,
+      "starving": 0,
+      "stationary_migrants": 3,
+      "step_seconds": 0.05000000074505806,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 6.540592193603516,
+          "id": 16,
+          "position": [
+            -11081.921875,
+            167.4980010986328,
+            -408.5355224609375
+          ],
+          "prey_distance": 374.7160949707031,
+          "target": [
+            -11082.8037109375,
+            167.5,
+            -408.221435546875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 7.9037766456604,
+          "id": 17,
+          "position": [
+            -11071.228515625,
+            166.99803161621094,
+            -413.2905578613281
+          ],
+          "prey_distance": 382.2016906738281,
+          "target": [
+            -11066.88671875,
+            167.0,
+            -417.03143310546875
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 24,
+          "habitat": 52,
+          "hunger": 43.20733642578125,
+          "id": 45,
+          "position": [
+            8712.6796875,
+            35.99801254272461,
+            -6505.00244140625
+          ],
+          "prey_distance": 148.21522521972656,
+          "target": [
+            8871.3896484375,
+            33.0,
+            -6492.89111328125
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 24,
+          "habitat": 52,
+          "hunger": 39.319175720214844,
+          "id": 46,
+          "position": [
+            8712.6767578125,
+            35.99801254272461,
+            -6505.00244140625
+          ],
+          "prey_distance": 148.21815490722656,
+          "target": [
+            8871.3896484375,
+            33.0,
+            -6492.89111328125
+          ]
+        },
+        {
+          "action": "Hunting",
+          "destination": null,
+          "habitat": 41,
+          "hunger": 43.13350296020508,
+          "id": 74,
+          "position": [
+            2153.15380859375,
+            269.9980163574219,
+            2861.604736328125
+          ],
+          "prey_distance": 31.0152587890625,
+          "target": [
+            2123.5234375,
+            267.9980163574219,
+            2870.999755859375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 41,
+          "hunger": 5.944630146026611,
+          "id": 75,
+          "position": [
+            2146.98388671875,
+            267.9980163574219,
+            2857.984130859375
+          ],
+          "prey_distance": 26.764097213745117,
+          "target": [
+            2158.104248046875,
+            267.5,
+            2848.82421875
+          ]
+        },
+        {
+          "action": "Hunting",
+          "destination": null,
+          "habitat": 44,
+          "hunger": 35.68144607543945,
+          "id": 103,
+          "position": [
+            5337.6982421875,
+            91.49800872802734,
+            -9880.966796875
+          ],
+          "prey_distance": 0.9990769028663635,
+          "target": [
+            5336.93212890625,
+            91.27799987792969,
+            -9881.0263671875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 44,
+          "hunger": 7.094264030456543,
+          "id": 104,
+          "position": [
+            5064.0927734375,
+            134.4980010986328,
+            -9643.41796875
+          ],
+          "prey_distance": 34.360435485839844,
+          "target": [
+            5064.69287109375,
+            134.5,
+            -9646.3876953125
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 44,
+          "hunger": 7.4184889793396,
+          "id": 132,
+          "position": [
+            5057.8984375,
+            135.4980010986328,
+            -9634.1181640625
+          ],
+          "prey_distance": 43.50201416015625,
+          "target": [
+            5056.58056640625,
+            135.5,
+            -9646.3369140625
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 8,
+          "habitat": 57,
+          "hunger": 35.957191467285156,
+          "id": 133,
+          "position": [
+            4612.81005859375,
+            189.49803161621094,
+            -8324.6943359375
+          ],
+          "prey_distance": 832.794677734375,
+          "target": [
+            5223.5166015625,
+            143.5,
+            -7954.98583984375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 43.09221649169922,
+          "id": 161,
+          "position": [
+            -6883.86865234375,
+            19.498014450073242,
+            8373.96875
+          ],
+          "prey_distance": 2089.507080078125,
+          "target": [
+            -6865.078125,
+            21.0,
+            8367.5302734375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 7.518365859985352,
+          "id": 162,
+          "position": [
+            -6881.8466796875,
+            19.49800682067871,
+            8369.5458984375
+          ],
+          "prey_distance": 2088.173583984375,
+          "target": [
+            -6885.31298828125,
+            19.5,
+            8374.466796875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 42.91863250732422,
+          "id": 190,
+          "position": [
+            10860.595703125,
+            4.9980058670043945,
+            -7260.923828125
+          ],
+          "prey_distance": 1772.6800537109375,
+          "target": [
+            10860.8603515625,
+            5.0,
+            -7261.8427734375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 70.00323486328125,
+          "id": 191,
+          "position": [
+            10860.5107421875,
+            4.998013973236084,
+            -7260.7255859375
+          ],
+          "prey_distance": 1772.505859375,
+          "target": [
+            10860.224609375,
+            5.0,
+            -7259.810546875
+          ]
+        }
+      ],
+      "wolf_fed": 6,
+      "wolf_max_hunger": 70.00323486328125,
+      "wolf_starving": 0,
+      "wolves": 14,
+      "wolves_with_mate": 7,
+      "wolves_with_prey": 5
+    },
+    {
+      "arrivals": 73,
+      "births": 76,
+      "deaths": 6,
+      "elapsed_seconds": 108.8787841796875,
+      "forage_mean": 38.08035659790039,
+      "forage_min": 0.03865402936935425,
+      "hour": 3,
+      "hunted": 20,
+      "migrating": 40,
+      "migrations": 121,
+      "packet_bytes": 46899,
+      "rabbits": 242,
+      "seed": 42,
+      "starving": 3,
+      "stationary_migrants": 3,
+      "step_seconds": 0.05000000074505806,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 28.128978729248047,
+          "id": 16,
+          "position": [
+            -10952.013671875,
+            142.9980010986328,
+            -908.3903198242188
+          ],
+          "prey_distance": 868.4849853515625,
+          "target": [
+            -10952.5576171875,
+            143.0,
+            -907.6480102539062
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 29.4899959564209,
+          "id": 17,
+          "position": [
+            -10949.48828125,
+            142.99803161621094,
+            -911.8603515625
+          ],
+          "prey_distance": 872.5150146484375,
+          "target": [
+            -10948.9443359375,
+            143.0,
+            -912.6026611328125
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 24,
+          "habitat": 52,
+          "hunger": 64.89387512207031,
+          "id": 45,
+          "position": [
+            8712.6796875,
+            35.99801254272461,
+            -6505.00244140625
+          ],
+          "prey_distance": 145.4937286376953,
+          "target": [
+            8871.3896484375,
+            33.0,
+            -6492.89111328125
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 24,
+          "habitat": 52,
+          "hunger": 61.017173767089844,
+          "id": 46,
+          "position": [
+            8712.6767578125,
+            35.99801254272461,
+            -6505.00244140625
+          ],
+          "prey_distance": 145.4966583251953,
+          "target": [
+            8871.3896484375,
+            33.0,
+            -6492.89111328125
+          ]
+        },
+        {
+          "action": "Hunting",
+          "destination": null,
+          "habitat": 41,
+          "hunger": 64.82097625732422,
+          "id": 74,
+          "position": [
+            2153.15380859375,
+            269.9980163574219,
+            2861.604736328125
+          ],
+          "prey_distance": 26.70326042175293,
+          "target": [
+            2130.62548828125,
+            268.27294921875,
+            2876.070068359375
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 41,
+          "hunger": 27.533964157104492,
+          "id": 75,
+          "position": [
+            2153.153076171875,
+            269.99798583984375,
+            2860.6318359375
+          ],
+          "prey_distance": 26.84842872619629,
+          "target": [
+            2155.408447265625,
+            268.0,
+            2867.488525390625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 21.56585121154785,
+          "id": 103,
+          "position": [
+            4400.9990234375,
+            74.49800109863281,
+            -11100.630859375
+          ],
+          "prey_distance": 666.5553588867188,
+          "target": [
+            4401.45361328125,
+            75.0,
+            -11093.357421875
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 28.68177032470703,
+          "id": 104,
+          "position": [
+            4403.6689453125,
+            74.49800872802734,
+            -11100.59375
+          ],
+          "prey_distance": 666.7215576171875,
+          "target": [
+            4401.17529296875,
+            74.5,
+            -11096.8818359375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 29.00547981262207,
+          "id": 132,
+          "position": [
+            4419.6513671875,
+            74.49800872802734,
+            -11102.5546875
+          ],
+          "prey_distance": 670.1107177734375,
+          "target": [
+            4393.7001953125,
+            74.5,
+            -11100.435546875
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 8,
+          "habitat": 57,
+          "hunger": 57.655189514160156,
+          "id": 133,
+          "position": [
+            4612.81005859375,
+            189.49803161621094,
+            -8324.6943359375
+          ],
+          "prey_distance": 1614.0250244140625,
+          "target": [
+            5223.5166015625,
+            143.5,
+            -7954.98583984375
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 64.78021240234375,
+          "id": 161,
+          "position": [
+            -6787.27197265625,
+            24.49800682067871,
+            8275.427734375
+          ],
+          "prey_distance": 2101.1435546875,
+          "target": [
+            -6782.98388671875,
+            24.5,
+            8279.0166015625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 29.10519790649414,
+          "id": 162,
+          "position": [
+            -6784.4609375,
+            24.498008728027344,
+            8277.33203125
+          ],
+          "prey_distance": 2104.535888671875,
+          "target": [
+            -6785.79443359375,
+            24.5,
+            8275.8095703125
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 64.60882568359375,
+          "id": 190,
+          "position": [
+            10849.0615234375,
+            4.498002052307129,
+            -7295.16015625
+          ],
+          "prey_distance": 1791.8470458984375,
+          "target": [
+            10842.8447265625,
+            4.5,
+            -7302.76025390625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 91.42657470703125,
+          "id": 191,
+          "position": [
+            10842.8447265625,
+            4.498010158538818,
+            -7302.76025390625
+          ],
+          "prey_distance": 1800.68798828125,
+          "target": [
+            10842.4560546875,
+            4.5,
+            -7303.6328125
+          ]
+        }
+      ],
+      "wolf_fed": 7,
+      "wolf_max_hunger": 91.42657470703125,
+      "wolf_starving": 0,
+      "wolves": 14,
+      "wolves_with_mate": 7,
+      "wolves_with_prey": 2
+    },
+    {
+      "arrivals": 217,
+      "births": 98,
+      "deaths": 30,
+      "elapsed_seconds": 149.10980224609375,
+      "forage_mean": 36.35383605957031,
+      "forage_min": 0.03856147453188896,
+      "hour": 4,
+      "hunted": 21,
+      "migrating": 56,
+      "migrations": 299,
+      "packet_bytes": 46309,
+      "rabbits": 240,
+      "seed": 42,
+      "starving": 14,
+      "stationary_migrants": 6,
+      "step_seconds": 0.05000000074505806,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 49.80232238769531,
+          "id": 16,
+          "position": [
+            -10947.3603515625,
+            142.9980010986328,
+            -915.0838623046875
+          ],
+          "prey_distance": 901.6773681640625,
+          "target": [
+            -10948.583984375,
+            143.0,
+            -913.9961547851562
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 51.1720085144043,
+          "id": 17,
+          "position": [
+            -10947.640625,
+            142.99803161621094,
+            -914.8328857421875
+          ],
+          "prey_distance": 901.3621215820312,
+          "target": [
+            -10946.4169921875,
+            142.5,
+            -915.9205932617188
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 24,
+          "habitat": 52,
+          "hunger": 86.31721496582031,
+          "id": 45,
+          "position": [
+            8712.744140625,
+            35.99801254272461,
+            -6504.998046875
+          ],
+          "prey_distance": 143.29005432128906,
+          "target": [
+            8871.3896484375,
+            33.0,
+            -6492.89111328125
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 24,
+          "habitat": 52,
+          "hunger": 82.478271484375,
+          "id": 46,
+          "position": [
+            8712.744140625,
+            35.99801254272461,
+            -6504.998046875
+          ],
+          "prey_distance": 143.29005432128906,
+          "target": [
+            8871.3896484375,
+            33.0,
+            -6492.89111328125
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 22,
+          "habitat": 41,
+          "hunger": 86.24431610107422,
+          "id": 74,
+          "position": [
+            2153.15380859375,
+            269.9980163574219,
+            2861.604736328125
+          ],
+          "prey_distance": 212.78317260742188,
+          "target": [
+            2189.618408203125,
+            264.5,
+            2634.59619140625
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 22,
+          "habitat": 41,
+          "hunger": 49.20351791381836,
+          "id": 75,
+          "position": [
+            2153.153076171875,
+            269.99798583984375,
+            2860.6318359375
+          ],
+          "prey_distance": 211.83029174804688,
+          "target": [
+            2189.618408203125,
+            264.5,
+            2634.59619140625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 43.197391510009766,
+          "id": 103,
+          "position": [
+            4526.80615234375,
+            65.99800872802734,
+            -11328.9912109375
+          ],
+          "prey_distance": 4960.70263671875,
+          "target": [
+            4526.4453125,
+            66.0,
+            -11324.3623046875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 50.35863494873047,
+          "id": 104,
+          "position": [
+            4530.86962890625,
+            65.99800109863281,
+            -11332.263671875
+          ],
+          "prey_distance": 4964.16845703125,
+          "target": [
+            4538.08349609375,
+            66.0,
+            -11336.4697265625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 50.68440628051758,
+          "id": 132,
+          "position": [
+            4526.15869140625,
+            65.99800872802734,
+            -11327.6591796875
+          ],
+          "prey_distance": 4959.34130859375,
+          "target": [
+            4526.88818359375,
+            66.0,
+            -11330.0693359375
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 8,
+          "habitat": 57,
+          "hunger": 79.15884399414062,
+          "id": 133,
+          "position": [
+            4612.81005859375,
+            189.49803161621094,
+            -8324.6943359375
+          ],
+          "prey_distance": 1977.4608154296875,
+          "target": [
+            5223.5166015625,
+            143.5,
+            -7954.98583984375
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 86.20355224609375,
+          "id": 161,
+          "position": [
+            -6783.7138671875,
+            24.49799919128418,
+            8274.3720703125
+          ],
+          "prey_distance": 2095.810791015625,
+          "target": [
+            -6775.0478515625,
+            25.0,
+            8277.666015625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 50.784759521484375,
+          "id": 162,
+          "position": [
+            -6778.7216796875,
+            24.998014450073242,
+            8273.458984375
+          ],
+          "prey_distance": 2099.257568359375,
+          "target": [
+            -6772.61328125,
+            25.5,
+            8264.7060546875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 21.04444122314453,
+          "id": 190,
+          "position": [
+            11248.8173828125,
+            93.49800872802734,
+            -5499.796875
+          ],
+          "prey_distance": 23.983291625976562,
+          "target": [
+            11275.484375,
+            89.5,
+            -5556.4892578125
+          ]
+        }
+      ],
+      "wolf_fed": 1,
+      "wolf_max_hunger": 86.31721496582031,
+      "wolf_starving": 0,
+      "wolves": 13,
+      "wolves_with_mate": 0,
+      "wolves_with_prey": 1
+    },
+    {
+      "arrivals": 342,
+      "births": 109,
+      "deaths": 81,
+      "elapsed_seconds": 185.42855834960938,
+      "forage_mean": 38.28301239013672,
+      "forage_min": 0.015971409156918526,
+      "hour": 5,
+      "hunted": 22,
+      "migrating": 38,
+      "migrations": 448,
+      "packet_bytes": 39709,
+      "rabbits": 203,
+      "seed": 42,
+      "starving": 20,
+      "stationary_migrants": 2,
+      "step_seconds": 0.05000000074505806,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 71.40538024902344,
+          "id": 16,
+          "position": [
+            -10949.8564453125,
+            142.9980010986328,
+            -911.6280517578125
+          ],
+          "prey_distance": 898.6304931640625,
+          "target": [
+            -10950.0419921875,
+            143.0,
+            -910.7110595703125
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 72.75772857666016,
+          "id": 17,
+          "position": [
+            -10950.0419921875,
+            142.99803161621094,
+            -910.7110595703125
+          ],
+          "prey_distance": 897.6981201171875,
+          "target": [
+            -10949.8564453125,
+            143.0,
+            -911.6280517578125
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 22,
+          "habitat": 41,
+          "hunger": 70.81415557861328,
+          "id": 75,
+          "position": [
+            2153.153076171875,
+            269.99798583984375,
+            2860.6318359375
+          ],
+          "prey_distance": 223.14303588867188,
+          "target": [
+            2189.618408203125,
+            264.5,
+            2634.59619140625
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 64.8840560913086,
+          "id": 103,
+          "position": [
+            4512.451171875,
+            65.99800109863281,
+            -11326.1142578125
+          ],
+          "prey_distance": 4985.47314453125,
+          "target": [
+            4522.44775390625,
+            66.5,
+            -11311.40625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 71.95465087890625,
+          "id": 104,
+          "position": [
+            4515.50732421875,
+            66.49800109863281,
+            -11315.439453125
+          ],
+          "prey_distance": 4974.9541015625,
+          "target": [
+            4506.4453125,
+            66.5,
+            -11320.0478515625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 72.27629852294922,
+          "id": 132,
+          "position": [
+            4509.919921875,
+            66.99800109863281,
+            -11308.6796875
+          ],
+          "prey_distance": 4967.93994140625,
+          "target": [
+            4510.7470703125,
+            67.0,
+            -11309.1787109375
+          ]
+        },
+        {
+          "action": "Migrating",
+          "destination": 8,
+          "habitat": 57,
+          "hunger": 100.0,
+          "id": 133,
+          "position": [
+            4612.81005859375,
+            189.49803161621094,
+            -8324.6943359375
+          ],
+          "prey_distance": 2006.417236328125,
+          "target": [
+            5223.5166015625,
+            143.5,
+            -7954.98583984375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 72.37538146972656,
+          "id": 162,
+          "position": [
+            -6800.6689453125,
+            22.998004913330078,
+            8367.4306640625
+          ],
+          "prey_distance": 2153.67626953125,
+          "target": [
+            -6793.857421875,
+            23.5,
+            8362.32421875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 7.140753269195557,
+          "id": 190,
+          "position": [
+            11251.314453125,
+            91.49800109863281,
+            -5535.82373046875
+          ],
+          "prey_distance": 26.119918823242188,
+          "target": [
+            11252.2890625,
+            91.5,
+            -5535.6435546875
+          ]
+        }
+      ],
+      "wolf_fed": 1,
+      "wolf_max_hunger": 100.0,
+      "wolf_starving": 1,
+      "wolves": 9,
+      "wolves_with_mate": 0,
+      "wolves_with_prey": 1
+    },
+    {
+      "arrivals": 471,
+      "births": 122,
+      "deaths": 114,
+      "elapsed_seconds": 214.80690002441406,
+      "forage_mean": 41.44382095336914,
+      "forage_min": 0.021076282486319542,
+      "hour": 6,
+      "hunted": 22,
+      "migrating": 54,
+      "migrations": 625,
+      "packet_bytes": 36724,
+      "rabbits": 184,
+      "seed": 42,
+      "starving": 25,
+      "stationary_migrants": 1,
+      "step_seconds": 0.05000000074505806,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 92.82872009277344,
+          "id": 16,
+          "position": [
+            -10939.515625,
+            142.9980010986328,
+            -912.4456176757812
+          ],
+          "prey_distance": 910.6923217773438,
+          "target": [
+            -10938.740234375,
+            143.0,
+            -911.968505859375
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 37,
+          "hunger": 94.18106842041016,
+          "id": 17,
+          "position": [
+            -10950.13671875,
+            142.99803161621094,
+            -910.3936157226562
+          ],
+          "prey_distance": 905.8890991210938,
+          "target": [
+            -10938.185546875,
+            143.0,
+            -905.9675903320312
+          ]
+        },
+        {
+          "action": "Hunting",
+          "destination": 22,
+          "habitat": 41,
+          "hunger": 92.23749542236328,
+          "id": 75,
+          "position": [
+            2153.153076171875,
+            269.99798583984375,
+            2860.6318359375
+          ],
+          "prey_distance": 23.957780838012695,
+          "target": [
+            2146.320556640625,
+            267.99798583984375,
+            2883.534912109375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 86.3073959350586,
+          "id": 103,
+          "position": [
+            4512.435546875,
+            66.49800872802734,
+            -11322.205078125
+          ],
+          "prey_distance": 4964.69580078125,
+          "target": [
+            4512.07568359375,
+            66.5,
+            -11323.06640625
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 93.37799072265625,
+          "id": 104,
+          "position": [
+            4516.05810546875,
+            66.49800872802734,
+            -11323.1279296875
+          ],
+          "prey_distance": 4965.78955078125,
+          "target": [
+            4527.4189453125,
+            66.0,
+            -11326.1875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 40,
+          "hunger": 93.69963836669922,
+          "id": 132,
+          "position": [
+            4502.6865234375,
+            66.49800872802734,
+            -11323.21484375
+          ],
+          "prey_distance": 4965.25439453125,
+          "target": [
+            4502.00390625,
+            66.5,
+            -11322.603515625
+          ]
+        },
+        {
+          "action": "Resting",
+          "destination": null,
+          "habitat": 49,
+          "hunger": 93.79872131347656,
+          "id": 162,
+          "position": [
+            -6791.66748046875,
+            23.498003005981445,
+            8373.5244140625
+          ],
+          "prey_distance": 2155.029052734375,
+          "target": [
+            -6801.27783203125,
+            22.0,
+            8410.9951171875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "destination": null,
+          "habitat": 58,
+          "hunger": 28.728185653686523,
+          "id": 190,
+          "position": [
+            11240.8662109375,
+            91.49800109863281,
+            -5538.35546875
+          ],
+          "prey_distance": 34.95762252807617,
+          "target": [
+            11223.73046875,
+            92.5,
+            -5540.55810546875
+          ]
+        }
+      ],
+      "wolf_fed": 1,
+      "wolf_max_hunger": 94.18106842041016,
+      "wolf_starving": 0,
+      "wolves": 8,
+      "wolves_with_mate": 0,
+      "wolves_with_prey": 2
+    }
+  ]
+}

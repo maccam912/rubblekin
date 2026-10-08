@@ -17,7 +17,7 @@ use crate::{
     villages::VillageLife,
 };
 
-const SAVE_VERSION: u32 = 6;
+const SAVE_VERSION: u32 = 7;
 pub(crate) const MAX_EDITS: usize = 100_000;
 
 /// The sidecar remains on disk, but its OS lock is released on close or crash.
@@ -103,7 +103,7 @@ impl Simulation {
                 path.display()
             ))
         })?;
-        if ![1, 2, 3, 4, 5, SAVE_VERSION].contains(&save.version) {
+        if ![1, 2, 3, 4, 5, 6, SAVE_VERSION].contains(&save.version) {
             return Err(invalid(format!(
                 "Unsupported save version {}",
                 save.version
@@ -119,7 +119,7 @@ impl Simulation {
         let generation = match (save.version, save.generation) {
             (1, None | Some(WorldGeneration::ValleyV1)) => WorldGeneration::ValleyV1,
             (2, Some(generation)) if !generation.has_settlements() => generation,
-            (3..=6, Some(generation)) => generation,
+            (3..=SAVE_VERSION, Some(generation)) => generation,
             _ => {
                 return Err(invalid(
                     "Save has an invalid or missing terrain generation version",
@@ -176,7 +176,19 @@ impl Simulation {
                 "Save contains invalid or duplicate consumed quarry cells; original left untouched",
             ));
         }
-        let ecology = match save.ecology {
+        let mut saved_ecology = save.ecology;
+        if save.version < 7
+            && let Some(ecology) = &mut saved_ecology
+        {
+            // V6 assigned the destination as home at departure. Its travelling
+            // animals can finish that saved journey before using arrival-based homes.
+            for animal in &mut ecology.animals {
+                if animal.action == rubblekin_core::wildlife::WildlifeAction::Migrating {
+                    animal.destination = Some(animal.habitat);
+                }
+            }
+        }
+        let ecology = match saved_ecology {
             Some(ecology) if ecology.validate(&world) => ecology,
             None if save.version < 6 => crate::ecology::Ecology::new(&world),
             _ => {
@@ -278,18 +290,54 @@ mod tests {
         );
         let original: serde_json::Value =
             serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        for missing in [true, false] {
+        for corruption in ["missing ecology", "home", "destination", "missing journey"] {
             let mut invalid = original.clone();
-            if missing {
-                invalid.as_object_mut().unwrap().remove("ecology");
-            } else {
-                invalid["ecology"]["animals"][0]["habitat"] = 9999.into();
+            match corruption {
+                "missing ecology" => {
+                    invalid.as_object_mut().unwrap().remove("ecology");
+                }
+                "home" => invalid["ecology"]["animals"][0]["habitat"] = 9999.into(),
+                "destination" => invalid["ecology"]["animals"][0]["destination"] = 9999.into(),
+                _ => {
+                    invalid["ecology"]["animals"][0]["action"] = "Migrating".into();
+                    invalid["ecology"]["animals"][0]["destination"] = serde_json::Value::Null;
+                }
             }
             let bytes = serde_json::to_vec(&invalid).unwrap();
             fs::write(&path.0, &bytes).unwrap();
             assert!(Simulation::load(&path.0, 0, WorldGeneration::ValleyV1).is_err());
             assert_eq!(fs::read(&path.0).unwrap(), bytes);
         }
+    }
+    #[test]
+    fn version_six_migrants_recover_their_saved_journey_without_reseeding() {
+        use rubblekin_core::wildlife::WildlifeAction;
+        let path = TestPath::new();
+        let mut sim = Simulation::load(&path.0, 42, WorldGeneration::GeographyV6).unwrap();
+        let destination = sim.ecology.habitats[1].position;
+        sim.ecology.animals[0].destination = Some(1);
+        sim.ecology.animals[0].action = WildlifeAction::Migrating;
+        sim.ecology.animals[0].target = destination;
+        let position = sim.ecology.animals[0].body.position;
+        sim.save(&path.0).unwrap();
+        let mut old: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        old["version"] = 6.into();
+        old["ecology"]["animals"][0]["habitat"] = 1.into();
+        for animal in old["ecology"]["animals"].as_array_mut().unwrap() {
+            animal.as_object_mut().unwrap().remove("destination");
+        }
+        fs::write(&path.0, serde_json::to_vec(&old).unwrap()).unwrap();
+        let mut loaded = Simulation::load(&path.0, 0, WorldGeneration::ValleyV1).unwrap();
+        assert_eq!(loaded.ecology.animals.len(), sim.ecology.animals.len());
+        assert_eq!(loaded.ecology.animals[0].body.position, position);
+        assert_eq!(loaded.ecology.animals[0].destination, Some(1));
+        loaded.ecology.tick(&loaded.world, 0.05, &[]);
+        assert_eq!(loaded.ecology.animals[0].target, destination);
+        loaded.save(&path.0).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        assert_eq!(saved["version"], 7);
+        assert_eq!(saved["ecology"]["animals"][0]["destination"], 1);
     }
 
     #[test]

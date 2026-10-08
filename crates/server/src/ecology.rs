@@ -47,6 +47,10 @@ pub(crate) struct Animal {
     pub species: Species,
     pub body: Body,
     pub habitat: u32,
+    // A journey survives temporary hunting/fleeing targets. Home changes only
+    // when the body arrives, so habitat counts do not include planned arrivals.
+    #[serde(default)]
+    pub destination: Option<u32>,
     pub hunger: f32,
     pub age: f32,
     pub breeding: f32,
@@ -224,6 +228,7 @@ impl Ecology {
                     species,
                     body: Body::new(p),
                     habitat,
+                    destination: None,
                     hunger,
                     age,
                     breeding,
@@ -296,6 +301,9 @@ impl Ecology {
                     && a.id < self.next_id
                     && !self.animals[..i].iter().any(|b| b.id == a.id)
                     && (a.habitat as usize) < self.habitats.len()
+                    && a.destination
+                        .is_none_or(|id| (id as usize) < self.habitats.len())
+                    && (a.action != WildlifeAction::Migrating || a.destination.is_some())
                     && valid_position(a.body.position)
                     && valid_position(a.target)
                     && a.body.velocity.iter().all(|v| finite_range(*v, -30., 30.))
@@ -430,6 +438,10 @@ impl Ecology {
                         speed = 0.;
                     }
                 } else {
+                    if let Some(id) = a.destination {
+                        a.target = self.habitats[id as usize].position;
+                        a.action = WildlifeAction::Migrating;
+                    }
                     if a.decision <= 0. {
                         let residents = before
                             .iter()
@@ -443,7 +455,7 @@ impl Ecology {
                         // Finish the physical journey before choosing another
                         // habitat. Counting local prey during travel must not
                         // make the animal alternate destinations every decision.
-                        if depleted && a.action != WildlifeAction::Migrating {
+                        if depleted && a.destination.is_none() {
                             let destination = self
                                 .habitats
                                 .iter()
@@ -464,7 +476,7 @@ impl Ecology {
                                         .total_cmp(&distance(q.position, a.body.position))
                                 });
                             if let Some(h) = destination {
-                                a.habitat = h.id;
+                                a.destination = Some(h.id);
                                 a.target = h.position;
                                 a.action = WildlifeAction::Migrating;
                                 self.migrations += 1;
@@ -565,11 +577,15 @@ impl Ecology {
                     a.target[2] - a.body.position[2],
                 ];
                 if distance(a.target, a.body.position) < 1.
-                    && (a.action != WildlifeAction::Hunting
-                        || (a.target[1] - a.body.position[1]).abs() < 0.7)
+                    && match a.action {
+                        WildlifeAction::Hunting => (a.target[1] - a.body.position[1]).abs() < 0.7,
+                        WildlifeAction::Migrating => (a.target[1] - a.body.position[1]).abs() < 1.5,
+                        _ => true,
+                    }
                 {
                     speed = 0.;
                     if a.action == WildlifeAction::Migrating {
+                        a.habitat = a.destination.take().expect("migration has a destination");
                         self.arrivals += 1;
                         a.action = WildlifeAction::Resting;
                         a.decision = 0.;
@@ -657,6 +673,7 @@ impl Ecology {
             });
             if a.breeding <= 0.
                 && mature
+                && a.destination.is_none()
                 && a.hunger < 30.
                 && mate
                 && count < if a.species == Species::Rabbit { 8 } else { 3 }
@@ -898,14 +915,15 @@ mod tests {
         let before = e.animals[0].body.position;
         e.tick(&world, 0.05, &[]);
         assert!(e.migrations > 0);
-        assert_eq!(e.animals[0].habitat, 1);
+        assert_eq!(e.animals[0].habitat, 0, "home changes on arrival");
+        assert_eq!(e.animals[0].destination, Some(1));
         assert_eq!(e.animals[0].action, WildlifeAction::Migrating);
         assert!(
             distance(e.animals[0].body.position, before) < 0.2,
             "migration must walk, not teleport to the destination"
         );
         let destination = e.animals[0].target;
-        let assigned = e.animals[0].habitat;
+        let assigned = e.animals[0].destination.unwrap();
         let migrations = e.migrations;
         e.habitats[assigned as usize].forage = 0.;
         for a in &mut e.animals {
@@ -916,9 +934,72 @@ mod tests {
             e.animals[0].target, destination,
             "migration must not bounce between food patches before arrival"
         );
-        assert_eq!(e.animals[0].habitat, assigned);
+        assert_eq!(e.animals[0].habitat, 0);
+        assert_eq!(e.animals[0].destination, Some(assigned));
         assert_eq!(e.migrations, migrations);
         assert!(e.validate(&world));
+    }
+    #[test]
+    fn migration_resumes_after_fleeing_and_changes_home_only_on_arrival() {
+        let (world, mut e) = fixture();
+        e.habitats[0].forage = 0.;
+        e.animals[0].hunger = 10.;
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.animals[0].destination, Some(1));
+        assert_eq!(e.habitat_snapshots()[0].rabbits, 1);
+        assert_eq!(e.habitat_snapshots()[1].rabbits, 0);
+        let destination = e.habitats[1].position;
+        let migrations = e.migrations;
+        let p = e.animals[0].body.position;
+        e.tick(&world, 0.05, &[[p[0] - 2., p[1], p[2]]]);
+        assert_eq!(e.animals[0].action, WildlifeAction::Fleeing);
+        assert_eq!(e.animals[0].destination, Some(1));
+        assert_eq!(e.animals[0].habitat, 0);
+
+        let bytes = serde_json::to_vec(&e).unwrap();
+        let mut e: Ecology = serde_json::from_slice(&bytes).unwrap();
+        assert!(e.validate(&world));
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.animals[0].action, WildlifeAction::Migrating);
+        assert_eq!(e.animals[0].target, destination);
+        assert_eq!(e.migrations, migrations, "resuming is not a new departure");
+
+        // Arrival is resolved from the actual body pose, never its intention.
+        e.animals[0].body = Body::new(destination);
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.animals[0].habitat, 1);
+        assert_eq!(e.animals[0].destination, None);
+        assert_eq!(e.arrivals, 1);
+        assert_eq!(e.habitat_snapshots()[0].rabbits, 0);
+        assert_eq!(e.habitat_snapshots()[1].rabbits, 1);
+        assert!(e.validate(&world));
+    }
+    #[test]
+    fn a_successful_hunt_does_not_discard_the_wolfs_journey() {
+        let (world, mut e) = fixture();
+        let p = e.animals[0].body.position;
+        assert!(e.spawn_near(&world, Species::Wolf, 0, p, false));
+        for a in &mut e.animals {
+            a.body = Body::new(p);
+            a.body.on_ground = true;
+            a.hop = 1.;
+            a.hunger = 60.;
+            if a.species == Species::Wolf {
+                a.destination = Some(1);
+                a.action = WildlifeAction::Migrating;
+                a.target = e.habitats[1].position;
+            }
+        }
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.hunted, 1);
+        assert_eq!(e.animals.len(), 1);
+        assert_eq!(e.animals[0].action, WildlifeAction::Resting);
+        assert_eq!(e.animals[0].destination, Some(1));
+        assert_eq!(e.animals[0].habitat, 0);
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.animals[0].action, WildlifeAction::Migrating);
+        assert_eq!(e.animals[0].target, e.habitats[1].position);
+        assert_eq!(e.animals[0].destination, Some(1));
     }
     #[test]
     fn starvation_and_age_reduce_population_without_respawning_the_dead() {
