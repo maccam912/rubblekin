@@ -15,6 +15,9 @@ use std::collections::HashMap;
 mod navigation;
 
 pub(crate) const MAX_ANIMALS: usize = 256;
+// A prey boom must not occupy every slot before predators can reproduce.
+// This limits new rabbit births; existing individuals are never culled for it.
+const MAX_RABBITS: usize = MAX_ANIMALS - 32;
 const MAX_HABITATS: usize = 64;
 const RANGE: f32 = 48.;
 // Needs are slow relative to travel. Long lives avoid a seeded cohort dying
@@ -36,6 +39,16 @@ fn breeding_period(species: Species) -> f32 {
     } else {
         WOLF_BREEDING
     }
+}
+fn maturity_age(species: Species) -> f32 {
+    if species == Species::Rabbit {
+        600.
+    } else {
+        1800.
+    }
+}
+fn home_capacity(species: Species) -> usize {
+    if species == Species::Rabbit { 8 } else { 3 }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -199,7 +212,15 @@ impl Ecology {
         center: [f32; 3],
         young: bool,
     ) -> bool {
-        if self.animals.len() >= MAX_ANIMALS {
+        if self.animals.len() >= MAX_ANIMALS
+            || (species == Species::Rabbit
+                && self
+                    .animals
+                    .iter()
+                    .filter(|a| a.species == Species::Rabbit)
+                    .count()
+                    >= MAX_RABBITS)
+        {
             return false;
         }
         for _ in 0..24 {
@@ -670,16 +691,13 @@ impl Ecology {
                 .iter()
                 .filter(|b| b.habitat == a.habitat && b.species == a.species)
                 .count();
-            let mature = a.age
-                > if a.species == Species::Rabbit {
-                    600.
-                } else {
-                    1800.
-                };
+            let mature = a.age > maturity_age(a.species);
             let mate = before.iter().any(|b| {
                 b.id != a.id
                     && b.species == a.species
                     && b.hunger < 40.
+                    && b.age > maturity_age(b.species)
+                    && (b.body.position[1] - a.body.position[1]).abs() < 5.
                     && distance(b.body.position, a.body.position) < 24.
             });
             if a.breeding <= 0.
@@ -687,7 +705,7 @@ impl Ecology {
                 && a.destination.is_none()
                 && a.hunger < 30.
                 && mate
-                && count < if a.species == Species::Rabbit { 8 } else { 3 }
+                && count < home_capacity(a.species)
                 && if a.species == Species::Rabbit {
                     self.habitats[a.habitat as usize].forage > 40.
                 } else {
@@ -695,7 +713,6 @@ impl Ecology {
                 }
             {
                 births.push((a.id, a.species, a.habitat, a.body.position));
-                a.breeding = breeding_period(a.species);
             }
         }
         // Resolve eating after every body has moved, using the current poses.
@@ -731,9 +748,20 @@ impl Ecology {
                 .retain(|id, _| self.animals.iter().any(|a| a.id == *id));
         }
         for (parent, species, habitat, center) in births {
-            if self.animals.iter().any(|a| a.id == parent)
-                && self.spawn_near(world, species, habitat, center, true)
-            {
+            let Some(index) = self.animals.iter().position(|a| a.id == parent) else {
+                continue;
+            };
+            let room = self
+                .animals
+                .iter()
+                .filter(|a| a.habitat == habitat && a.species == species)
+                .count()
+                < home_capacity(species);
+            let born = room && self.spawn_near(world, species, habitat, center, true);
+            // Start a full breeding cycle only for an actual offspring. Full
+            // populations or blocked ground retry slowly instead of losing hours.
+            self.animals[index].breeding = if born { breeding_period(species) } else { 30. };
+            if born {
                 self.births += 1;
             }
         }
@@ -839,6 +867,104 @@ mod tests {
         e.animals[0].body.on_ground = true;
         (world, e)
     }
+    #[test]
+    fn prey_at_capacity_leaves_room_for_predators_without_culling_saved_animals() {
+        let (world, mut e) = fixture();
+        let q = e.habitats[1].position;
+        // A rabbit boom must leave 32 of the shared 256 slots available for
+        // ordinary predator reproduction, rather than blocking every birth.
+        while e.animals.len() < MAX_ANIMALS - 32 {
+            let mut rabbit = e.animals[0].clone();
+            rabbit.id = e.next_id;
+            e.next_id += 1;
+            e.animals.push(rabbit);
+        }
+        assert!(!e.spawn_near(&world, Species::Rabbit, 1, q, true));
+        assert!(e.spawn_near(&world, Species::Wolf, 1, q, true));
+        assert!(e.validate(&world));
+
+        // Existing worlds may already exceed the new prey breeding limit.
+        // Loading keeps those individuals; only further prey births wait.
+        while e.animals.len() < MAX_ANIMALS {
+            let mut rabbit = e.animals[0].clone();
+            rabbit.id = e.next_id;
+            e.next_id += 1;
+            e.animals.push(rabbit);
+        }
+        let restored: Ecology = serde_json::from_slice(&serde_json::to_vec(&e).unwrap()).unwrap();
+        assert!(restored.validate(&world));
+        assert_eq!(restored.animals.len(), MAX_ANIMALS);
+        assert!(!e.spawn_near(&world, Species::Rabbit, 1, q, true));
+        assert!(!e.spawn_near(&world, Species::Wolf, 1, q, true));
+    }
+
+    #[test]
+    fn a_blocked_birth_retries_soon_and_starts_its_full_cooldown_only_on_success() {
+        let (world, mut e) = fixture();
+        let p = e.habitats[0].position;
+        let q = e.habitats[1].position;
+        for _ in 0..2 {
+            assert!(e.spawn_near(&world, Species::Wolf, 0, p, false));
+        }
+        for a in &mut e.animals {
+            a.body = Body::new(p);
+            a.body.on_ground = true;
+            a.hunger = 10.;
+            a.age = 3600.;
+            a.breeding = if a.species == Species::Wolf {
+                0.
+            } else {
+                1000.
+            };
+            a.action = WildlifeAction::Resting;
+            a.decision = 10.;
+        }
+        while e.animals.len() < MAX_ANIMALS {
+            let mut rabbit = e.animals[0].clone();
+            rabbit.id = e.next_id;
+            e.next_id += 1;
+            rabbit.habitat = 1;
+            rabbit.body = Body::new(q);
+            rabbit.target = q;
+            e.animals.push(rabbit);
+        }
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.births, 0);
+        assert!(
+            e.animals
+                .iter()
+                .filter(|a| a.species == Species::Wolf)
+                .all(|a| a.breeding <= 30.)
+        );
+
+        // A natural vacancy permits one real birth, even when a saved world
+        // already contains more rabbits than the new prey breeding limit.
+        e.animals.pop();
+        for a in &mut e.animals {
+            if a.species == Species::Wolf {
+                a.breeding = 0.;
+            }
+        }
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.births, 1);
+        assert_eq!(e.animals.len(), MAX_ANIMALS);
+        assert_eq!(
+            e.animals
+                .iter()
+                .filter(|a| a.species == Species::Wolf && a.age == 0.)
+                .count(),
+            1
+        );
+        assert_eq!(
+            e.animals
+                .iter()
+                .filter(|a| a.species == Species::Wolf && a.breeding == WOLF_BREEDING && a.age > 0.)
+                .count(),
+            1
+        );
+        assert!(e.validate(&world));
+    }
+
     #[test]
     fn grazing_consumes_only_wild_grass_and_ungrazed_forage_recovers() {
         let (mut world, mut e) = fixture();
@@ -1085,11 +1211,33 @@ mod tests {
             distant.births, 0,
             "distant assigned prey are not nearby food"
         );
+        let mut high = e.clone();
+        high.animals
+            .iter_mut()
+            .find(|a| a.species == Species::Wolf)
+            .unwrap()
+            .body
+            .position[1] += 10.;
+        high.tick(&world, 0.05, &[]);
+        assert_eq!(high.births, 0, "mates on different ledges are not together");
+        let mut immature = e.clone();
+        immature
+            .animals
+            .iter_mut()
+            .find(|a| a.species == Species::Wolf)
+            .unwrap()
+            .age = 0.;
+        immature.tick(&world, 0.05, &[]);
+        assert_eq!(immature.births, 0, "offspring cannot be breeding mates");
         e.tick(&world, 0.05, &[]);
         assert!(
             e.animals
                 .iter()
                 .any(|a| a.species == Species::Wolf && a.age == 0.)
+        );
+        assert_eq!(
+            e.births, 1,
+            "queued births must respect the three-wolf home limit"
         );
         assert!(e.validate(&world));
     }
