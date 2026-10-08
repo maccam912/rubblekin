@@ -344,6 +344,12 @@ fn run(
     let mut connections = BTreeMap::<u64, Connection>::new();
     let mut next_id = 1_u64;
     let mut last_save = Instant::now();
+    let mut timing_started = Instant::now();
+    let mut timing_ticks = 0_u64;
+    let mut timing_overruns = 0_u64;
+    let mut timing_peak = Duration::ZERO;
+    // Total work, input/player movement, inhabitants, wildlife, autosave.
+    let mut timing_sums = [Duration::ZERO; 5];
     while !stop.load(Ordering::Relaxed) {
         let tick_started = Instant::now();
         for _ in 0..4 {
@@ -453,6 +459,8 @@ fn run(
             .collect();
         let mut npc_obstacles = player_positions.clone();
         npc_obstacles.extend(sim.villages.positions());
+        let inhabitants_started = Instant::now();
+        let input_elapsed = inhabitants_started.duration_since(tick_started);
         sim.npc.tick_with_obstacles(&sim.world, DT, &npc_obstacles);
         let mut resident_obstacles = player_positions.clone();
         resident_obstacles.push(sim.npc.snapshot.position);
@@ -468,10 +476,13 @@ fn run(
             next_world_time,
             &passenger_seats,
         );
+        let inhabitants_elapsed = inhabitants_started.elapsed();
+        let wildlife_started = Instant::now();
         let mut wildlife_people = player_positions;
         wildlife_people.push(sim.npc.snapshot.position);
         wildlife_people.extend(sim.villages.positions());
         sim.ecology.tick(&sim.world, DT, &wildlife_people);
+        let wildlife_elapsed = wildlife_started.elapsed();
         sim.world_time = next_world_time;
         advance_local_work(&mut connections, &mut sim, config)?;
         checkpoint_players(&connections, &mut sim);
@@ -486,8 +497,11 @@ fn run(
         if (sim.world_time / 0.2).floor() != ((sim.world_time - DT as f64) / 0.2).floor() {
             broadcast_wildlife(&mut connections, &sim);
         }
+        let mut save_elapsed = Duration::ZERO;
         if last_save.elapsed() >= Duration::from_secs(5) {
+            let saving_started = Instant::now();
             sim.save(&config.save_path)?;
+            save_elapsed = saving_started.elapsed();
             last_save = Instant::now();
         }
         for connection in connections.values_mut() {
@@ -497,6 +511,45 @@ fn run(
         }
         save_disconnected_players(&connections, &mut sim, config)?;
         connections.retain(|_, client| !client.dead);
+        let elapsed = tick_started.elapsed();
+        timing_ticks += 1;
+        timing_overruns += u64::from(elapsed > TICK);
+        timing_peak = timing_peak.max(elapsed);
+        for (sum, value) in timing_sums.iter_mut().zip([
+            elapsed,
+            input_elapsed,
+            inhabitants_elapsed,
+            wildlife_elapsed,
+            save_elapsed,
+        ]) {
+            *sum += value;
+        }
+        let timing_wall = timing_started.elapsed();
+        if timing_wall >= Duration::from_secs(60) {
+            let hz = timing_ticks as f64 / timing_wall.as_secs_f64();
+            if timing_overruns > 0 || hz < 19.5 {
+                let mean_ms = |i: usize| timing_sums[i].as_secs_f64() * 1000. / timing_ticks as f64;
+                let other = timing_sums[0].saturating_sub(timing_sums[1..].iter().sum());
+                eprintln!(
+                    "Server timing: ticks={timing_ticks} hz={hz:.2} work_mean_ms={:.2} work_peak_ms={:.2} over_50ms={timing_overruns} input_mean_ms={:.2} inhabitants_mean_ms={:.2} wildlife_mean_ms={:.2} autosave_mean_ms={:.2} other_mean_ms={:.2} connections={} residents={} animals={}",
+                    mean_ms(0),
+                    timing_peak.as_secs_f64() * 1000.,
+                    mean_ms(1),
+                    mean_ms(2),
+                    mean_ms(3),
+                    mean_ms(4),
+                    other.as_secs_f64() * 1000. / timing_ticks as f64,
+                    connections.len(),
+                    sim.villages.residents().len(),
+                    sim.ecology.animals.len(),
+                );
+            }
+            timing_started = Instant::now();
+            timing_ticks = 0;
+            timing_overruns = 0;
+            timing_peak = Duration::ZERO;
+            timing_sums.fill(Duration::ZERO);
+        }
         // Deliberately no unbounded catch-up loop when the server is overloaded.
         if let Some(remaining) = TICK.checked_sub(tick_started.elapsed()) {
             thread::sleep(remaining);

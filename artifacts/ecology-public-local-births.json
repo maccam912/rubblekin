@@ -1,0 +1,45 @@
+{
+  "source_commit": "fea21c2802efb66669910aa97b39dd76ebb02f38",
+  "pod": "rubblekin-54457484d-lbfhf",
+  "notes": "Two 15-second read-only guest stream measurements after authorized disposable restart. No terrain edits/admin commands. Repeated simulation slowdown needs phase profiling; not a sustained-load benchmark. Pod metrics snapshot:159m CPU,99Mi memory; limits2CPU/2Gi.",
+  "samples": [
+    {
+      "welcome": {
+        "version": 19,
+        "seed": 326238204,
+        "generation": "GeographyV6",
+        "can_admin": false,
+        "residents": 60
+      },
+      "initial": {
+        "animals": 218,
+        "habitats": 64
+      },
+      "state_samples": 251,
+      "wildlife_samples": 64,
+      "wall_seconds": 14.927665458992124,
+      "simulation_seconds": 12.500000186264515,
+      "simulation_ratio": 0.8373714041625154,
+      "wildlife_median_interval": 0.20352108299266547
+    },
+    {
+      "welcome": {
+        "version": 19,
+        "seed": 326238204,
+        "generation": "GeographyV6",
+        "can_admin": false,
+        "residents": 60
+      },
+      "initial": {
+        "animals": 217,
+        "habitats": 64
+      },
+      "state_samples": 281,
+      "wildlife_samples": 71,
+      "wall_seconds": 14.959555582958274,
+      "simulation_seconds": 14.000000208616257,
+      "simulation_ratio": 0.9358566924651739,
+      "wildlife_median_interval": 0.2003815000061877
+    }
+  ]
+}
