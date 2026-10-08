@@ -2437,8 +2437,163 @@ fn quarry_fixture(
     )
 }
 
+fn salvage_fixture(
+    config: &ServerConfig,
+    kind: rubblekin_core::village_assets::BuildingKind,
+    resource: rubblekin_core::settlement::ResourceKind,
+) -> (
+    World,
+    rubblekin_core::economy::WorkSite,
+    [f32; 3],
+    BlockPos,
+    [f32; 3],
+) {
+    use rubblekin_core::{
+        economy::{WORK_REACH, WorkKind, WorkSite},
+        physics::{EYE_HEIGHT, character_position_is_clear},
+        settlement::ResourceKind,
+        world::BlockEdit,
+    };
+    let mut world = World::generate(42, config.generation);
+    let (index, site) = world
+        .settlements()
+        .unwrap()
+        .roadside_landmarks
+        .iter()
+        .enumerate()
+        .find(|(_, site)| site.building.kind == kind)
+        .unwrap();
+    let building = site.building.clone();
+    let village_id = world
+        .settlements()
+        .unwrap()
+        .villages
+        .iter()
+        .min_by(|a, b| {
+            let distance =
+                |p: [f32; 3]| (p[0] - building.entrance()[0]).hypot(p[2] - building.entrance()[2]);
+            distance(a.center)
+                .total_cmp(&distance(b.center))
+                .then(a.id.cmp(&b.id))
+        })
+        .unwrap()
+        .id;
+    let expected = match resource {
+        ResourceKind::Timber => Block::Wood,
+        ResourceKind::Clay => Block::Clay,
+        _ => Block::Stone,
+    };
+    let cells: Vec<_> = building.resource_pile_cells().collect();
+    let anchor = *cells
+        .iter()
+        .find(|cell| world.block(**cell) == expected)
+        .unwrap();
+    let edits: Vec<_> = cells
+        .into_iter()
+        .filter(|cell| *cell != anchor)
+        .map(|position| BlockEdit {
+            position,
+            block: Block::Air,
+        })
+        .collect();
+    for edit in &edits {
+        world.set_block(edit.position, edit.block).unwrap();
+    }
+    let aim = [
+        (anchor.x as f32 + 0.5) * CELL_SIZE,
+        (anchor.y as f32 + 0.5) * CELL_SIZE,
+        (anchor.z as f32 + 0.5) * CELL_SIZE,
+    ];
+    let mut positions = Vec::new();
+    for dx in -4..=4 {
+        for dz in -4..=4 {
+            let p = [
+                ((anchor.x + dx) as f32 + 0.5) * CELL_SIZE,
+                (building.origin.y + 1) as f32 * CELL_SIZE,
+                ((anchor.z + dz) as f32 + 0.5) * CELL_SIZE,
+            ];
+            let eye = [p[0], p[1] + EYE_HEIGHT, p[2]];
+            let direction = std::array::from_fn(|axis| aim[axis] - eye[axis]);
+            if (p[0] - aim[0]).hypot(p[2] - aim[2]) <= WORK_REACH
+                && world
+                    .block(BlockPos::new(
+                        anchor.x + dx,
+                        building.origin.y,
+                        anchor.z + dz,
+                    ))
+                    .is_solid()
+                && character_position_is_clear(&world, p, &[])
+                && world
+                    .raycast(eye, direction, 7.)
+                    .is_some_and(|hit| hit.position == anchor)
+            {
+                positions.push(p);
+            }
+        }
+    }
+    let (position, second) = positions
+        .iter()
+        .find_map(|a| {
+            positions
+                .iter()
+                .find(|b| (a[0] - b[0]).hypot(a[2] - b[2]) >= 1.)
+                .map(|b| (*a, *b))
+        })
+        .expect("two reachable standing places at one salvage cell");
+    spawn(config.clone()).unwrap().stop().unwrap();
+    let mut save: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    save["edits"] = serde_json::to_value(edits).unwrap();
+    fs::write(&config.save_path, serde_json::to_vec(&save).unwrap()).unwrap();
+    (
+        world,
+        WorkSite {
+            village_id,
+            kind: WorkKind::Salvage,
+            index: index as u32,
+        },
+        position,
+        anchor,
+        second,
+    )
+}
+
 #[test]
 fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo() {
+    finite_resource_race(
+        rubblekin_core::village_assets::BuildingKind::QuarryYard,
+        rubblekin_core::settlement::ResourceKind::Stone,
+    );
+}
+
+#[test]
+fn wreck_timber_race_is_durable_once_only_and_sells_physical_cargo() {
+    finite_resource_race(
+        rubblekin_core::village_assets::BuildingKind::CartWreck,
+        rubblekin_core::settlement::ResourceKind::Timber,
+    );
+}
+
+#[test]
+fn wreck_stone_race_is_durable_once_only_and_sells_physical_cargo() {
+    finite_resource_race(
+        rubblekin_core::village_assets::BuildingKind::CartWreck,
+        rubblekin_core::settlement::ResourceKind::Stone,
+    );
+}
+
+#[test]
+fn kiln_clay_race_is_durable_once_only_and_sells_physical_cargo() {
+    finite_resource_race(
+        rubblekin_core::village_assets::BuildingKind::AbandonedKiln,
+        rubblekin_core::settlement::ResourceKind::Clay,
+    );
+}
+
+fn finite_resource_race(
+    building_kind: rubblekin_core::village_assets::BuildingKind,
+    resource: rubblekin_core::settlement::ResourceKind,
+) {
     use rubblekin_core::{
         economy::{MarketAction, WorkAction},
         settlement::ResourceKind,
@@ -2450,7 +2605,25 @@ fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo(
         generation: WorldGeneration::GeographyV6,
         ..save.config(true)
     };
-    let (world, site, position, anchor) = quarry_fixture(&config);
+    let (world, site, position, anchor, second_position) =
+        if building_kind == rubblekin_core::village_assets::BuildingKind::QuarryYard {
+            let (world, site, position, anchor) = quarry_fixture(&config);
+            (
+                world,
+                site,
+                position,
+                anchor,
+                [position[0] - 1., position[1], position[2]],
+            )
+        } else {
+            salvage_fixture(&config, building_kind, resource)
+        };
+    let slot = rubblekin_core::economy::resource_index(resource);
+    let block = match resource {
+        ResourceKind::Timber => Block::Wood,
+        ResourceKind::Clay => Block::Clay,
+        _ => Block::Stone,
+    };
     let server = spawn(config.clone()).unwrap();
     let (mut first, _) = Client::connect_profile(server.addr, FIRST);
     let (mut second, _) = Client::connect_profile(server.addr, SECOND);
@@ -2470,7 +2643,7 @@ fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo(
         }
     ));
     first.teleport(position);
-    second.teleport([position[0] - 1.0, position[1], position[2]]);
+    second.teleport(second_position);
     let started = first.work(2, WorkAction::Start { site });
     assert!(
         matches!(started, ServerMessage::WorkState { accepted: true, .. }),
@@ -2493,13 +2666,13 @@ fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo(
     let durable: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
     assert_eq!(
-        durable["consumed_quarry_cells"],
+        durable["consumed_resource_cells"],
         serde_json::json!([anchor])
     );
-    assert_eq!(durable["profiles"][FIRST]["ledger"]["cargo"][2], 1);
-    assert_eq!(durable["profiles"][SECOND]["ledger"]["cargo"][2], 0);
+    assert_eq!(durable["profiles"][FIRST]["ledger"]["cargo"][slot], 1);
+    assert_eq!(durable["profiles"][SECOND]["ledger"]["cargo"][slot], 0);
     assert!(
-        matches!(first.until_for(|m| matches!(m, ServerMessage::WorkState {request_id:0,work,ledger,..} if work.active.is_none() && ledger.cargo[2]==1), Duration::from_secs(5)), ServerMessage::WorkState {accepted:true,ledger,..} if ledger.coins==0 && ledger.revision==1)
+        matches!(first.until_for(|m| matches!(m, ServerMessage::WorkState {request_id:0,work,ledger,..} if work.active.is_none() && ledger.cargo[slot]==1), Duration::from_secs(5)), ServerMessage::WorkState {accepted:true,ledger,..} if ledger.coins==0 && ledger.revision==1)
     );
     assert!(
         matches!(second.until_for(|m| matches!(m, ServerMessage::WorkState {request_id:0,work,accepted:false,..} if work.active.is_none()), Duration::from_secs(5)), ServerMessage::WorkState {ledger,..} if ledger.cargo_total()==0)
@@ -2515,7 +2688,7 @@ fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo(
     first.send(ClientMessage::Edit {
         request_id: 3,
         position: anchor,
-        block: Block::Stone,
+        block,
     });
     first.until(|m| matches!(m, ServerMessage::BlockChanged { request_id: 3, .. }));
     let replay = second.work(2, WorkAction::Start { site });
@@ -2524,45 +2697,45 @@ fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo(
     );
     let remote = first.market(
         4,
-        Some(5),
+        Some(site.village_id),
         1,
         MarketAction::Sell {
-            kind: ResourceKind::Stone,
+            kind: resource,
             quantity: 1,
             unit_price: 1,
         },
     );
     assert!(
-        matches!(remote, ServerMessage::MarketState {accepted:false,ledger,..} if ledger.cargo[2]==1)
+        matches!(remote, ServerMessage::MarketState {accepted:false,ledger,..} if ledger.cargo[slot]==1)
     );
     let village = world
         .settlements()
         .unwrap()
         .villages
         .iter()
-        .find(|v| v.id == 5)
+        .find(|v| v.id == site.village_id)
         .unwrap();
     first.teleport(village.market);
     let ServerMessage::MarketState {
         market: Some(market),
         ..
-    } = first.market(5, Some(5), 1, MarketAction::View)
+    } = first.market(5, Some(site.village_id), 1, MarketAction::View)
     else {
         panic!("Expected quote")
     };
-    let price = market.goods[2].sell_price;
+    let price = market.goods[slot].sell_price;
     let sold = first.market(
         6,
-        Some(5),
+        Some(site.village_id),
         1,
         MarketAction::Sell {
-            kind: ResourceKind::Stone,
+            kind: resource,
             quantity: 1,
             unit_price: price,
         },
     );
     assert!(
-        matches!(sold, ServerMessage::MarketState {accepted:true,ledger,..} if ledger.coins==price && ledger.cargo[2]==0 && ledger.revision==2)
+        matches!(sold, ServerMessage::MarketState {accepted:true,ledger,..} if ledger.coins==price && ledger.cargo[slot]==0 && ledger.revision==2)
     );
     drop((first, second, observer));
     server.stop().unwrap();
@@ -2585,7 +2758,7 @@ fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo(
     let durable: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
     assert_eq!(
-        durable["consumed_quarry_cells"],
+        durable["consumed_resource_cells"],
         serde_json::json!([anchor])
     );
     drop(first);
@@ -2594,6 +2767,15 @@ fn quarry_race_is_durable_once_only_broadcasts_removal_and_sells_physical_cargo(
 
 #[test]
 fn quarry_save_failure_confirms_neither_block_removal_nor_cargo_and_restart_keeps_stone() {
+    finite_resource_save_failure(false);
+}
+
+#[test]
+fn salvage_save_failure_confirms_neither_block_removal_nor_cargo_and_restart_keeps_clay() {
+    finite_resource_save_failure(true);
+}
+
+fn finite_resource_save_failure(salvage: bool) {
     use rubblekin_core::economy::WorkAction;
     const PROFILE: &str = "00000000000000000000000000000061";
     let save = TestSave::new();
@@ -2601,7 +2783,17 @@ fn quarry_save_failure_confirms_neither_block_removal_nor_cargo_and_restart_keep
         generation: WorldGeneration::GeographyV6,
         ..save.config(true)
     };
-    let (_, site, position, anchor) = quarry_fixture(&config);
+    let (site, position, anchor) = if salvage {
+        let (_, site, position, anchor, _) = salvage_fixture(
+            &config,
+            rubblekin_core::village_assets::BuildingKind::AbandonedKiln,
+            rubblekin_core::settlement::ResourceKind::Clay,
+        );
+        (site, position, anchor)
+    } else {
+        let (_, site, position, anchor) = quarry_fixture(&config);
+        (site, position, anchor)
+    };
     let server = spawn(config.clone()).unwrap();
     let (mut client, _) = Client::connect_profile(server.addr, PROFILE);
     let (mut observer, _) = Client::connect_mode(server.addr, "Observer", SessionMode::Observer);
@@ -2662,7 +2854,7 @@ fn quarry_save_failure_confirms_neither_block_removal_nor_cargo_and_restart_keep
     client.work(2, WorkAction::Cancel);
     let durable: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    assert_eq!(durable["consumed_quarry_cells"], serde_json::json!([]));
+    assert_eq!(durable["consumed_resource_cells"], serde_json::json!([]));
     drop(client);
     server.stop().unwrap();
 }
@@ -2699,7 +2891,7 @@ fn wildlife_replicates_advances_without_clients_and_keeps_its_saved_population()
     server.stop().unwrap();
     let mut saved: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    assert_eq!(saved["version"], 7);
+    assert_eq!(saved["version"], 8);
     saved["ecology"]["animals"][0]["hunger"] = 12.345.into();
     fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
     let server = spawn(config.clone()).unwrap();

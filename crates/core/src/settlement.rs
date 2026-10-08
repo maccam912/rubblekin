@@ -107,6 +107,22 @@ impl BuildingPlot {
         let [x, z] = self.local_cell(position.x, position.z)?;
         village_assets::block_at(self.kind, x, position.y - self.origin.y, z)
     }
+
+    /// Shared source cells for work offers, client hints and save validation.
+    pub fn resource_pile_cells(&self) -> impl Iterator<Item = BlockPos> + '_ {
+        let [width, _, depth] = village_assets::dimensions(self.kind);
+        village_assets::resource_pile_cells(self.kind)
+            .into_iter()
+            .map(move |[x, y, z]| {
+                let [x, z] = match self.rotation % 4 {
+                    0 => [x, z],
+                    1 => [depth - 1 - z, x],
+                    2 => [width - 1 - x, depth - 1 - z],
+                    _ => [z, width - 1 - x],
+                };
+                BlockPos::new(self.origin.x + x, self.origin.y + y, self.origin.z + z)
+            })
+    }
     pub fn entrance(&self) -> [f32; 3] {
         let [w, _, d] = village_assets::dimensions(self.kind);
         let [dx, dz] = match self.rotation % 4 {

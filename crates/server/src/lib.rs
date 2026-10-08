@@ -10,7 +10,7 @@ mod navigation;
 mod npc;
 mod persistence;
 mod player_economy;
-mod quarry_work;
+mod resource_work;
 mod tick_schedule;
 mod villages;
 
@@ -1255,7 +1255,7 @@ fn send_work_state(
             let village = local_work::nearest_offer(
                 &sim.world,
                 &sim.villages,
-                &sim.consumed_quarry_cells,
+                &sim.consumed_resource_cells,
                 position,
                 &ledger,
             );
@@ -1356,7 +1356,7 @@ fn handle_work(
                     local_work::start(
                         &sim.world,
                         &sim.villages,
-                        &sim.consumed_quarry_cells,
+                        &sim.consumed_resource_cells,
                         site,
                         player.body.position,
                         sim.world_time,
@@ -1403,7 +1403,7 @@ fn advance_local_work(
             local_work::advance(
                 &sim.world,
                 &sim.villages,
-                &sim.consumed_quarry_cells,
+                &sim.consumed_resource_cells,
                 &mut active,
                 player.body.position,
                 sim.world_time,
@@ -1413,10 +1413,13 @@ fn advance_local_work(
             Err(reason) => replies.push((id, format!("Work stopped: {reason}"), false)),
             Ok(true) => {
                 let ledger = &mut sim.profiles.get_mut(profile).unwrap().ledger;
-                let result = if active.progress.offer.site.kind == WorkKind::QuarryStone {
-                    quarry_work::complete(
+                let result = if matches!(
+                    active.progress.offer.site.kind,
+                    WorkKind::QuarryStone | WorkKind::Salvage
+                ) {
+                    resource_work::complete(
                         &mut sim.world,
-                        &mut sim.consumed_quarry_cells,
+                        &mut sim.consumed_resource_cells,
                         ledger,
                         &active,
                     )
@@ -1598,7 +1601,7 @@ mod tests {
             villages: villages::VillageLife::new(&world),
             world,
             profiles: BTreeMap::from([(profile, saved)]),
-            consumed_quarry_cells: Vec::new(),
+            consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
             world_time: 0.0,
         };

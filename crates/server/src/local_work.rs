@@ -10,7 +10,7 @@ use rubblekin_core::{
     world::{Block, BlockPos, CELL_SIZE, World},
 };
 
-use crate::{player_economy::MAX_COINS, quarry_work, villages::VillageLife};
+use crate::{player_economy::MAX_COINS, resource_work, villages::VillageLife};
 
 const WORK_SECONDS: f32 = 6.0;
 const MOVE_LIMIT: f32 = 0.8;
@@ -86,7 +86,9 @@ fn site_target(
             )
         }
         WorkKind::GatherForage => return Err("Wild food comes from its shared habitat.".into()),
-        WorkKind::QuarryStone => return Err("Quarry work needs its shared supply record.".into()),
+        WorkKind::QuarryStone | WorkKind::Salvage => {
+            return Err("Resource work needs its shared supply record.".into());
+        }
     };
     let target = [
         anchor.x as f32 * CELL_SIZE + 0.25,
@@ -102,6 +104,7 @@ fn site_target(
         WorkKind::WorkshopMaintenance => "Workshop maintenance",
         WorkKind::HarvestField => "Harvest surplus crops",
         WorkKind::QuarryStone => "Collect stone",
+        WorkKind::Salvage => "Salvage loose supplies",
         WorkKind::GatherForage => "Gather wild food",
     };
     Ok((anchor, target, format!("{} · {activity}", village.name)))
@@ -123,6 +126,8 @@ fn access(
                 && world.block(BlockPos::new(anchor.x, anchor.y - 1, anchor.z)) == Block::Wood
         }
         WorkKind::QuarryStone => world.block(anchor) == Block::Stone,
+        WorkKind::Salvage => resource_work::site(world, site)
+            .is_ok_and(|site| Some(world.block(anchor)) == site.building.asset_at(anchor)),
         WorkKind::GatherForage => false,
     };
     if !intact {
@@ -130,6 +135,7 @@ fn access(
             WorkKind::TendField | WorkKind::HarvestField => "This plot needs intact planting soil.",
             WorkKind::WorkshopMaintenance => "The workshop needs its intact workbench.",
             WorkKind::QuarryStone => "This quarry stone is no longer here.",
+            WorkKind::Salvage => "This loose material is no longer here.",
             WorkKind::GatherForage => "Wild food comes from its shared habitat.",
         }
         .into());
@@ -141,7 +147,7 @@ fn access(
     {
         return Err("Move closer to the work site.".into());
     }
-    if site.kind == WorkKind::QuarryStone {
+    if matches!(site.kind, WorkKind::QuarryStone | WorkKind::Salvage) {
         return crate::validate_edit(
             world,
             &rubblekin_core::physics::Body::new(position),
@@ -167,8 +173,9 @@ pub(crate) fn offer(
     site: WorkSite,
     position: [f32; 3],
 ) -> Result<(WorkOffer, BlockPos), String> {
-    let (anchor, target, label) = if site.kind == WorkKind::QuarryStone {
-        let (anchor, target) = quarry_work::target(world, site, consumed, position)?;
+    let (anchor, target, label) = if matches!(site.kind, WorkKind::QuarryStone | WorkKind::Salvage)
+    {
+        let (anchor, target) = resource_work::target(world, site, consumed, position)?;
         let town = &world
             .settlements()
             .unwrap()
@@ -180,23 +187,31 @@ pub(crate) fn offer(
         (
             anchor,
             target,
-            format!("Quarry near {town} · Collect stone"),
+            format!(
+                "{} near {town} · Collect {}",
+                match resource_work::site(world, site)?.building.kind {
+                    BuildingKind::QuarryYard => "Quarry",
+                    BuildingKind::CartWreck => "Cart wreck",
+                    _ => "Abandoned kiln",
+                },
+                match resource_work::reward(world, site, anchor)? {
+                    WorkReward::Cargo { kind, .. } => kind.name().to_lowercase(),
+                    _ => unreachable!(),
+                }
+            ),
         )
     } else {
         site_target(world, site, position)?
     };
-    let reward = if site.kind == WorkKind::QuarryStone {
-        WorkReward::Cargo {
-            kind: rubblekin_core::settlement::ResourceKind::Stone,
-            amount: 1,
-        }
+    let reward = if matches!(site.kind, WorkKind::QuarryStone | WorkKind::Salvage) {
+        resource_work::reward(world, site, anchor)?
     } else {
         life.local_work_reward(world, site.village_id, site.kind)?
     };
     let unavailable_reason = access(world, site, anchor, target, position)
         .and_then(|()| {
-            if site.kind == WorkKind::QuarryStone {
-                quarry_work::available(world, site, anchor, consumed)
+            if matches!(site.kind, WorkKind::QuarryStone | WorkKind::Salvage) {
+                resource_work::available(world, site, anchor, consumed)
             } else {
                 life.local_work_available(site.village_id, site.kind)
             }
@@ -256,7 +271,22 @@ pub(crate) fn nearest_offer(
                         }),
                 )
         })
-        .chain(quarry_work::sites(world))
+        .chain(resource_work::sites(world).into_iter().filter(|site| {
+            let Ok(site) = resource_work::site(world, *site) else {
+                return false;
+            };
+            let building = &site.building;
+            let [width, _, depth] = building.dimensions();
+            let x = position[0].clamp(
+                building.origin.x as f32 * CELL_SIZE,
+                (building.origin.x + width) as f32 * CELL_SIZE,
+            );
+            let z = position[2].clamp(
+                building.origin.z as f32 * CELL_SIZE,
+                (building.origin.z + depth) as f32 * CELL_SIZE,
+            );
+            (x - position[0]).hypot(z - position[2]) <= 42.
+        }))
         .filter_map(|site| {
             offer(world, life, consumed, site, position)
                 .ok()
@@ -315,8 +345,8 @@ pub(crate) fn advance(
     }
     let offer = &mut active.progress.offer;
     access(world, offer.site, active.anchor, offer.position, position)?;
-    if offer.site.kind == WorkKind::QuarryStone {
-        quarry_work::available(world, offer.site, active.anchor, consumed)?;
+    if matches!(offer.site.kind, WorkKind::QuarryStone | WorkKind::Salvage) {
+        resource_work::available(world, offer.site, active.anchor, consumed)?;
     } else {
         life.local_work_available(offer.site.village_id, offer.site.kind)?;
         offer.reward = life.local_work_reward(world, offer.site.village_id, offer.site.kind)?;

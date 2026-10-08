@@ -1,0 +1,208 @@
+{
+  "source_commit": "f382e5c5fbaba89d6c385f61cfed630cacf6492d",
+  "pod": "rubblekin-54457484d-ttrmf",
+  "seed": 243136205,
+  "protocol": 19,
+  "release_build_seconds": 42.66,
+  "guest_windows": [
+    {
+      "welcome": {
+        "version": 19,
+        "seed": 243136205,
+        "generation": "GeographyV6",
+        "can_admin": false,
+        "residents": 60
+      },
+      "initial": {
+        "animals": 220,
+        "habitats": 64
+      },
+      "state_samples": 600,
+      "wildlife_samples": 151,
+      "wall_seconds": 29.89570208301302,
+      "simulation_seconds": 29.950000446289778,
+      "simulation_ratio": 1.0018162598465152,
+      "wildlife_median_interval": 0.19987866649171337
+    },
+    {
+      "welcome": {
+        "version": 19,
+        "seed": 243136205,
+        "generation": "GeographyV6",
+        "can_admin": false,
+        "residents": 60
+      },
+      "initial": {
+        "animals": 216,
+        "habitats": 64
+      },
+      "state_samples": 601,
+      "wildlife_samples": 151,
+      "wall_seconds": 29.965782666928135,
+      "simulation_seconds": 30.000000447034836,
+      "simulation_ratio": 1.001141895090378,
+      "wildlife_median_interval": 0.1997214164584875
+    }
+  ],
+  "minute_windows": [
+    {
+      "ticks": 1201.0,
+      "hz": 20.01,
+      "work_mean_ms": 7.71,
+      "work_peak_ms": 252.4,
+      "over_50ms": 11.0,
+      "input_mean_ms": 0.06,
+      "inhabitants_mean_ms": 5.01,
+      "wildlife_mean_ms": 2.43,
+      "autosave_mean_ms": 0.08,
+      "other_mean_ms": 0.14,
+      "discarded_lag_ms": 0.0,
+      "connections": 1.0,
+      "residents": 60.0,
+      "animals": 219.0,
+      "peak_phases_ms": [
+        0.096201,
+        250.098174,
+        2.048183,
+        0.0
+      ]
+    },
+    {
+      "ticks": 1200.0,
+      "hz": 20.0,
+      "work_mean_ms": 16.41,
+      "work_peak_ms": 130.91,
+      "over_50ms": 19.0,
+      "input_mean_ms": 0.05,
+      "inhabitants_mean_ms": 13.98,
+      "wildlife_mean_ms": 2.25,
+      "autosave_mean_ms": 0.07,
+      "other_mean_ms": 0.06,
+      "discarded_lag_ms": 0.0,
+      "connections": 0.0,
+      "residents": 60.0,
+      "animals": 218.0,
+      "peak_phases_ms": [
+        0.028561,
+        128.67650799999998,
+        2.1704250000000003,
+        0.0
+      ]
+    },
+    {
+      "ticks": 1201.0,
+      "hz": 20.0,
+      "work_mean_ms": 5.03,
+      "work_peak_ms": 66.61,
+      "over_50ms": 1.0,
+      "input_mean_ms": 0.04,
+      "inhabitants_mean_ms": 2.49,
+      "wildlife_mean_ms": 2.39,
+      "autosave_mean_ms": 0.06,
+      "other_mean_ms": 0.04,
+      "discarded_lag_ms": 0.0,
+      "connections": 0.0,
+      "residents": 60.0,
+      "animals": 217.0,
+      "peak_phases_ms": [
+        0.039161,
+        2.016223,
+        64.516496,
+        0.0
+      ]
+    },
+    {
+      "ticks": 1200.0,
+      "hz": 20.0,
+      "work_mean_ms": 5.7,
+      "work_peak_ms": 82.58,
+      "over_50ms": 1.0,
+      "input_mean_ms": 0.04,
+      "inhabitants_mean_ms": 3.22,
+      "wildlife_mean_ms": 2.34,
+      "autosave_mean_ms": 0.06,
+      "other_mean_ms": 0.04,
+      "discarded_lag_ms": 0.0,
+      "connections": 0.0,
+      "residents": 60.0,
+      "animals": 216.0,
+      "peak_phases_ms": [
+        0.045241,
+        1.807421,
+        80.6934,
+        0.0
+      ]
+    },
+    {
+      "ticks": 1200.0,
+      "hz": 20.0,
+      "work_mean_ms": 7.46,
+      "work_peak_ms": 93.15,
+      "over_50ms": 2.0,
+      "input_mean_ms": 0.06,
+      "inhabitants_mean_ms": 4.88,
+      "wildlife_mean_ms": 2.34,
+      "autosave_mean_ms": 0.07,
+      "other_mean_ms": 0.09,
+      "discarded_lag_ms": 0.0,
+      "connections": 1.0,
+      "residents": 60.0,
+      "animals": 216.0,
+      "peak_phases_ms": [
+        0.07580100000000001,
+        90.753155,
+        2.139865,
+        0.0
+      ]
+    },
+    {
+      "ticks": 1200.0,
+      "hz": 20.0,
+      "work_mean_ms": 9.79,
+      "work_peak_ms": 53.82,
+      "over_50ms": 1.0,
+      "input_mean_ms": 0.05,
+      "inhabitants_mean_ms": 7.3,
+      "wildlife_mean_ms": 2.3,
+      "autosave_mean_ms": 0.07,
+      "other_mean_ms": 0.07,
+      "discarded_lag_ms": 0.0,
+      "connections": 0.0,
+      "residents": 60.0,
+      "animals": 216.0,
+      "peak_phases_ms": [
+        0.0384,
+        50.717419,
+        3.030195,
+        0.0
+      ]
+    },
+    {
+      "ticks": 1201.0,
+      "hz": 20.0,
+      "work_mean_ms": 6.77,
+      "work_peak_ms": 74.32,
+      "over_50ms": 1.0,
+      "input_mean_ms": 0.04,
+      "inhabitants_mean_ms": 4.24,
+      "wildlife_mean_ms": 2.38,
+      "autosave_mean_ms": 0.06,
+      "other_mean_ms": 0.05,
+      "discarded_lag_ms": 0.0,
+      "connections": 0.0,
+      "residents": 60.0,
+      "animals": 215.0,
+      "peak_phases_ms": [
+        0.03508,
+        6.13423,
+        68.11997699999999,
+        0.0
+      ]
+    }
+  ],
+  "limitations": [
+    "Read-only guest measurements with zero or one connection, not a multiplayer load benchmark.",
+    "Pod restart generates a different seed; comparisons with earlier deployments are not a controlled same-seed experiment.",
+    "Phase wall times include scheduling. Short work overruns remain, without discarded clock debt in these sampled windows."
+  ]
+}

@@ -13,11 +13,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     npc::Forager,
     player_economy::{Profiles, validate_profiles},
-    quarry_work,
+    resource_work,
     villages::VillageLife,
 };
 
-const SAVE_VERSION: u32 = 7;
+const SAVE_VERSION: u32 = 8;
 pub(crate) const MAX_EDITS: usize = 100_000;
 
 /// The sidecar remains on disk, but its OS lock is released on close or crash.
@@ -60,8 +60,8 @@ struct Save {
     villages: Option<VillageLife>,
     #[serde(default)]
     profiles: Option<Profiles>,
-    #[serde(default)]
-    consumed_quarry_cells: Option<Vec<BlockPos>>,
+    #[serde(default, alias = "consumed_quarry_cells")]
+    consumed_resource_cells: Option<Vec<BlockPos>>,
     #[serde(default)]
     ecology: Option<crate::ecology::Ecology>,
 }
@@ -72,7 +72,7 @@ pub(crate) struct Simulation {
     pub world_time: f64,
     pub villages: VillageLife,
     pub profiles: Profiles,
-    pub consumed_quarry_cells: Vec<BlockPos>,
+    pub consumed_resource_cells: Vec<BlockPos>,
     pub ecology: crate::ecology::Ecology,
 }
 
@@ -87,7 +87,7 @@ impl Simulation {
                     npc: Forager::new(&world),
                     villages: VillageLife::new(&world),
                     profiles: Profiles::default(),
-                    consumed_quarry_cells: Vec::new(),
+                    consumed_resource_cells: Vec::new(),
                     world,
                     world_time: 0.0,
                 });
@@ -103,7 +103,7 @@ impl Simulation {
                 path.display()
             ))
         })?;
-        if ![1, 2, 3, 4, 5, 6, SAVE_VERSION].contains(&save.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, SAVE_VERSION].contains(&save.version) {
             return Err(invalid(format!(
                 "Unsupported save version {}",
                 save.version
@@ -162,18 +162,18 @@ impl Simulation {
                 "Save contains invalid player progress; original left untouched",
             ));
         }
-        let consumed_quarry_cells = match save.consumed_quarry_cells {
+        let consumed_resource_cells = match save.consumed_resource_cells {
             Some(cells) => cells,
             None if save.version < 5 => Vec::new(),
             None => {
                 return Err(invalid(
-                    "Save is missing its consumed quarry cells; original left untouched",
+                    "Save is missing its consumed resource cells; original left untouched",
                 ));
             }
         };
-        if !quarry_work::valid_spent(&world, &consumed_quarry_cells) {
+        if !resource_work::valid_spent(&world, &consumed_resource_cells) {
             return Err(invalid(
-                "Save contains invalid or duplicate consumed quarry cells; original left untouched",
+                "Save contains invalid or duplicate consumed resource cells; original left untouched",
             ));
         }
         let mut saved_ecology = save.ecology;
@@ -204,7 +204,7 @@ impl Simulation {
             world_time: save.world_time,
             villages,
             profiles,
-            consumed_quarry_cells,
+            consumed_resource_cells,
         })
     }
 
@@ -239,7 +239,7 @@ impl Simulation {
                 world_time: self.world_time,
                 villages: Some(self.villages.clone()),
                 profiles: Some(self.profiles.clone()),
-                consumed_quarry_cells: Some(self.consumed_quarry_cells.clone()),
+                consumed_resource_cells: Some(self.consumed_resource_cells.clone()),
                 ecology: Some(self.ecology.clone()),
             };
             write_save(&mut file, &save)?;
@@ -338,7 +338,7 @@ mod tests {
         assert_eq!(loaded.ecology.animals[0].destination, Some(1));
         loaded.save(&path.0).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
-        assert_eq!(saved["version"], 7);
+        assert_eq!(saved["version"], SAVE_VERSION);
         assert_eq!(saved["ecology"]["animals"][0]["destination"], 1);
     }
 
@@ -421,36 +421,49 @@ mod tests {
         for version in 1..=4 {
             let mut old = base.clone();
             old["version"] = version.into();
-            old.as_object_mut().unwrap().remove("consumed_quarry_cells");
+            old.as_object_mut()
+                .unwrap()
+                .remove("consumed_resource_cells");
             fs::write(&path.0, serde_json::to_vec(&old).unwrap()).unwrap();
             let loaded = Simulation::load(&path.0, 0, WorldGeneration::GeographyV6).unwrap();
-            assert!(loaded.consumed_quarry_cells.is_empty());
+            assert!(loaded.consumed_resource_cells.is_empty());
             assert_eq!(loaded.world.generation(), WorldGeneration::ValleyV1);
         }
         fs::remove_file(&path.0).unwrap();
         let mut sim = Simulation::load(&path.0, 42, WorldGeneration::GeographyV6).unwrap();
-        let id = quarry_work::sites(&sim.world)[0];
-        let anchor = quarry_work::cells(&quarry_work::site(&sim.world, id).unwrap().building)
+        let id = resource_work::sites(&sim.world)[0];
+        let anchor = resource_work::cells(&resource_work::site(&sim.world, id).unwrap().building)
             .next()
             .unwrap();
         sim.world.set_block(anchor, Block::Air).unwrap();
-        sim.consumed_quarry_cells.push(anchor);
+        sim.consumed_resource_cells.push(anchor);
         sim.save(&path.0).unwrap();
         let loaded = Simulation::load(&path.0, 0, WorldGeneration::ValleyV1).unwrap();
-        assert_eq!(loaded.consumed_quarry_cells, [anchor]);
+        assert_eq!(loaded.consumed_resource_cells, [anchor]);
         assert_eq!(loaded.world.block(anchor), Block::Air);
         // A builder may restore a spent block. The shared record must still load
         // and prohibit a second payment even though its edit override vanishes.
         sim.world.set_block(anchor, Block::Stone).unwrap();
         sim.save(&path.0).unwrap();
         let loaded = Simulation::load(&path.0, 0, WorldGeneration::ValleyV1).unwrap();
-        assert_eq!(loaded.consumed_quarry_cells, [anchor]);
+        assert_eq!(loaded.consumed_resource_cells, [anchor]);
         assert_eq!(loaded.world.block(anchor), Block::Stone);
         assert!(
-            quarry_work::available(&loaded.world, id, anchor, &loaded.consumed_quarry_cells)
+            resource_work::available(&loaded.world, id, anchor, &loaded.consumed_resource_cells)
                 .is_err()
         );
         let valid: serde_json::Value = serde_json::from_slice(&fs::read(&path.0).unwrap()).unwrap();
+        let mut legacy = valid.clone();
+        legacy["version"] = 7.into();
+        let cells = legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("consumed_resource_cells")
+            .unwrap();
+        legacy["consumed_quarry_cells"] = cells;
+        fs::write(&path.0, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let loaded = Simulation::load(&path.0, 0, WorldGeneration::ValleyV1).unwrap();
+        assert_eq!(loaded.consumed_resource_cells, [anchor]);
         for cells in [
             None,
             Some(serde_json::json!([anchor, anchor])),
@@ -458,12 +471,12 @@ mod tests {
         ] {
             let mut invalid = valid.clone();
             if let Some(cells) = cells {
-                invalid["consumed_quarry_cells"] = cells;
+                invalid["consumed_resource_cells"] = cells;
             } else {
                 invalid
                     .as_object_mut()
                     .unwrap()
-                    .remove("consumed_quarry_cells");
+                    .remove("consumed_resource_cells");
             }
             let bytes = serde_json::to_vec(&invalid).unwrap();
             fs::write(&path.0, &bytes).unwrap();
@@ -517,7 +530,7 @@ mod tests {
             world_time: 0.0,
             villages: Some(VillageLife::default()),
             profiles: Some(Profiles::default()),
-            consumed_quarry_cells: Some(Vec::new()),
+            consumed_resource_cells: Some(Vec::new()),
             ecology: Some(crate::ecology::Ecology::default()),
         };
         // This entire save fits in the buffer. Serialization succeeds before
@@ -540,7 +553,7 @@ mod tests {
         let npc_position = npc.snapshot.position;
         let sim = Simulation {
             profiles: Default::default(),
-            consumed_quarry_cells: Vec::new(),
+            consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
             world,
             npc,
@@ -590,7 +603,7 @@ mod tests {
         world.set_block(placed, Block::Brick).unwrap();
         let sim = Simulation {
             profiles: Default::default(),
-            consumed_quarry_cells: Vec::new(),
+            consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
             npc: Forager::new(&world),
             world,
@@ -670,7 +683,7 @@ mod tests {
         let world = World::new(42);
         let sim = Simulation {
             profiles: Default::default(),
-            consumed_quarry_cells: Vec::new(),
+            consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
             npc: Forager::new(&world),
             world,

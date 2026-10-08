@@ -15,7 +15,7 @@ pub(crate) struct CachedTools {
 fn tool_index(kind: WorkKind) -> usize {
     match kind {
         WorkKind::TendField => 0,
-        WorkKind::WorkshopMaintenance | WorkKind::QuarryStone => 1,
+        WorkKind::WorkshopMaintenance | WorkKind::QuarryStone | WorkKind::Salvage => 1,
         WorkKind::HarvestField | WorkKind::GatherForage => 2,
     }
 }
@@ -267,6 +267,7 @@ mod tests {
             WorkKind::QuarryStone,
             WorkKind::HarvestField,
             WorkKind::GatherForage,
+            WorkKind::Salvage,
         ] {
             work.offer.site.kind = kind;
             confirm(&mut app, Some(work.clone()));

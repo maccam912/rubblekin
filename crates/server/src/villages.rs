@@ -287,7 +287,9 @@ impl VillageLife {
             .ok_or("That village is unavailable.")?;
         match kind {
             WorkKind::GatherForage => Err("Wild food comes from its shared habitat.".into()),
-            WorkKind::QuarryStone => Err("Quarry stone comes from its physical pile.".into()),
+            WorkKind::QuarryStone | WorkKind::Salvage => {
+                Err("Loose resources come from their physical pile.".into())
+            }
             WorkKind::TendField if economy.planted && economy.snapshot.crop_growth >= 1.0 => {
                 Err("These crops are ready to harvest.".into())
             }
@@ -316,8 +318,8 @@ impl VillageLife {
     ) -> Result<WorkReward, String> {
         Ok(match kind {
             WorkKind::GatherForage => return Err("Wild food comes from its shared habitat.".into()),
-            WorkKind::QuarryStone => {
-                return Err("Quarry stone comes from its physical pile.".into());
+            WorkKind::QuarryStone | WorkKind::Salvage => {
+                return Err("Loose resources come from their physical pile.".into());
             }
             WorkKind::TendField => WorkReward::Coins(2),
             WorkKind::WorkshopMaintenance => WorkReward::Coins(4),
@@ -364,8 +366,8 @@ impl VillageLife {
             .unwrap();
         match kind {
             WorkKind::GatherForage => return Err("Wild food comes from its shared habitat.".into()),
-            WorkKind::QuarryStone => {
-                return Err("Quarry stone comes from its physical pile.".into());
+            WorkKind::QuarryStone | WorkKind::Salvage => {
+                return Err("Loose resources come from their physical pile.".into());
             }
             WorkKind::TendField => {
                 let cultivated = cultivated_fraction(world, village);
@@ -3668,7 +3670,7 @@ mod tests {
         ));
         let simulation = crate::persistence::Simulation {
             profiles: Default::default(),
-            consumed_quarry_cells: Vec::new(),
+            consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
             world: world.clone(),
             npc: crate::npc::Forager::new(&world),
@@ -3823,7 +3825,7 @@ mod tests {
             ));
             let simulation = crate::persistence::Simulation {
                 profiles: Default::default(),
-                consumed_quarry_cells: Vec::new(),
+                consumed_resource_cells: Vec::new(),
                 ecology: crate::ecology::Ecology::default(),
                 world: world.clone(),
                 npc: crate::npc::Forager::new(&world),
@@ -3915,7 +3917,7 @@ mod tests {
         ));
         let simulation = crate::persistence::Simulation {
             profiles: Default::default(),
-            consumed_quarry_cells: Vec::new(),
+            consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
             world: world.clone(),
             npc: crate::npc::Forager::new(&world),
@@ -4615,7 +4617,7 @@ mod tests {
         ));
         let sim = Simulation {
             profiles: Default::default(),
-            consumed_quarry_cells: Vec::new(),
+            consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
             npc: Forager::new(&world),
             world,

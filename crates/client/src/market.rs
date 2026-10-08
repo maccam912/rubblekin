@@ -15,7 +15,7 @@ use rubblekin_core::{
     },
     protocol::ClientMessage,
     settlement::ResourceKind,
-    village_assets::{BuildingKind, dimensions, quarry_pile_cells},
+    village_assets::BuildingKind,
     world::CELL_SIZE,
 };
 
@@ -457,10 +457,15 @@ fn near_worksite_geometry(world: &VoxelWorld, position: [f32; 3]) -> bool {
                         near(building.origin, width, depth)
                     })
         }) || plan.roadside_landmarks.iter().any(|site| {
-            site.building.kind == BuildingKind::QuarryYard
-                && quarry_pile_targets(&site.building).any(|(cell, feet)| {
-                    world.0.block(cell) == rubblekin_core::world::Block::Stone
-                        && within_work_reach(position, feet)
+            let building = &site.building;
+            let [width, _, depth] = building.dimensions();
+            matches!(
+                building.kind,
+                BuildingKind::QuarryYard | BuildingKind::CartWreck | BuildingKind::AbandonedKiln
+            ) && near(building.origin, width, depth)
+                && resource_pile_targets(building).any(|(cell, feet)| {
+                    within_work_reach(position, feet)
+                        && Some(world.0.block(cell)) == building.asset_at(cell)
                 })
         })
     })
@@ -468,22 +473,10 @@ fn near_worksite_geometry(world: &VoxelWorld, position: [f32; 3]) -> bool {
 
 // The server checks spent cells and actual visibility; this only bounds passive
 // offer reads to the generated pile, never nearby walls, floor, or loose terrain.
-fn quarry_pile_targets(
+fn resource_pile_targets(
     building: &rubblekin_core::settlement::BuildingPlot,
 ) -> impl Iterator<Item = (rubblekin_core::world::BlockPos, [f32; 3])> + '_ {
-    let [width, _, depth] = dimensions(building.kind);
-    quarry_pile_cells().map(move |[x, y, z]| {
-        let [x, z] = match building.rotation % 4 {
-            0 => [x, z],
-            1 => [depth - 1 - z, x],
-            2 => [width - 1 - x, depth - 1 - z],
-            _ => [z, width - 1 - x],
-        };
-        let cell = rubblekin_core::world::BlockPos::new(
-            building.origin.x + x,
-            building.origin.y + y,
-            building.origin.z + z,
-        );
+    building.resource_pile_cells().map(move |cell| {
         (
             cell,
             [
@@ -883,7 +876,7 @@ fn work_text(panel: &MarketPanel, session: &Session) -> String {
         );
     }
     let Some(offer) = &panel.work.offer else {
-        return "LOCAL WORK · Visit fields or workshops for work, gather wild food, or collect quarry stone to sell at a market.".into();
+        return "LOCAL WORK · Visit fields or workshops for work, gather wild food, collect quarry stone, or salvage wrecks and abandoned kilns to sell at a market.".into();
     };
     let distance = Vec2::new(
         offer.position[0] - session.body.position[0],
@@ -897,6 +890,9 @@ fn work_text(panel: &MarketPanel, session: &Session) -> String {
         WorkKind::TendField => "Plant and tend the village's real crops.",
         WorkKind::HarvestField => {
             "Gather ripe Food into your cargo. Sell it at a village market to earn coins; village food reserves stay protected."
+        }
+        WorkKind::Salvage => {
+            "Collect 1 unit of loose timber, stone or clay into your cargo. These roadside supplies are finite. Sell them at a village market."
         }
         WorkKind::QuarryStone => {
             "Collect 1 Stone from this finite pile into your cargo. Sell it at a village market to earn coins."
@@ -993,6 +989,7 @@ pub(crate) fn hud_text(
             WorkKind::GatherForage => "Gather wild food",
             WorkKind::HarvestField => "Harvest field",
             WorkKind::QuarryStone => "Collect stone",
+            WorkKind::Salvage => "Salvage supplies",
             WorkKind::WorkshopMaintenance => "Workshop maintenance",
         };
         text.push_str(&format!(
@@ -1367,45 +1364,56 @@ mod tests {
     }
 
     #[test]
-    fn quarry_hint_geometry_uses_rotated_real_piles_and_stops_after_they_are_removed() {
+    fn resource_hint_geometry_uses_rotated_real_piles_and_stops_after_they_are_removed() {
         use rubblekin_core::world::{Block, World, WorldGeneration};
-        let mut world = VoxelWorld(World::generate(42, WorldGeneration::GeographyV6));
-        let building = world
-            .0
-            .settlements()
-            .unwrap()
-            .roadside_landmarks
-            .iter()
-            .find(|site| site.building.kind == BuildingKind::QuarryYard)
-            .unwrap()
-            .building
-            .clone();
-        for rotation in 0..4 {
-            let mut rotated = building.clone();
-            rotated.rotation = rotation;
-            for ((cell, feet), local) in quarry_pile_targets(&rotated).zip(quarry_pile_cells()) {
-                assert_eq!(
-                    rotated.local_cell(cell.x, cell.z),
-                    Some([local[0], local[2]])
-                );
-                assert_eq!(rotated.asset_at(cell), Some(Block::Stone));
-                assert_eq!(feet[1], (building.origin.y + 1) as f32 * CELL_SIZE);
+        for kind in [
+            BuildingKind::QuarryYard,
+            BuildingKind::CartWreck,
+            BuildingKind::AbandonedKiln,
+        ] {
+            let mut world = VoxelWorld(World::generate(42, WorldGeneration::GeographyV6));
+            let building = world
+                .0
+                .settlements()
+                .unwrap()
+                .roadside_landmarks
+                .iter()
+                .find(|site| site.building.kind == kind)
+                .unwrap()
+                .building
+                .clone();
+            for rotation in 0..4 {
+                let mut rotated = building.clone();
+                rotated.rotation = rotation;
+                for ((cell, feet), local) in resource_pile_targets(&rotated)
+                    .zip(rubblekin_core::village_assets::resource_pile_cells(kind))
+                {
+                    assert_eq!(
+                        rotated.local_cell(cell.x, cell.z),
+                        Some([local[0], local[2]])
+                    );
+                    assert!(matches!(
+                        rotated.asset_at(cell),
+                        Some(Block::Stone | Block::Wood | Block::Clay)
+                    ));
+                    assert_eq!(feet[1], (building.origin.y + 1) as f32 * CELL_SIZE);
+                }
             }
+            let targets: Vec<_> = resource_pile_targets(&building).collect();
+            let position = targets[0].1;
+            assert!(near_worksite_geometry(&world, position));
+            assert!(!near_worksite_geometry(
+                &world,
+                [position[0], position[1] + 2., position[2]]
+            ));
+            for (cell, _) in targets {
+                world.0.set_block(cell, Block::Air).unwrap();
+            }
+            assert!(
+                !near_worksite_geometry(&world, position),
+                "Main frames, walls and floors must not keep passive work reads alive"
+            );
         }
-        let targets: Vec<_> = quarry_pile_targets(&building).collect();
-        let position = targets[0].1;
-        assert!(near_worksite_geometry(&world, position));
-        assert!(!near_worksite_geometry(
-            &world,
-            [position[0], position[1] + 2., position[2]]
-        ));
-        for (cell, _) in targets {
-            world.0.set_block(cell, Block::Air).unwrap();
-        }
-        assert!(
-            !near_worksite_geometry(&world, position),
-            "Quarry walls and floor must not keep passive work reads alive"
-        );
     }
 
     #[test]

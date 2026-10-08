@@ -1,4 +1,4 @@
-//! Finite quarry-pile extraction. The shared spent-cell record survives
+//! Finite quarry and roadside resource extraction. The shared spent-cell record survives
 //! creative restoration, reconnects and sales of the extracted cargo.
 use std::collections::HashSet;
 
@@ -6,27 +6,40 @@ use rubblekin_core::{
     economy::{PlayerEconomy, WORK_REACH, WorkKind, WorkReward, WorkSite, resource_index},
     physics::Body,
     settlement::{BuildingPlot, ResourceKind, RoadsideLandmark},
-    village_assets::{BuildingKind, dimensions, quarry_pile_cells},
+    village_assets::BuildingKind,
     world::{Block, BlockEdit, BlockPos, CELL_SIZE, World},
 };
 
 use crate::{local_work, persistence::MAX_EDITS};
 
 pub(crate) fn cells(building: &BuildingPlot) -> impl Iterator<Item = BlockPos> + '_ {
-    let [width, _, depth] = dimensions(building.kind);
-    quarry_pile_cells().map(move |[x, y, z]| {
-        let [x, z] = match building.rotation % 4 {
-            0 => [x, z],
-            1 => [depth - 1 - z, x],
-            2 => [width - 1 - x, depth - 1 - z],
-            _ => [z, width - 1 - x],
-        };
-        BlockPos::new(
-            building.origin.x + x,
-            building.origin.y + y,
-            building.origin.z + z,
-        )
-    })
+    building.resource_pile_cells()
+}
+
+pub(crate) fn work_kind(kind: BuildingKind) -> Option<WorkKind> {
+    match kind {
+        BuildingKind::QuarryYard => Some(WorkKind::QuarryStone),
+        BuildingKind::CartWreck | BuildingKind::AbandonedKiln => Some(WorkKind::Salvage),
+        _ => None,
+    }
+}
+
+fn material(building: &BuildingPlot, anchor: BlockPos) -> Result<(Block, ResourceKind), String> {
+    match building.asset_at(anchor) {
+        Some(Block::Wood) => Ok((Block::Wood, ResourceKind::Timber)),
+        Some(Block::Stone) => Ok((Block::Stone, ResourceKind::Stone)),
+        Some(Block::Clay) => Ok((Block::Clay, ResourceKind::Clay)),
+        _ => Err("That site has no collectable material here.".into()),
+    }
+}
+
+pub(crate) fn reward(world: &World, id: WorkSite, anchor: BlockPos) -> Result<WorkReward, String> {
+    let site = site(world, id)?;
+    if !cells(&site.building).any(|cell| cell == anchor) {
+        return Err("Only this site's loose resource pile can be collected.".into());
+    }
+    let (_, kind) = material(&site.building, anchor)?;
+    Ok(WorkReward::Cargo { kind, amount: 1 })
 }
 
 fn nearest_village(world: &World, building: &BuildingPlot) -> Option<u32> {
@@ -52,11 +65,11 @@ pub(crate) fn sites(world: &World) -> Vec<WorkSite> {
         .into_iter()
         .flat_map(|plan| &plan.roadside_landmarks)
         .enumerate()
-        .filter(|(_, site)| site.building.kind == BuildingKind::QuarryYard)
+        .filter(|(_, site)| work_kind(site.building.kind).is_some())
         .filter_map(|(index, site)| {
             nearest_village(world, &site.building).map(|village_id| WorkSite {
                 village_id,
-                kind: WorkKind::QuarryStone,
+                kind: work_kind(site.building.kind).unwrap(),
                 index: index as u32,
             })
         })
@@ -68,11 +81,10 @@ pub(crate) fn site(world: &World, id: WorkSite) -> Result<&RoadsideLandmark, Str
         .settlements()
         .and_then(|plan| plan.roadside_landmarks.get(id.index as usize))
         .filter(|site| {
-            id.kind == WorkKind::QuarryStone
-                && site.building.kind == BuildingKind::QuarryYard
+            Some(id.kind) == work_kind(site.building.kind)
                 && nearest_village(world, &site.building) == Some(id.village_id)
         })
-        .ok_or("That quarry pile does not exist.")?;
+        .ok_or("That resource pile does not exist.")?;
     Ok(site)
 }
 
@@ -102,7 +114,8 @@ pub(crate) fn target(
     let anchor = cells(&site.building)
         .min_by(|a, b| {
             let rank = |cell| {
-                if spent.contains(&cell) || world.block(cell) != Block::Stone {
+                if spent.contains(&cell) || Some(world.block(cell)) != site.building.asset_at(cell)
+                {
                     return 2;
                 }
                 let target = feet(cell);
@@ -129,7 +142,7 @@ pub(crate) fn target(
                 // Prefer the top of an equally close stack, whose surface can be seen.
                 .then_with(|| b.y.cmp(&a.y))
         })
-        .ok_or("That quarry has no stone pile.")?;
+        .ok_or("That site has no loose resource pile.")?;
     Ok((anchor, feet(anchor)))
 }
 
@@ -141,16 +154,16 @@ pub(crate) fn available(
 ) -> Result<(), String> {
     let site = site(world, id)?;
     if !cells(&site.building).any(|cell| cell == anchor) {
-        return Err("Only the quarry's designated stone pile can be collected.".into());
+        return Err("Only this site's designated loose pile can be collected.".into());
     }
     if spent.contains(&anchor) {
         return Err(
-            "This stone has already been collected. Restoring it does not create more supplies."
+            "This material has already been collected. Restoring it does not create more supplies."
                 .into(),
         );
     }
-    if world.block(anchor) != Block::Stone {
-        return Err("This quarry stone is no longer here.".into());
+    if Some(world.block(anchor)) != site.building.asset_at(anchor) {
+        return Err("This material is no longer here.".into());
     }
     Ok(())
 }
@@ -160,7 +173,7 @@ pub(crate) fn valid_spent(world: &World, spent: &[BlockPos]) -> bool {
         .settlements()
         .into_iter()
         .flat_map(|plan| &plan.roadside_landmarks)
-        .filter(|site| site.building.kind == BuildingKind::QuarryYard)
+        .filter(|site| work_kind(site.building.kind).is_some())
         .flat_map(|site| cells(&site.building))
         .collect();
     if spent.len() > canonical.len() {
@@ -179,13 +192,11 @@ pub(crate) fn complete(
     active: &local_work::ActiveWork,
 ) -> Result<(String, BlockEdit), String> {
     available(world, active.progress.offer.site, active.anchor, spent)?;
-    local_work::check_reward(
-        ledger,
-        WorkReward::Cargo {
-            kind: ResourceKind::Stone,
-            amount: 1,
-        },
-    )?;
+    let reward = reward(world, active.progress.offer.site, active.anchor)?;
+    local_work::check_reward(ledger, reward)?;
+    let WorkReward::Cargo { kind, amount } = reward else {
+        unreachable!()
+    };
     let edits = world.edits();
     if edits.len() >= MAX_EDITS && !edits.iter().any(|edit| edit.position == active.anchor) {
         return Err("The world has reached its saved edit limit.".into());
@@ -193,10 +204,13 @@ pub(crate) fn complete(
     world.set_block(active.anchor, Block::Air)?;
     spent.push(active.anchor);
     spent.sort_by_key(|cell| (cell.x, cell.y, cell.z));
-    ledger.cargo[resource_index(ResourceKind::Stone)] += 1;
+    ledger.cargo[resource_index(kind)] += amount;
     ledger.revision += 1;
     Ok((
-        "Collected 1 stone. Carry it to a market to sell.".into(),
+        format!(
+            "Collected {amount} {}. Carry it to a market to sell.",
+            kind.name().to_lowercase()
+        ),
         BlockEdit {
             position: active.anchor,
             block: Block::Air,
@@ -265,6 +279,121 @@ mod tests {
                 let [x, z] = building.local_cell(cell.x, cell.z).unwrap();
                 assert!((20..=23).contains(&x) && (5..=11).contains(&z));
             }
+        }
+    }
+
+    #[test]
+    fn salvage_cells_match_actual_assets_in_every_rotation_and_leave_the_main_structure() {
+        for (kind, count) in [
+            (BuildingKind::CartWreck, 9),
+            (BuildingKind::AbandonedKiln, 54),
+        ] {
+            for rotation in 0..4 {
+                let building = BuildingPlot {
+                    kind,
+                    rotation,
+                    origin: BlockPos::new(-100, 200, -300),
+                };
+                let cells: Vec<_> = cells(&building).collect();
+                assert_eq!(cells.len(), count);
+                assert_eq!(cells.iter().collect::<HashSet<_>>().len(), count);
+                for cell in cells {
+                    assert!(cell.y > building.origin.y);
+                    assert!(matches!(
+                        building.asset_at(cell),
+                        Some(Block::Wood | Block::Stone | Block::Clay)
+                    ));
+                    let [x, z] = building.local_cell(cell.x, cell.z).unwrap();
+                    assert!(match kind {
+                        BuildingKind::CartWreck => x == 1 || cell.y == building.origin.y + 2,
+                        _ => (19..=23).contains(&x) && (15..=22).contains(&z),
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn roadside_supplies_exhaust_once_and_reward_the_actual_material_without_trusting_the_offer() {
+        for (kind, expected) in [
+            (BuildingKind::CartWreck, [0, 6, 3, 0, 0]),
+            (BuildingKind::AbandonedKiln, [0, 0, 0, 54, 0]),
+        ] {
+            let mut world = world().clone();
+            let id = sites(&world)
+                .into_iter()
+                .find(|id| site(&world, *id).unwrap().building.kind == kind)
+                .unwrap();
+            assert_eq!(id.kind, WorkKind::Salvage);
+            let (mut active, _) = reachable_work(&world, id);
+            let original: Vec<_> = cells(&site(&world, id).unwrap().building)
+                .map(|cell| (cell, world.block(cell)))
+                .collect();
+            let mut spent = Vec::new();
+            let mut ledgers = std::array::from_fn::<_, 4, _>(|_| PlayerEconomy::default());
+            active.progress.offer.reward = WorkReward::Coins(9999);
+            for (index, (cell, block)) in original.iter().enumerate() {
+                active.anchor = *cell;
+                let ledger = &mut ledgers[index % 4];
+                complete(&mut world, &mut spent, ledger, &active).unwrap();
+                assert_eq!(world.block(*cell), Block::Air);
+                assert_eq!(ledger.coins, 0);
+                world.set_block(*cell, *block).unwrap();
+                assert!(complete(&mut world, &mut spent, ledger, &active).is_err());
+                world.set_block(*cell, Block::Air).unwrap();
+            }
+            let total: [u32; 5] =
+                std::array::from_fn(|slot| ledgers.iter().map(|l| l.cargo[slot]).sum());
+            assert_eq!(total, expected);
+            assert_eq!(spent.len(), original.len());
+            assert!(valid_spent(&world, &spent));
+            assert!(
+                original
+                    .iter()
+                    .all(|(cell, _)| available(&world, id, *cell, &spent).is_err())
+            );
+            let mut forged = id;
+            forged.kind = WorkKind::QuarryStone;
+            assert!(site(&world, forged).is_err());
+            forged = id;
+            forged.village_id = u32::MAX;
+            assert!(site(&world, forged).is_err());
+        }
+    }
+
+    #[test]
+    fn salvage_rechecks_capacity_and_replaced_material_without_mutating_supplies() {
+        for kind in [BuildingKind::CartWreck, BuildingKind::AbandonedKiln] {
+            let mut world = world().clone();
+            let id = sites(&world)
+                .into_iter()
+                .find(|id| site(&world, *id).unwrap().building.kind == kind)
+                .unwrap();
+            let (active, _) = reachable_work(&world, id);
+            let block = world.block(active.anchor);
+            let mut spent = Vec::new();
+            let mut ledger = PlayerEconomy {
+                cargo: [24, 0, 0, 0, 0],
+                ..Default::default()
+            };
+            assert!(complete(&mut world, &mut spent, &mut ledger, &active).is_err());
+            assert_eq!(world.block(active.anchor), block);
+            assert!(spent.is_empty());
+            assert_eq!(ledger.revision, 0);
+            ledger.cargo = [0; 5];
+            world
+                .set_block(
+                    active.anchor,
+                    if block == Block::Stone {
+                        Block::Wood
+                    } else {
+                        Block::Stone
+                    },
+                )
+                .unwrap();
+            assert!(complete(&mut world, &mut spent, &mut ledger, &active).is_err());
+            assert_eq!(ledger.cargo_total(), 0);
+            assert!(spent.is_empty());
         }
     }
 
@@ -357,7 +486,10 @@ mod tests {
         let life = crate::villages::VillageLife::new(world);
         for id in sites(world) {
             let (mut active, position) = reachable_work(world, id);
-            assert_eq!(world.block(active.anchor), Block::Stone);
+            assert!(matches!(
+                world.block(active.anchor),
+                Block::Stone | Block::Wood | Block::Clay
+            ));
             assert!(
                 !local_work::advance(world, &life, &[], &mut active, position, 15.999).unwrap()
             );

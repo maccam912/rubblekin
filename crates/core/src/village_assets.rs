@@ -154,6 +154,25 @@ pub fn quarry_pile_cells() -> impl Iterator<Item = [i32; 3]> {
     })
 }
 
+/// Finite loose supplies, excluding foundations and the landmark's main frame.
+pub fn resource_pile_cells(kind: BuildingKind) -> Vec<[i32; 3]> {
+    match kind {
+        BuildingKind::QuarryYard => quarry_pile_cells().collect(),
+        BuildingKind::CartWreck => (8..=10)
+            .flat_map(|z| (1..=2).map(move |y| [1, y, z]))
+            .chain([[13, 2, 8], [13, 2, 12], [19, 2, 12]])
+            .collect(),
+        BuildingKind::AbandonedKiln => (19..=23)
+            .flat_map(|x| {
+                (15..=22)
+                    .filter(move |z| (x + z) % 3 != 0)
+                    .flat_map(move |z| (1..=2).map(move |y| [x, y, z]))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 pub fn block_at(kind: BuildingKind, x: i32, y: i32, z: i32) -> Option<Block> {
     let [width, height, depth] = dimensions(kind);
     if !(0..width).contains(&x) || !(0..height).contains(&y) || !(0..depth).contains(&z) {

@@ -27,7 +27,7 @@ fn arm_angle(kind: WorkKind, phase: f32, limb_phase: f32) -> f32 {
     match kind {
         WorkKind::TendField => 0.85 + phase.sin() * 0.38,
         WorkKind::HarvestField | WorkKind::GatherForage => 1.1 + phase.sin() * 0.4,
-        WorkKind::WorkshopMaintenance | WorkKind::QuarryStone => {
+        WorkKind::WorkshopMaintenance | WorkKind::QuarryStone | WorkKind::Salvage => {
             0.65 + (phase + limb_phase).sin() * 0.45
         }
     }

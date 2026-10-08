@@ -309,14 +309,14 @@ fn building_description(kind: BuildingKind) -> &'static str {
             "A roofless watchtower has a surviving stair to a low viewing ledge."
         }
         BuildingKind::AbandonedKiln => {
-            "A cold brick firing chamber and drying racks stand near natural clay."
+            "A cold brick firing chamber and drying racks stand near natural clay. Use Cargo & work beside the old clay stacks to salvage their finite supplies."
         }
         BuildingKind::RidgeCairn => "Small hand-stacked stones mark a pause beside the trail.",
         BuildingKind::TrailBench => {
             "A rough timber bench and slatted windbreak offer a quiet view."
         }
         BuildingKind::CartWreck => {
-            "A broken waycart has lost a wheel and both its cargo and travellers."
+            "A broken waycart has lost a wheel and both its cargo and travellers. Use Cargo & work beside loose timber or wheel hubs to salvage finite supplies."
         }
         BuildingKind::SurveyPost => {
             "A survey tripod, sighting stakes and folded tarp overlook the route."
