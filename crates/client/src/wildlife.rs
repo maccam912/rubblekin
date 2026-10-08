@@ -1,5 +1,5 @@
 //! Small shared meshes; movement and rabbit hops follow authoritative animals.
-use crate::{GameEntity, Session, terrain::Geometry};
+use crate::{GameEntity, Session, VoxelWorld, terrain::Geometry};
 use bevy::{light::NotShadowCaster, prelude::*};
 use rubblekin_core::wildlife::{Species, WildlifeAction, WildlifeSnapshot};
 use std::collections::HashMap;
@@ -12,6 +12,8 @@ pub(crate) struct Wildlife {
 pub(crate) struct Leg {
     phase: f32,
 }
+#[derive(Component)]
+pub(crate) struct WildlifeShadow;
 #[derive(Default)]
 pub(crate) struct Scene {
     entities: HashMap<u64, Entity>,
@@ -22,6 +24,8 @@ struct CachedAssets {
     bodies: [Handle<Mesh>; 2],
     legs: [Handle<Mesh>; 2],
     material: Handle<StandardMaterial>,
+    shadow_mesh: Handle<Mesh>,
+    shadow_material: Handle<StandardMaterial>,
 }
 
 fn body_mesh(species: Species) -> Mesh {
@@ -98,16 +102,21 @@ pub(crate) fn rendered_size(species: Species) -> Vec3 {
         Species::Wolf => Vec3::new(1.38, 1.06, 1.38),
     }
 }
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn update(
     mut commands: Commands,
     session: Res<Session>,
+    world: Res<VoxelWorld>,
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut scene: Local<Scene>,
-    mut roots: Query<(&Wildlife, &mut Transform), Without<Leg>>,
-    mut legs: Query<(&Leg, &ChildOf, &mut Transform), Without<Wildlife>>,
+    mut roots: Query<(&Wildlife, &mut Transform), (Without<Leg>, Without<WildlifeShadow>)>,
+    mut legs: Query<(&Leg, &ChildOf, &mut Transform), (Without<Wildlife>, Without<WildlifeShadow>)>,
+    mut shadows: Query<
+        (&ChildOf, &mut Transform, &mut Visibility),
+        (With<WildlifeShadow>, Without<Wildlife>, Without<Leg>),
+    >,
 ) {
     if scene.entities.values().any(|e| roots.get(*e).is_err()) {
         scene.entities.retain(|_, e| roots.get(*e).is_ok());
@@ -125,6 +134,13 @@ pub(crate) fn update(
             ],
             material: materials.add(StandardMaterial {
                 perceptual_roughness: 1.,
+                ..default()
+            }),
+            shadow_mesh: meshes.add(Circle::new(0.5)),
+            shadow_material: materials.add(StandardMaterial {
+                base_color: Color::srgba(0.04, 0.07, 0.06, 0.26),
+                alpha_mode: AlphaMode::Blend,
+                unlit: true,
                 ..default()
             }),
         })
@@ -156,9 +172,18 @@ pub(crate) fn update(
                     Transform::from_translation(Vec3::from_array(a.position)),
                     Wildlife { id: a.id },
                     GameEntity,
-                    NotShadowCaster,
                 ))
                 .with_children(|parent| {
+                    parent.spawn((
+                        WildlifeShadow,
+                        Mesh3d(assets.shadow_mesh.clone()),
+                        MeshMaterial3d(assets.shadow_material.clone()),
+                        Transform::from_rotation(Quat::from_rotation_x(
+                            -std::f32::consts::FRAC_PI_2,
+                        )),
+                        Visibility::Hidden,
+                        NotShadowCaster,
+                    ));
                     let (x, z, y) = if a.species == Species::Rabbit {
                         (0.14, 0.16, 0.14)
                     } else {
@@ -179,7 +204,6 @@ pub(crate) fn update(
                                     std::f32::consts::PI
                                 },
                             },
-                            NotShadowCaster,
                         ));
                     }
                 })
@@ -222,5 +246,158 @@ pub(crate) fn update(
         } else {
             0.
         });
+    }
+    for (parent, mut shadow, mut visibility) in &mut shadows {
+        let Ok((animal, pose)) = roots.get(parent.parent()) else {
+            continue;
+        };
+        let Some(a) = visible.iter().find(|a| a.id == animal.id) else {
+            continue;
+        };
+        let p = pose.translation;
+        let ground = world.0.raycast([p.x, p.y + 0.05, p.z], [0., -1., 0.], 1.25);
+        if let Some(hit) = ground.filter(|_| !session.graphics.shadows()) {
+            let y = p.y + 0.05 - hit.distance + 0.012;
+            shadow.translation = Vec3::new(0., y - p.y, 0.);
+            let size = if a.species == Species::Rabbit {
+                Vec3::new(0.64, 0.8, 1.)
+            } else {
+                Vec3::new(0.85, 1.3, 1.)
+            };
+            shadow.scale = size / (1. + (p.y - y).max(0.) * 0.6);
+            *visibility = Visibility::Inherited;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{graphics::GraphicsQuality, join};
+    use rubblekin_core::{
+        protocol::SessionMode,
+        world::{Block, BlockPos, CELL_SIZE},
+    };
+    #[test]
+    fn shadows_stay_on_actual_ground_through_hops_edits_quality_changes_and_rejoins() {
+        let (world, mut session) = join::session_from_welcome(
+            join::tests::welcome(SessionMode::Player),
+            "wildlife".into(),
+            GraphicsQuality::Low,
+            0.,
+            SessionMode::Player,
+        )
+        .unwrap();
+        let spawn = world.spawn_position();
+        let x = ((spawn[0] + 6.) / CELL_SIZE).floor() as i32;
+        let z = (spawn[2] / CELL_SIZE).floor() as i32;
+        let p = Vec3::new(
+            (x as f32 + 0.5) * CELL_SIZE,
+            (world.height_at(x, z) + 1) as f32 * CELL_SIZE,
+            (z as f32 + 0.5) * CELL_SIZE,
+        );
+        session.wildlife = vec![WildlifeSnapshot {
+            id: 1,
+            species: Species::Rabbit,
+            position: p.to_array(),
+            velocity: [0.; 3],
+            action: WildlifeAction::Resting,
+            hunger: 20.,
+            habitat: 0,
+        }];
+        let mut app = App::new();
+        app.insert_resource(session)
+            .insert_resource(VoxelWorld(world))
+            .init_resource::<Time>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, update);
+        app.update();
+        app.update();
+        let root = app
+            .world_mut()
+            .query::<(Entity, &Wildlife)>()
+            .single(app.world())
+            .unwrap()
+            .0;
+        let shadow = app
+            .world_mut()
+            .query_filtered::<Entity, With<WildlifeShadow>>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(
+            app.world().get::<Visibility>(shadow),
+            Some(&Visibility::Inherited)
+        );
+        assert!(app.world().get::<NotShadowCaster>(root).is_none());
+        let initial_scale = app.world().get::<Transform>(shadow).unwrap().scale;
+        // The body hops while its inexpensive shadow stays on the terrain.
+        app.world_mut().resource_mut::<Session>().wildlife[0].position[1] += 0.4;
+        app.world_mut()
+            .get_mut::<Transform>(root)
+            .unwrap()
+            .translation
+            .y += 0.4;
+        app.update();
+        let body = app.world().get::<Transform>(root).unwrap();
+        let contact = app.world().get::<Transform>(shadow).unwrap();
+        assert!((body.translation.y + contact.translation.y - p.y - 0.012).abs() < 0.001);
+        assert!(contact.scale.x < initial_scale.x);
+        // A player-built raised floor is the contact surface, not baseline height.
+        let floor = BlockPos::new(x, (p.y / CELL_SIZE) as i32 + 1, z);
+        app.world_mut()
+            .resource_mut::<VoxelWorld>()
+            .0
+            .set_block(floor, Block::Wood)
+            .unwrap();
+        app.world_mut().resource_mut::<Session>().wildlife[0].position[1] = p.y + 1.;
+        app.world_mut()
+            .get_mut::<Transform>(root)
+            .unwrap()
+            .translation
+            .y = p.y + 1.;
+        app.update();
+        let body = app.world().get::<Transform>(root).unwrap();
+        let contact = app.world().get::<Transform>(shadow).unwrap();
+        assert!((body.translation.y + contact.translation.y - p.y - 1.012).abs() < 0.001);
+        app.world_mut().resource_mut::<Session>().graphics = GraphicsQuality::Balanced;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(shadow),
+            Some(&Visibility::Hidden)
+        );
+        app.world_mut().resource_mut::<Session>().graphics = GraphicsQuality::Low;
+        app.world_mut().resource_mut::<Session>().wildlife[0].position[1] += 3.;
+        app.world_mut()
+            .get_mut::<Transform>(root)
+            .unwrap()
+            .translation
+            .y += 3.;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(shadow),
+            Some(&Visibility::Hidden)
+        );
+        app.world_mut().despawn(root);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world_mut()
+                .query::<&Wildlife>()
+                .iter(app.world())
+                .count(),
+            1
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&WildlifeShadow>()
+                .iter(app.world())
+                .count(),
+            1
+        );
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 5);
+        assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 2);
     }
 }
