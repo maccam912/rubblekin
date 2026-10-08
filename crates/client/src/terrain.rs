@@ -1003,7 +1003,7 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
             }
             _ => {}
         }
-        if add_regional_building_proxy(building, geometry, clip) {
+        if add_regional_building_proxy(building, geometry, clip, Some(world)) {
             continue;
         }
         let walls = (size.y * 0.58).min(3.5);
@@ -1036,6 +1036,7 @@ fn add_regional_building_proxy(
     building: &BuildingPlot,
     geometry: &mut Geometry,
     clip: ProxyClip,
+    world: Option<&World>,
 ) -> bool {
     let kind = building.kind;
     if !matches!(
@@ -1061,6 +1062,7 @@ fn add_regional_building_proxy(
             | BuildingKind::SurveyPost
             | BuildingKind::DeadSnag
             | BuildingKind::SplitBoulder
+            | BuildingKind::CliffDeck
     ) {
         return false;
     }
@@ -1214,7 +1216,27 @@ fn add_regional_building_proxy(
         | BuildingKind::CartWreck
         | BuildingKind::SurveyPost
         | BuildingKind::DeadSnag
-        | BuildingKind::SplitBoulder => {
+        | BuildingKind::SplitBoulder
+        | BuildingKind::CliffDeck => {
+            if kind == BuildingKind::CliffDeck
+                && let Some(world) = world
+            {
+                for (x, z) in [(1., 1.), (10., 1.), (1., 12.), (10., 12.)] {
+                    let [rx, rz] = match building.rotation % 4 {
+                        0 => [x, z],
+                        1 => [d - 1. - z, x],
+                        2 => [w - 1. - x, d - 1. - z],
+                        _ => [z, w - 1. - x],
+                    };
+                    let mx = (building.origin.x as f32 + rx + 0.5) * CELL_SIZE;
+                    let mz = (building.origin.z as f32 + rz + 0.5) * CELL_SIZE;
+                    let ground = world.original_ground_height(mx, mz);
+                    let bottom = (ground - base.y).min(0.0) / CELL_SIZE;
+                    if bottom < 0.0 {
+                        part([x, bottom, z], [1., -bottom, 1.], Block::Wood);
+                    }
+                }
+            }
             let exact_floor =
                 matches!(kind, BuildingKind::TrailPavilion | BuildingKind::QuarryYard)
                     || kind.is_exploration_site();
@@ -3611,6 +3633,7 @@ mod tests {
             BuildingKind::SurveyPost,
             BuildingKind::DeadSnag,
             BuildingKind::SplitBoulder,
+            BuildingKind::CliffDeck,
         ] {
             for rotation in 0..4 {
                 let building = BuildingPlot {
@@ -3632,7 +3655,8 @@ mod tests {
                     assert!(add_regional_building_proxy(
                         &building,
                         &mut geometry,
-                        ProxyClip::Inside(bounds)
+                        ProxyClip::Inside(bounds),
+                        None,
                     ));
                     assert!(
                         !geometry.positions.is_empty(),

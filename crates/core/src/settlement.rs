@@ -220,11 +220,16 @@ pub struct SettlementPlan {
 pub(crate) struct ConstructionColumn {
     pub floor: i32,
     pub top: i32,
+    ground: i32,
+    support: bool,
     kind: BuildingKind,
     local: [i32; 2],
 }
 impl ConstructionColumn {
     pub fn block(self, y: i32) -> Option<Block> {
+        if self.kind == BuildingKind::CliffDeck && y < self.floor && y > self.ground {
+            return self.support.then_some(Block::Wood);
+        }
         village_assets::block_at(self.kind, self.local[0], y - self.floor, self.local[1])
     }
 }
@@ -713,6 +718,7 @@ impl SettlementPlan {
         let mut on_approach = false;
         let mut approach_total = 0.0_f64;
         let mut approach_weights = 0.0_f64;
+        let mut elevated_approach = None;
         for feature in features {
             let roadside = matches!(feature, Feature::RoadsidePath(..));
             let (trail, si, village) = match *feature {
@@ -738,6 +744,18 @@ impl SettlementPlan {
             if distance < 32.0 {
                 let foot = village.map_or(a[1] + (b[1] - a[1]) * t, |v| v.lane_height(mx, mz));
                 let weight = (1.0 - distance / 32.0).powi(3) as f64;
+                if let Feature::RoadsidePath(index, segment) = *feature
+                    && self.roadside_landmarks[index].building.kind == BuildingKind::CliffDeck
+                    && distance <= trail.width * 0.5
+                {
+                    let support = (segment.is_multiple_of(4)
+                        && distance2(mx, mz, a[0], a[2]) < 0.5_f32.powi(2))
+                        || ((segment + 1).is_multiple_of(4)
+                            && distance2(mx, mz, b[0], b[2]) < 0.5_f32.powi(2));
+                    let support =
+                        support || elevated_approach.is_some_and(|(_, previous)| previous);
+                    elevated_approach = Some(((foot / CELL_SIZE).round() as i32 - 1, support));
+                }
                 if roadside {
                     approach_total += foot as f64 * weight;
                     approach_weights += weight;
@@ -750,9 +768,23 @@ impl SettlementPlan {
         // A short scenic spur may blend into the through-road, but must not
         // raise its existing waypoints and strand traders on the junction.
         if on_approach && !on_road {
-            total += approach_total;
-            weights += approach_weights;
-            on_road = true;
+            if let Some((floor, support)) = elevated_approach {
+                // A narrow wooden spur above the original slope, not a filled
+                // terrain wall. Keep the real ground and add occasional piles.
+                out.construction = Some(ConstructionColumn {
+                    floor,
+                    top: floor,
+                    ground: out.height,
+                    support,
+                    kind: BuildingKind::CliffDeck,
+                    local: [6, 0],
+                });
+                out.clear = true;
+            } else {
+                total += approach_total;
+                weights += approach_weights;
+                on_road = true;
+            }
         }
         if on_road {
             let mut road_height = (total / weights) as f32;
@@ -824,8 +856,11 @@ impl SettlementPlan {
                         && z < b.origin.z + d)
                         || ((x - ex).abs() <= 1 && (z - ez).abs() <= 1)
                     {
-                        out.height = b.origin.y;
-                        out.surface = Block::Stone;
+                        let ground = out.height;
+                        if b.kind != BuildingKind::CliffDeck {
+                            out.height = b.origin.y;
+                            out.surface = Block::Stone;
+                        }
                         out.clear = true;
                         out.deposit = None;
                         if let Some(local) = b.local_cell(x, z) {
@@ -840,6 +875,8 @@ impl SettlementPlan {
                             out.construction = Some(ConstructionColumn {
                                 floor: b.origin.y,
                                 top,
+                                ground,
+                                support: village_assets::cliff_deck_support(local[0], local[1]),
                                 kind: b.kind,
                                 local,
                             });

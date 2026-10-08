@@ -590,6 +590,16 @@ impl World {
         (top + 1) as f32 * CELL_SIZE
     }
 
+    /// Generated ground below trees and raised construction, in meters.
+    pub fn original_ground_height(&self, x: f32, z: f32) -> f32 {
+        let x = (x / CELL_SIZE).floor() as i32;
+        let z = (z / CELL_SIZE).floor() as i32;
+        self.geographic_column(x, z)
+            .map_or(self.min_y() as f32 * CELL_SIZE, |column| {
+                (column.height + 1) as f32 * CELL_SIZE
+            })
+    }
+
     /// Landing construction can clear generated trees, but must avoid roofs.
     pub(crate) fn original_structure_height(&self, x: f32, z: f32) -> f32 {
         let x = (x / CELL_SIZE).floor() as i32;

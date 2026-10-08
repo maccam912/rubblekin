@@ -920,7 +920,7 @@ pub(crate) fn refresh(
                 )
             } else if discoveries {
                 format!(
-                    "{span} · A arch · S stone · F trunk · T camp · O tower · K kiln · R ruin · P shelter · Q quarry\nC cairn · B bench · W waycart · V survey · D snag · H split rock | Drag/scroll · C/R: center/world"
+                    "{span} · A arch · S stone · F trunk · T camp · O tower · K kiln · R ruin · P shelter · Q quarry\nC cairn · B bench · W waycart · V survey · D snag · H split rock · E viewing deck | Drag/scroll · C/R: center/world"
                 )
             } else if extended && compact {
                 format!("{span} · Cyan: you · Gold: towns · R/S/P/Q: places · Drag/pinch")
@@ -965,6 +965,7 @@ fn roadside_symbol(kind: BuildingKind) -> &'static str {
         BuildingKind::SurveyPost => "V",
         BuildingKind::DeadSnag => "D",
         BuildingKind::SplitBoulder => "H",
+        BuildingKind::CliffDeck => "E",
 
         _ => "?",
     }
@@ -988,6 +989,7 @@ fn roadside_name(kind: BuildingKind) -> &'static str {
         BuildingKind::SurveyPost => "survey post",
         BuildingKind::DeadSnag => "dead snag",
         BuildingKind::SplitBoulder => "split boulder",
+        BuildingKind::CliffDeck => "cliff viewing deck",
 
         _ => "place",
     }

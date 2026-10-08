@@ -190,6 +190,11 @@ fn main() {
             "Bare branches and exposed roots",
         ),
         (
+            BuildingKind::CliffDeck,
+            "Cliff viewing deck",
+            "Timber deck; piles follow the actual hillside",
+        ),
+        (
             BuildingKind::SplitBoulder,
             "Split boulder",
             "Eroded rock halves and a narrow walking crack",

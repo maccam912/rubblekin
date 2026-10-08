@@ -310,3 +310,18 @@ pub(super) fn boulder(x: i32, y: i32, z: i32) -> Block {
     }
     Block::Air
 }
+
+pub(super) fn cliff_deck(x: i32, y: i32, z: i32) -> Block {
+    if y == 0 {
+        return Block::Wood;
+    }
+    // Low rails frame the view, with an open front and room around the bench.
+    if y <= 2 && (x == 0 || x == 11 || z == 13 || z == 0 && !(4..=8).contains(&x))
+        || y == 2 && (1..=2).contains(&x) && (7..=10).contains(&z)
+        || y == 1 && x == 1 && (z == 7 || z == 10)
+        || x == 10 && z == 10 && y <= 5
+    {
+        return Block::Wood;
+    }
+    Block::Air
+}

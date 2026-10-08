@@ -18,6 +18,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sites: Vec<_> = plan.roadside_landmarks.iter().map(|s| json!({
         "kind": s.building.kind, "origin": s.building.origin, "rotation": s.building.rotation,
         "entrance": s.building.entrance(), "trail_anchor": s.approach.points[0],
+        "ground_at_center_m": world.original_ground_height(
+            (s.building.origin.x as f32+s.building.dimensions()[0] as f32*0.5)*0.5,
+            (s.building.origin.z as f32+s.building.dimensions()[2] as f32*0.5)*0.5),
         "approach": s.approach.points,
     })).collect();
     let mut all_gaps = Vec::new();

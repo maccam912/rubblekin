@@ -236,6 +236,7 @@ fn building_name(kind: BuildingKind) -> &'static str {
         BuildingKind::SurveyPost => "Survey post",
         BuildingKind::DeadSnag => "Dead snag",
         BuildingKind::SplitBoulder => "Split boulder",
+        BuildingKind::CliffDeck => "Cliff viewing deck",
     }
 }
 
@@ -303,6 +304,9 @@ fn building_description(kind: BuildingKind) -> &'static str {
         }
         BuildingKind::SplitBoulder => {
             "An eroded rock has split into two halves with a narrow passage."
+        }
+        BuildingKind::CliffDeck => {
+            "A small timber deck on piles overlooks the hillside beside the raised trail."
         }
     }
 }

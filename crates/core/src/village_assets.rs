@@ -42,6 +42,7 @@ pub enum BuildingKind {
     SurveyPost,
     DeadSnag,
     SplitBoulder,
+    CliffDeck,
 }
 
 impl BuildingKind {
@@ -66,6 +67,7 @@ impl BuildingKind {
                 | Self::SurveyPost
                 | Self::DeadSnag
                 | Self::SplitBoulder
+                | Self::CliffDeck
         )
     }
 
@@ -78,6 +80,7 @@ impl BuildingKind {
                 | Self::SurveyPost
                 | Self::DeadSnag
                 | Self::SplitBoulder
+                | Self::CliffDeck
         )
     }
 
@@ -96,6 +99,7 @@ impl BuildingKind {
                 | Self::SurveyPost
                 | Self::DeadSnag
                 | Self::SplitBoulder
+                | Self::CliffDeck
         )
     }
 }
@@ -127,12 +131,18 @@ pub const fn dimensions(kind: BuildingKind) -> [i32; 3] {
         BuildingKind::SurveyPost => [12, 13, 14],
         BuildingKind::DeadSnag => [12, 24, 12],
         BuildingKind::SplitBoulder => [16, 15, 16],
+        BuildingKind::CliffDeck => [12, 6, 14],
     }
 }
 
 /// An unobstructed foot cell at the center of the front entrance.
 pub const fn entrance(kind: BuildingKind) -> [i32; 3] {
     [dimensions(kind)[0] / 2, 1, 0]
+}
+
+/// Corner piles beneath the elevated viewing deck; ground limits their depth.
+pub fn cliff_deck_support(x: i32, z: i32) -> bool {
+    (x == 1 || x == 10) && (z == 1 || z == 12)
 }
 
 /// Collectable loose stone only; the quarry floor and structure are excluded.
@@ -175,6 +185,7 @@ pub fn block_at(kind: BuildingKind, x: i32, y: i32, z: i32) -> Option<Block> {
         BuildingKind::SurveyPost => exploration::survey(x, y, z),
         BuildingKind::DeadSnag => exploration::snag(x, y, z),
         BuildingKind::SplitBoulder => exploration::boulder(x, y, z),
+        BuildingKind::CliffDeck => exploration::cliff_deck(x, y, z),
     })
 }
 

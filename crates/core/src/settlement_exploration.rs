@@ -124,6 +124,7 @@ impl SettlementPlan {
             }
         }
         self.fill_discovery_gaps(world, transit);
+        self.fill_discovery_gaps(world, transit);
         self.buckets.clear();
         self.build_index();
     }
@@ -160,7 +161,7 @@ impl SettlementPlan {
             stops.dedup();
             for gap in stops.windows(2) {
                 let mut target = distances[gap[0]] + 360.0;
-                while distances[gap[1]] - target > 140.0 {
+                while distances[gap[1]] - target > 90.0 {
                     let h = hash(ti as i32, target as i32, world.seed.wrapping_add(9813));
                     let mut placed = false;
                     for offset in [0.0, -20.0, 20.0, -40.0, 40.0, -60.0, 60.0, -90.0, 90.0] {
@@ -203,6 +204,23 @@ impl SettlementPlan {
                             }
                             if placed {
                                 break;
+                            }
+                        }
+                        if !placed {
+                            for side in [10.0, -10.0, 12.0, -12.0, 16.0, -16.0] {
+                                let center =
+                                    [anchor[0] - dz / run * side, anchor[2] + dx / run * side];
+                                if let Some(site) = self.exploration_site(
+                                    world,
+                                    transit,
+                                    BuildingKind::CliffDeck,
+                                    anchor,
+                                    center,
+                                ) {
+                                    self.roadside_landmarks.push(site);
+                                    placed = true;
+                                    break;
+                                }
                             }
                         }
                         if placed {
@@ -268,7 +286,7 @@ impl SettlementPlan {
             return None;
         }
         let to_road = [anchor[0] - center[0], anchor[2] - center[1]];
-        let rotation = if to_road[0].abs() > to_road[1].abs() {
+        let rotation: u8 = if to_road[0].abs() > to_road[1].abs() {
             if to_road[0] > 0.0 { 1 } else { 3 }
         } else if to_road[1] > 0.0 {
             2
@@ -276,12 +294,46 @@ impl SettlementPlan {
             0
         };
         let geography = world.geography()?;
-        let mut building = place_building(geography, kind, center[0], center[1], rotation)?;
         let floor = (anchor[1] / CELL_SIZE).round() * CELL_SIZE;
-        let natural_floor = (building.origin.y + 1) as f32 * CELL_SIZE;
-        if (floor - natural_floor).abs() > 1.5 {
-            return None;
-        }
+        let mut building = if kind == BuildingKind::CliffDeck {
+            let [w, _, d] = village_assets::dimensions(kind);
+            let [rw, rd] = if rotation.is_multiple_of(2) {
+                [w, d]
+            } else {
+                [d, w]
+            };
+            let origin = BlockPos::new(
+                (center[0] / CELL_SIZE).round() as i32 - rw / 2,
+                (floor / CELL_SIZE).round() as i32 - 1,
+                (center[1] / CELL_SIZE).round() as i32 - rd / 2,
+            );
+            for x in 0..rw {
+                for z in 0..rd {
+                    let px = (origin.x + x) as f32 * CELL_SIZE + 0.25;
+                    let pz = (origin.z + z) as f32 * CELL_SIZE + 0.25;
+                    let ground = world.original_structure_height(px, pz);
+                    let water = geography.sample(px, pz).water;
+                    if ground > floor - CELL_SIZE * 2.0
+                        || floor - ground > 60.0
+                        || water.is_some_and(|w| w > floor - CELL_SIZE)
+                    {
+                        return None;
+                    }
+                }
+            }
+            BuildingPlot {
+                kind,
+                origin,
+                rotation,
+            }
+        } else {
+            let building = place_building(geography, kind, center[0], center[1], rotation)?;
+            let natural_floor = (building.origin.y + 1) as f32 * CELL_SIZE;
+            if (floor - natural_floor).abs() > 1.5 {
+                return None;
+            }
+            building
+        };
         building.origin.y = (floor / CELL_SIZE).round() as i32 - 1;
         let entry = building.entrance();
         let steps = distance2(anchor[0], anchor[2], entry[0], entry[2])
@@ -315,7 +367,14 @@ impl SettlementPlan {
         }));
         if points.iter().any(|p| {
             let sample = geography.sample(p[0], p[2]);
-            sample.water.is_some() || (sample.height + CELL_SIZE - floor).abs() > 2.0
+            if kind == BuildingKind::CliffDeck {
+                let ground = world.original_structure_height(p[0], p[2]);
+                ground > floor + 0.01
+                    || floor - ground > 60.0
+                    || sample.water.is_some_and(|w| w > floor - CELL_SIZE)
+            } else {
+                sample.water.is_some() || (sample.height + CELL_SIZE - floor).abs() > 2.0
+            }
         }) {
             return None;
         }
@@ -443,6 +502,46 @@ mod tests {
                         (b.origin.z as f32 + z) * CELL_SIZE,
                     ]
                 };
+                if b.kind == BuildingKind::CliffDeck {
+                    let floor = b.origin.y;
+                    for (x, z) in [(1.5, 1.5), (10.5, 1.5), (1.5, 12.5), (10.5, 12.5)] {
+                        let p = local(x, z, 0.0);
+                        let cell = BlockPos::new(
+                            (p[0] / CELL_SIZE).floor() as i32,
+                            floor - 1,
+                            (p[2] / CELL_SIZE).floor() as i32,
+                        );
+                        assert_eq!(world.block(cell), Block::Wood, "pile must support the deck");
+                    }
+                    let center = local(6.5, 7.5, 0.0);
+                    assert_eq!(
+                        world.original_ground_height(center[0], center[2]),
+                        old.original_ground_height(center[0], center[2]),
+                        "deck filled the hillside"
+                    );
+                    assert_eq!(
+                        world.block(BlockPos::new(
+                            (center[0] / CELL_SIZE).floor() as i32,
+                            floor - 1,
+                            (center[2] / CELL_SIZE).floor() as i32
+                        )),
+                        Block::Air,
+                        "under-deck space became a solid foundation"
+                    );
+                    for p in site
+                        .approach
+                        .points
+                        .iter()
+                        .skip(2)
+                        .take(site.approach.points.len().saturating_sub(8))
+                    {
+                        assert_eq!(
+                            world.original_ground_height(p[0], p[2]),
+                            old.original_ground_height(p[0], p[2]),
+                            "raised spur filled the hillside"
+                        );
+                    }
+                }
                 walk(&world, &mut body, local(w * 0.5, 3.0, 0.0));
                 match b.kind {
                     BuildingKind::StoneArch => {
@@ -482,6 +581,6 @@ mod tests {
             assert!(kinds.len() >= 10, "seed {seed}: discovery variety missing");
             all_kinds.extend(kinds);
         }
-        assert_eq!(all_kinds.len(), 12, "some discovery assets never place");
+        assert_eq!(all_kinds.len(), 13, "some discovery assets never place");
     }
 }
