@@ -938,6 +938,7 @@ impl VillageLife {
             snapshot.capacity_for_growth = snapshot.food > snapshot.food_reserve * 2.0
                 && snapshot.population < snapshot.housing_capacity;
         }
+        Navigation::limit_searches(self.residents.iter_mut().map(|r| &mut r.navigation), 2);
         let mut positions: Vec<_> = self.positions().collect();
         let mut rides: Vec<_> = self
             .residents

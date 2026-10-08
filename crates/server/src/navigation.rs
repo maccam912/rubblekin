@@ -9,6 +9,9 @@ use rubblekin_core::{
     world::{CELL_SIZE, World},
 };
 
+const SEARCH_EXPANSIONS_PER_SLICE: usize = 8;
+const MAX_SEARCH_EXPANSIONS: usize = 192;
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Navigation {
     goal: Option<[f32; 3]>,
@@ -19,15 +22,41 @@ pub(crate) struct Navigation {
     detour_progress: Option<([f32; 3], f32)>,
     detour_stalled: f32,
     retry_in: f32,
+    search: Option<DetourSearch>,
+    search_wait: f32,
+    search_deferred: bool,
 }
 
 impl Navigation {
     pub fn is_detouring(&self) -> bool {
         !self.detour.is_empty() && self.detour_stalled < 0.75 && self.stalled < 8.0
     }
+
+    fn needs_search(&self) -> bool {
+        self.stalled >= 0.75
+            && (self.detour.is_empty() || self.detour_stalled >= 0.75)
+            && self.retry_in == 0.0
+    }
+
+    /// Give the longest-waiting residents a search slice, preserving iteration
+    /// order for ordinary movement. Idle residents consume no search work.
+    pub fn limit_searches<'a>(navigation: impl Iterator<Item = &'a mut Self>, limit: usize) {
+        let mut navigation: Vec<_> = navigation.collect();
+        let mut waiting: Vec<_> = navigation
+            .iter()
+            .enumerate()
+            .filter(|(_, nav)| nav.needs_search())
+            .map(|(index, nav)| (index, nav.search_wait))
+            .collect();
+        waiting.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        waiting.truncate(limit);
+        for (index, nav) in navigation.iter_mut().enumerate() {
+            nav.search_deferred = !waiting.iter().any(|(chosen, _)| *chosen == index);
+        }
+    }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct Walker {
     pub body: Body,
     pub ride: Option<AirshipRide>,
@@ -128,6 +157,8 @@ impl Walking<'_> {
             navigation.detour_progress = None;
             navigation.detour_stalled = 0.0;
             navigation.retry_in = 0.0;
+            navigation.search = None;
+            navigation.search_wait = 0.0;
         }
         navigation.retry_in = (navigation.retry_in - dt).max(0.0);
         while navigation.detour.front().is_some_and(|p| {
@@ -136,22 +167,43 @@ impl Walking<'_> {
         }) {
             navigation.detour.pop_front();
         }
-        if navigation.stalled >= 0.75
-            && (navigation.detour.is_empty() || navigation.detour_stalled >= 0.75)
-            && navigation.retry_in == 0.0
-        {
-            navigation.detour = self.detour(walker, target, &allowed);
-            navigation.retry_in = 2.0;
-            navigation.detour_progress = None;
-            navigation.detour_stalled = 0.0;
+        if navigation.needs_search() {
+            navigation.search_wait += dt;
+            if !navigation.search_deferred {
+                if navigation.search.as_ref().is_none_or(|search| {
+                    distance(search.origin, walker.body.position) > 0.15
+                        || (search.origin[1] - walker.body.position[1]).abs() > 0.15
+                        || search.nodes[0].walker.ride != walker.ride
+                }) {
+                    navigation.search = Some(DetourSearch::new(walker, target));
+                }
+                navigation.search_wait = 0.0;
+                if let Some(path) =
+                    self.advance_search(navigation.search.as_mut().unwrap(), &allowed)
+                {
+                    navigation.detour = path;
+                    navigation.search = None;
+                    navigation.retry_in = 2.0;
+                    navigation.detour_progress = None;
+                    navigation.detour_stalled = 0.0;
+                }
+            }
+        } else {
+            navigation.search = None;
+            navigation.search_wait = 0.0;
         }
         let steering_target = navigation.detour.front().copied().unwrap_or(target);
+        let waiting_for_search = navigation.needs_search();
         let remaining = distance(walker.body.position, steering_target);
         let direction = toward(walker.body.position, steering_target);
         let factor = speed.min(remaining / (3.8 * dt));
         let input = MoveInput {
-            direction: direction.map(|d| d * factor),
-            jump: jump && navigation.detour.is_empty(),
+            direction: if waiting_for_search {
+                [0., 0.]
+            } else {
+                direction.map(|d| d * factor)
+            },
+            jump: !waiting_for_search && jump && navigation.detour.is_empty(),
             ..Default::default()
         };
         let pilots = self.airships.map_or_else(Vec::new, |(network, time)| {
@@ -161,7 +213,8 @@ impl Walking<'_> {
                 .map(rubblekin_core::airships::pilot_position)
                 .collect()
         });
-        let passing = remaining > 0.1
+        let passing = !waiting_for_search
+            && remaining > 0.1
             && self.obstacles.iter().chain(&pilots).any(|p| {
                 let dx = p[0] - walker.body.position[0];
                 let dz = p[2] - walker.body.position[2];
@@ -224,17 +277,122 @@ impl Walking<'_> {
         );
     }
 
-    fn detour(
+    fn advance_search(
         &self,
-        start: &Walker,
-        target: [f32; 3],
+        search: &mut DetourSearch,
         allowed: &impl Fn(&Body) -> bool,
-    ) -> VecDeque<[f32; 3]> {
-        // A bounded half-meter grid follows real support, including edited
-        // terrain, stairs, ramps and decks. No world navmesh or cached crowd map.
+    ) -> Option<VecDeque<[f32; 3]>> {
+        // Keep the same grid/192-node search, amortizing its real physics
+        // probes across ticks instead of blocking the entire server loop.
         const RADIUS: i32 = 8;
         const WIDTH: usize = 17;
-        const MAX_EXPANSIONS: usize = 192;
+        let key =
+            |cell: [i32; 2]| ((cell[1] + RADIUS) as usize * WIDTH) + (cell[0] + RADIUS) as usize;
+        for _ in 0..SEARCH_EXPANSIONS_PER_SLICE {
+            if search.expansions >= MAX_SEARCH_EXPANSIONS {
+                return Some(VecDeque::new());
+            }
+            search.expansions += 1;
+            let Some((slot, _)) = search.open.iter().enumerate().min_by(|(_, a), (_, b)| {
+                let score = |index: usize| {
+                    search.nodes[index].cost
+                        + distance(search.nodes[index].walker.body.position, search.goal)
+                };
+                score(**a).total_cmp(&score(**b))
+            }) else {
+                return Some(VecDeque::new());
+            };
+            let index = search.open.swap_remove(slot);
+            let position = search.nodes[index].walker.body.position;
+            if search.nodes[index].cost > search.costs[key(search.nodes[index].cell)] + 0.001 {
+                continue;
+            }
+            if index != 0
+                && distance(position, search.goal) <= 0.35
+                && (search.length > 3.0 || (position[1] - search.goal[1]).abs() < 0.55)
+            {
+                let mut path = VecDeque::new();
+                let mut current = index;
+                while let Some(parent) = search.nodes[current].parent {
+                    path.push_front(search.nodes[current].walker.body.position);
+                    current = parent;
+                }
+                return Some(path);
+            }
+            for [dx, dz] in [
+                [1, 0],
+                [1, 1],
+                [0, 1],
+                [-1, 1],
+                [-1, 0],
+                [-1, -1],
+                [0, -1],
+                [1, -1],
+            ] {
+                let cell = [
+                    search.nodes[index].cell[0] + dx,
+                    search.nodes[index].cell[1] + dz,
+                ];
+                if cell.iter().any(|v| v.abs() > RADIUS) {
+                    continue;
+                }
+                let next_target = [
+                    search.origin[0] + cell[0] as f32 * CELL_SIZE,
+                    position[1],
+                    search.origin[2] + cell[1] as f32 * CELL_SIZE,
+                ];
+                let step_distance = distance(position, next_target);
+                let input = MoveInput {
+                    direction: toward(position, next_target),
+                    ..Default::default()
+                };
+                let next = self.step(&search.nodes[index].walker, input, step_distance / 3.8);
+                if distance(next.body.position, next_target) > 0.04
+                    || !self.supported(&next)
+                    || !allowed(&next.body)
+                    || (next.body.position[1] - position[1]).abs() > CELL_SIZE + 0.05
+                {
+                    continue;
+                }
+                let cost = search.nodes[index].cost + step_distance;
+                if cost + 0.001 >= search.costs[key(cell)] {
+                    continue;
+                }
+                search.costs[key(cell)] = cost;
+                search.nodes.push(SearchNode {
+                    walker: next,
+                    cell,
+                    cost,
+                    parent: Some(index),
+                });
+                search.open.push(search.nodes.len() - 1);
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SearchNode {
+    walker: Walker,
+    cell: [i32; 2],
+    cost: f32,
+    parent: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct DetourSearch {
+    origin: [f32; 3],
+    goal: [f32; 3],
+    length: f32,
+    nodes: Vec<SearchNode>,
+    open: Vec<usize>,
+    costs: [f32; 17 * 17],
+    expansions: usize,
+}
+
+impl DetourSearch {
+    fn new(start: &Walker, target: [f32; 3]) -> Self {
         let origin = start.body.position;
         let length = distance(origin, target);
         let direction = toward(origin, target);
@@ -247,96 +405,22 @@ impl Walking<'_> {
         } else {
             target
         };
-        struct Node {
-            walker: Walker,
-            cell: [i32; 2],
-            cost: f32,
-            parent: Option<usize>,
+        let mut costs = [f32::INFINITY; 17 * 17];
+        costs[8 * 17 + 8] = 0.0;
+        Self {
+            origin,
+            goal,
+            length,
+            nodes: vec![SearchNode {
+                walker: start.clone(),
+                cell: [0, 0],
+                cost: 0.,
+                parent: None,
+            }],
+            open: vec![0],
+            costs,
+            expansions: 0,
         }
-        let mut nodes = vec![Node {
-            walker: start.clone(),
-            cell: [0, 0],
-            cost: 0.0,
-            parent: None,
-        }];
-        let mut open = vec![0_usize];
-        let mut costs = [f32::INFINITY; WIDTH * WIDTH];
-        let key =
-            |cell: [i32; 2]| ((cell[1] + RADIUS) as usize * WIDTH) + (cell[0] + RADIUS) as usize;
-        costs[key([0, 0])] = 0.0;
-        for _ in 0..MAX_EXPANSIONS {
-            let Some((slot, _)) = open.iter().enumerate().min_by(|(_, a), (_, b)| {
-                let score = |index: usize| {
-                    nodes[index].cost + distance(nodes[index].walker.body.position, goal)
-                };
-                score(**a).total_cmp(&score(**b))
-            }) else {
-                break;
-            };
-            let index = open.swap_remove(slot);
-            let position = nodes[index].walker.body.position;
-            if nodes[index].cost > costs[key(nodes[index].cell)] + 0.001 {
-                continue;
-            }
-            if index != 0
-                && distance(position, goal) <= 0.35
-                && (length > 3.0 || (position[1] - goal[1]).abs() < 0.55)
-            {
-                let mut path = VecDeque::new();
-                let mut current = index;
-                while let Some(parent) = nodes[current].parent {
-                    path.push_front(nodes[current].walker.body.position);
-                    current = parent;
-                }
-                return path;
-            }
-            for [dx, dz] in [
-                [1, 0],
-                [1, 1],
-                [0, 1],
-                [-1, 1],
-                [-1, 0],
-                [-1, -1],
-                [0, -1],
-                [1, -1],
-            ] {
-                let cell = [nodes[index].cell[0] + dx, nodes[index].cell[1] + dz];
-                if cell.iter().any(|v| v.abs() > RADIUS) {
-                    continue;
-                }
-                let next_target = [
-                    origin[0] + cell[0] as f32 * CELL_SIZE,
-                    position[1],
-                    origin[2] + cell[1] as f32 * CELL_SIZE,
-                ];
-                let step_distance = distance(position, next_target);
-                let input = MoveInput {
-                    direction: toward(position, next_target),
-                    ..Default::default()
-                };
-                let next = self.step(&nodes[index].walker, input, step_distance / 3.8);
-                if distance(next.body.position, next_target) > 0.04
-                    || !self.supported(&next)
-                    || !allowed(&next.body)
-                    || (next.body.position[1] - position[1]).abs() > CELL_SIZE + 0.05
-                {
-                    continue;
-                }
-                let cost = nodes[index].cost + step_distance;
-                if cost + 0.001 >= costs[key(cell)] {
-                    continue;
-                }
-                costs[key(cell)] = cost;
-                nodes.push(Node {
-                    walker: next,
-                    cell,
-                    cost,
-                    parent: Some(index),
-                });
-                open.push(nodes.len() - 1);
-            }
-        }
-        VecDeque::new()
     }
 }
 
@@ -470,6 +554,128 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn blocked_walkers_share_search_slices_without_starving_later_residents() {
+        let world = flat_path();
+        let start = [0.25, 20., 0.25];
+        let target = [3.25, 20., 0.25];
+        let mut obstacles = vec![[1.05, 20., 0.25]];
+        for x in [-0.55, 0.05, 0.65, 1.25] {
+            obstacles.push([x, 20., -0.55]);
+            obstacles.push([x, 20., 1.05]);
+        }
+        let walking = Walking {
+            world: &world,
+            obstacles: &obstacles,
+            airships: None,
+        };
+        let mut walkers = std::array::from_fn::<_, 4, _>(|_| Walker::on_foot(&Body::new(start)));
+        let mut navigation = std::array::from_fn::<_, 4, _>(|_| Navigation {
+            goal: Some(target),
+            stalled: 1.,
+            ..Default::default()
+        });
+        let mut served = [false; 4];
+        for _ in 0..4 {
+            Navigation::limit_searches(navigation.iter_mut(), 2);
+            assert_eq!(
+                navigation.iter().filter(|nav| !nav.search_deferred).count(),
+                2
+            );
+            let mut expanded = 0;
+            for (index, (walker, nav)) in walkers.iter_mut().zip(&mut navigation).enumerate() {
+                let before = nav.search.as_ref().map_or(0, |search| search.expansions);
+                walking.walk(walker, nav, target, 0.52, false, 0.05, |_| true);
+                let after = nav.search.as_ref().map_or(0, |search| search.expansions);
+                assert!(after - before <= SEARCH_EXPANSIONS_PER_SLICE);
+                expanded += after - before;
+                served[index] |= after > 0;
+                assert!(character_position_is_clear(
+                    &world,
+                    walker.body.position,
+                    &obstacles
+                ));
+            }
+            assert_eq!(expanded, 2 * SEARCH_EXPANSIONS_PER_SLICE);
+        }
+        assert!(served.into_iter().all(|served| served));
+    }
+
+    #[test]
+    fn terrain_changed_during_a_search_still_blocks_motion_and_removal_allows_recovery() {
+        let mut world = flat_path();
+        let start = [0.25, 20., 0.25];
+        let target = [3.25, 20., 0.25];
+        let mut obstacles = vec![[1.05, 20., 0.25]];
+        for x in [-0.55, 0.05, 0.65, 1.25] {
+            obstacles.push([x, 20., -0.55]);
+            obstacles.push([x, 20., 1.05]);
+        }
+        let mut walker = Walker::on_foot(&Body::new(start));
+        let mut nav = Navigation {
+            goal: Some(target),
+            stalled: 1.,
+            ..Default::default()
+        };
+        Walking {
+            world: &world,
+            obstacles: &obstacles,
+            airships: None,
+        }
+        .walk(&mut walker, &mut nav, target, 0.52, false, 0.05, |_| true);
+        assert!(
+            nav.search.is_some(),
+            "the search must span more than one tick"
+        );
+        let original = world.edits();
+        for y in 40..=44 {
+            for z in -2..=2 {
+                world
+                    .set_block(BlockPos::new(-2, y, z), Block::Stone)
+                    .unwrap();
+            }
+        }
+        for _ in 0..100 {
+            Walking {
+                world: &world,
+                obstacles: &obstacles,
+                airships: None,
+            }
+            .walk(&mut walker, &mut nav, target, 0.52, false, 0.05, |_| true);
+            assert!(character_position_is_clear(
+                &world,
+                walker.body.position,
+                &obstacles
+            ));
+            assert!(distance(start, walker.body.position) < 0.6);
+        }
+        for y in 40..=44 {
+            for z in -2..=2 {
+                world
+                    .set_block(BlockPos::new(-2, y, z), Block::Air)
+                    .unwrap();
+            }
+        }
+        for _ in 0..500 {
+            Walking {
+                world: &world,
+                obstacles: &obstacles,
+                airships: None,
+            }
+            .walk(&mut walker, &mut nav, target, 0.52, false, 0.05, |_| true);
+            assert!(character_position_is_clear(
+                &world,
+                walker.body.position,
+                &obstacles
+            ));
+            if distance(walker.body.position, target) < 0.15 {
+                break;
+            }
+        }
+        assert!(distance(walker.body.position, target) < 0.15);
+        assert_eq!(world.edits(), original);
     }
 
     #[test]
