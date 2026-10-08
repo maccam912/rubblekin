@@ -234,14 +234,28 @@ impl Ecology {
             return false;
         }
         for _ in 0..24 {
-            let x = center[0] + (self.random() * 2. - 1.) * 15.;
-            let z = center[2] + (self.random() * 2. - 1.) * 15.;
+            let (x, z) = if young {
+                let angle = self.random() * std::f32::consts::TAU;
+                let radius = species.radius() * 2. + 0.35 + self.random() * 1.2;
+                (
+                    center[0] + angle.cos() * radius,
+                    center[2] + angle.sin() * radius,
+                )
+            } else {
+                (
+                    center[0] + (self.random() * 2. - 1.) * 15.,
+                    center[2] + (self.random() * 2. - 1.) * 15.,
+                )
+            };
             if let Some(p) = wild_ground(world, x, z, species) {
                 if self
                     .animals
                     .iter()
                     .any(|a| distance(a.body.position, p) < species.radius() * 2. + 0.3)
                 {
+                    continue;
+                }
+                if young && !offspring_position_is_reachable(world, species, center, p) {
                     continue;
                 }
                 let hunger = if young {
@@ -880,6 +894,29 @@ fn wild_ground(world: &World, x: f32, z: f32, species: Species) -> Option<[f32; 
         .then_some(p)
 }
 
+// A birth is local to its parent, unlike initial world seeding. Probe the short
+// approach with the real body controller so walls and ledges cannot move a
+// newborn to an unreachable area. Failed placement keeps the short retry.
+fn offspring_position_is_reachable(
+    world: &World,
+    species: Species,
+    parent: [f32; 3],
+    target: [f32; 3],
+) -> bool {
+    if (parent[1] - target[1]).abs() > CELL_SIZE + 0.01 {
+        return false;
+    }
+    let mut body = Body::new(parent);
+    for _ in 0..24 {
+        if distance(body.position, target) < 0.15 && (body.position[1] - target[1]).abs() < 0.1 {
+            return true;
+        }
+        let direction = [target[0] - body.position[0], target[2] - body.position[2]];
+        move_animal(world, &mut body, species, direction, 4., false, 0.05);
+    }
+    false
+}
+
 // A habitat is a feeding range, not a single shared foot position. Stable
 // individual approaches survive hunts, fleeing and reloads without another
 // persisted coordinate or consuming the biology RNG. Edits can invalidate a
@@ -988,6 +1025,65 @@ mod tests {
         assert!(!e.spawn_near(&world, Species::Wolf, 1, q, true));
     }
 
+    #[test]
+    fn offspring_appear_beside_the_parent_on_physically_reachable_ground() {
+        for species in [Species::Rabbit, Species::Wolf] {
+            let (world, mut e) = fixture();
+            e.animals[0].species = species;
+            let p = e.animals[0].body.position;
+            assert!(e.spawn_near(&world, species, 0, p, true));
+            let child = e.animals.last().unwrap();
+            assert!(distance(child.body.position, p) < 3.);
+            assert!((child.body.position[1] - p[1]).abs() <= CELL_SIZE + 0.01);
+            assert_eq!(child.age, 0.);
+            assert_eq!(child.breeding, breeding_period(species));
+            assert!(position_is_clear(&world, child.body.position, species));
+            assert!(world.edits().is_empty());
+            assert!(e.validate(&world));
+        }
+    }
+    #[test]
+    fn a_cramped_walled_parent_cannot_spawn_offspring_outside_the_enclosure() {
+        let (mut world, mut e) = fixture();
+        let base = e.animals[0]
+            .body
+            .position
+            .map(|v| (v / CELL_SIZE).floor() as i32);
+        for x in -34_i32..=34 {
+            for z in -34_i32..=34 {
+                for y in -1..=4 {
+                    let wall = (x.abs() == 2 && z.abs() <= 2) || (z.abs() == 2 && x.abs() <= 2);
+                    world
+                        .set_block(
+                            BlockPos::new(base[0] + x, base[1] + y, base[2] + z),
+                            if y == -1 {
+                                Block::Grass
+                            } else if wall && y < 4 {
+                                Block::Brick
+                            } else {
+                                Block::Air
+                            },
+                        )
+                        .unwrap();
+                }
+            }
+        }
+        let p = [
+            (base[0] as f32 + 0.5) * CELL_SIZE,
+            base[1] as f32 * CELL_SIZE,
+            (base[2] as f32 + 0.5) * CELL_SIZE,
+        ];
+        e.animals[0].body = Body::new(p);
+        e.animals[0].body.on_ground = true;
+        e.animals[0].target = p;
+        e.habitats[0].position = p;
+        assert!(position_is_clear(&world, p, Species::Rabbit));
+        let edits = world.edits();
+        assert!(!e.spawn_near(&world, Species::Rabbit, 0, p, true));
+        assert_eq!(e.animals.len(), 1);
+        assert_eq!(world.edits(), edits);
+        assert!(e.validate(&world));
+    }
     #[test]
     fn a_blocked_birth_retries_soon_and_starts_its_full_cooldown_only_on_success() {
         let (world, mut e) = fixture();
