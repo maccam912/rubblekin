@@ -65,7 +65,26 @@ impl Navigation {
             self.retry = 4.;
         }
         let steering_target = self.path.front().copied().unwrap_or(target);
-        fan(world, body, species, steering_target, &allowed).map(|direction| {
+        let direction = if self.path.is_empty() {
+            fan(world, body, species, steering_target, &allowed)
+        } else {
+            let direction = toward(body.position, steering_target);
+            let length = distance(body.position, steering_target).min(CELL_SIZE);
+            let next = [
+                body.position[0] + direction[0] * length,
+                body.position[1],
+                body.position[2] + direction[1] * length,
+            ];
+            // Follow the same whole-body support that found the route. A center
+            // ray can see a lower slope while the feet still rest on its edge.
+            if walk_step(world, body, species, next, &allowed).is_some() {
+                Some(direction)
+            } else {
+                self.path.clear();
+                fan(world, body, species, target, &allowed)
+            }
+        };
+        direction.map(|direction| {
             // Small waypoints must not be overshot at the faster hunting speed
             // or during a coarse test step. Live motion still uses move_animal.
             let cap = if self.path.is_empty() {
@@ -86,15 +105,18 @@ pub(super) fn fan(
     allowed: &impl Fn([f32; 3]) -> bool,
 ) -> Option<[f32; 2]> {
     let direction = toward(body.position, target);
+    // Check a short approach at its target, rather than rejecting it because
+    // of an obstacle beyond the requested movement.
+    let probe_distance = distance(body.position, target).min(0.9);
     for angle in [0_f32, 0.5, -0.5, 1., -1., 1.5, -1.5] {
         let d = [
             direction[0] * angle.cos() - direction[1] * angle.sin(),
             direction[0] * angle.sin() + direction[1] * angle.cos(),
         ];
         let p = [
-            body.position[0] + d[0] * 0.9,
+            body.position[0] + d[0] * probe_distance,
             body.position[1],
-            body.position[2] + d[1] * 0.9,
+            body.position[2] + d[1] * probe_distance,
         ];
         if !allowed(p) {
             continue;
@@ -106,7 +128,8 @@ pub(super) fn fan(
         };
         let ground = (hit.position.y + 1) as f32 * CELL_SIZE;
         if ground >= p[1] - 1.5
-            && ground <= p[1] + 0.5
+            // Settled feet include the controller's small contact skin.
+            && ground <= p[1] + CELL_SIZE + 0.01
             && (position_is_clear(world, p, species)
                 || position_is_clear(world, [p[0], p[1] + 0.5, p[2]], species))
         {
@@ -114,6 +137,34 @@ pub(super) fn fan(
         }
     }
     None
+}
+
+fn walk_step(
+    world: &World,
+    body: &Body,
+    species: Species,
+    target: [f32; 3],
+    allowed: &impl Fn([f32; 3]) -> bool,
+) -> Option<Body> {
+    let mut next = body.clone();
+    move_animal(
+        world,
+        &mut next,
+        species,
+        toward(body.position, target),
+        3.,
+        false,
+        distance(body.position, target) / 3.,
+    );
+    if distance(next.position, target) > 0.04 {
+        return None;
+    }
+    move_animal(world, &mut next, species, [0., 0.], 0., false, 0.2);
+    (next.on_ground
+        && allowed(next.position)
+        && next.position[1] <= body.position[1] + 0.55
+        && next.position[1] >= body.position[1] - 1.5)
+        .then_some(next)
 }
 
 fn detour(
@@ -198,27 +249,10 @@ fn detour(
                 origin[2] + cell[1] as f32 * CELL_SIZE,
             ];
             let step_distance = distance(position, next_target);
-            let mut next = nodes[index].body.clone();
-            move_animal(
-                world,
-                &mut next,
-                species,
-                toward(position, next_target),
-                3.,
-                false,
-                step_distance / 3.,
-            );
-            if distance(next.position, next_target) > 0.04 {
+            let Some(next) = walk_step(world, &nodes[index].body, species, next_target, allowed)
+            else {
                 continue;
-            }
-            move_animal(world, &mut next, species, [0., 0.], 0., false, 0.2);
-            if !next.on_ground
-                || !allowed(next.position)
-                || next.position[1] > position[1] + 0.55
-                || next.position[1] < position[1] - 1.5
-            {
-                continue;
-            }
+            };
             let cost = nodes[index].cost + step_distance;
             if cost + 0.001 >= costs[key(cell)] {
                 continue;
@@ -248,6 +282,74 @@ fn toward(a: [f32; 3], b: [f32; 3]) -> [f32; 2] {
 mod tests {
     use super::*;
     use rubblekin_core::world::{Block, BlockPos};
+    use std::sync::OnceLock;
+
+    fn sample_world() -> &'static World {
+        static WORLD: OnceLock<World> = OnceLock::new();
+        WORLD.get_or_init(|| {
+            World::generate(42, rubblekin_core::world::WorldGeneration::GeographyV6)
+        })
+    }
+
+    fn assert_stranded_wolf_progress(position: [f32; 3], target: [f32; 3]) {
+        let world = sample_world();
+        let mut body = Body::new(position);
+        body.on_ground = true;
+        let initial = distance(position, target);
+        let mut navigation = Navigation::default();
+        for _ in 0..600 {
+            let steering = navigation.steer(world, &body, Species::Wolf, target, 0.05, true, |p| {
+                super::super::habitable(world, p[0], p[2])
+            });
+            let (direction, speed) =
+                steering.map_or(([0., 0.], 0.), |(d, cap)| (d, 2_f32.min(cap)));
+            let before = body.position;
+            move_animal(
+                world,
+                &mut body,
+                Species::Wolf,
+                direction,
+                speed,
+                false,
+                0.05,
+            );
+            assert!(position_is_clear(world, body.position, Species::Wolf));
+            assert!(
+                distance(before, body.position) <= 0.11,
+                "movement stays swept"
+            );
+        }
+        assert!(
+            distance(body.position, target) < initial - 30.,
+            "wolf made no sustained progress from {position:?}: {:?}",
+            body.position
+        );
+        assert!(world.edits().is_empty());
+    }
+
+    #[test]
+    fn observed_uphill_migrant_can_follow_its_half_meter_steps() {
+        assert_stranded_wolf_progress(
+            [-11_420.261, 184.998, -316.3383],
+            [-11179.498, 181., -51.80479],
+        );
+    }
+
+    #[test]
+    fn observed_downhill_migrant_can_follow_supported_edges() {
+        assert_stranded_wolf_progress(
+            [4_851.615, 206.498, -9_782.635],
+            [5127.974, 135.5, -9566.264],
+        );
+    }
+
+    #[test]
+    fn observed_long_downhill_journey_keeps_making_physical_progress() {
+        assert_stranded_wolf_progress(
+            [4290.1113, 400.998, -9_377.145],
+            [4444.7183, 216., -8287.5625],
+        );
+    }
 
     fn pad() -> World {
         let mut world = World::new(42);
@@ -382,5 +484,106 @@ mod tests {
             }
         }
         assert!(fan(&world, &body, Species::Wolf, [2., 50., 0.], &|_| true).is_none());
+    }
+
+    #[test]
+    fn settled_contact_skin_does_not_reject_a_walkable_half_meter_step() {
+        let mut world = pad();
+        for x in 0..=18 {
+            for z in -18..=18 {
+                world
+                    .set_block(BlockPos::new(x, 100, z), Block::Grass)
+                    .unwrap();
+            }
+        }
+        let mut body = Body::new([-0.75, 50., 0.]);
+        move_animal(&world, &mut body, Species::Wolf, [0., 0.], 0., false, 0.05);
+        assert!(body.on_ground && body.position[1] < 50.);
+        let target = [0.25, 50.5, 0.];
+        assert_eq!(
+            fan(&world, &body, Species::Wolf, target, &|_| true),
+            Some([1., 0.])
+        );
+        for _ in 0..10 {
+            move_animal(&world, &mut body, Species::Wolf, [1., 0.], 2., false, 0.05);
+            assert!(position_is_clear(&world, body.position, Species::Wolf));
+        }
+        assert!(body.position[0] > 0.2 && body.position[1] > 50.49);
+    }
+
+    #[test]
+    fn a_short_waypoint_is_not_rejected_for_a_wall_beyond_it() {
+        let mut world = pad();
+        for z in -18..=18 {
+            for y in 100..=104 {
+                world
+                    .set_block(BlockPos::new(0, y, z), Block::Stone)
+                    .unwrap();
+            }
+        }
+        let body = Body::new([-1.25, 50., 0.]);
+        let target = [-0.75, 50., 0.];
+        assert!(position_is_clear(&world, target, Species::Wolf));
+        assert_eq!(
+            fan(&world, &body, Species::Wolf, target, &|_| true),
+            Some([1., 0.])
+        );
+        assert!(
+            fan(&world, &body, Species::Wolf, [2., 50., 0.], &|_| true)
+                .is_none_or(|d| d != [1., 0.])
+        );
+    }
+
+    #[test]
+    fn removing_support_on_a_cached_route_is_detected_before_the_body_falls() {
+        let mut world = dead_end();
+        let mut body = Body::new([-1., 50., 0.]);
+        body.on_ground = true;
+        let target = [2., 50., 0.];
+        let mut navigation = Navigation::default();
+        let mut changed = false;
+        for _ in 0..1200 {
+            if !changed
+                && let Some(p) = navigation
+                    .path
+                    .iter()
+                    .find(|p| distance(**p, body.position) > 2. && distance(**p, target) > 1.)
+            {
+                let x = (p[0] / CELL_SIZE).floor() as i32;
+                let z = (p[2] / CELL_SIZE).floor() as i32;
+                for dx in -1..=1 {
+                    for dz in -1..=1 {
+                        world
+                            .set_block(BlockPos::new(x + dx, 99, z + dz), Block::Air)
+                            .unwrap();
+                    }
+                }
+                changed = true;
+            }
+            let steering =
+                navigation.steer(&world, &body, Species::Wolf, target, 0.05, true, |_| true);
+            let (direction, speed) =
+                steering.map_or(([0., 0.], 0.), |(d, cap)| (d, 2_f32.min(cap)));
+            move_animal(
+                &world,
+                &mut body,
+                Species::Wolf,
+                direction,
+                speed,
+                false,
+                0.05,
+            );
+            assert!(position_is_clear(&world, body.position, Species::Wolf));
+            assert!(body.position[1] >= 49.99, "cached support was removed");
+            if distance(body.position, target) < 0.4 {
+                break;
+            }
+        }
+        assert!(changed);
+        assert!(
+            distance(body.position, target) < 0.4,
+            "stopped at {:?}",
+            body.position
+        );
     }
 }

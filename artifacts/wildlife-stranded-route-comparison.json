@@ -1,0 +1,705 @@
+{
+  "world_seed": 42,
+  "generation": "GeographyV6",
+  "baseline_source": "edc76191c2274dd02ad41d50ca1c0e09e6b2216c",
+  "observed_loss_source": "fea21c2",
+  "step_seconds": 0.05,
+  "seconds_per_case": 180,
+  "setup": "Replay the three recorded stranded wolf poses with their original homes and destinations. Retain one wolf at a time in the actual ecology update; reset hunger to50 and age to1800 seconds so navigation can be observed independently of imminent death. No people or terrain edits.",
+  "corrected_behavior": "Limit lookahead to the current waypoint, tolerate settled contact skin at half-meter steps, and validate cached path motion with the same whole-body physics as the search.",
+  "limitations": [
+    "Isolated route reproduction, not a full-population balance result or performance benchmark.",
+    "All poses are from seed42; other seeds and migration connectivity remain follow-up.",
+    "Unit regressions reproduce all three positions for30 simulated seconds and also check edited walls and removed support."
+  ],
+  "samples": {
+    "baseline": [
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 0.0,
+        "position": [
+          -11420.2607421875,
+          184.9980010986328,
+          -316.3382873535156
+        ],
+        "remaining": 357.6935119628906,
+        "seconds": 30.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 0.0,
+        "position": [
+          -11420.2607421875,
+          184.9980010986328,
+          -316.3382873535156
+        ],
+        "remaining": 357.6935119628906,
+        "seconds": 60.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 0.0,
+        "position": [
+          -11420.2607421875,
+          184.9980010986328,
+          -316.3382873535156
+        ],
+        "remaining": 357.6935119628906,
+        "seconds": 90.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 0.0,
+        "position": [
+          -11420.2607421875,
+          184.9980010986328,
+          -316.3382873535156
+        ],
+        "remaining": 357.6935119628906,
+        "seconds": 120.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 0.0,
+        "position": [
+          -11420.2607421875,
+          184.9980010986328,
+          -316.3382873535156
+        ],
+        "remaining": 357.6935119628906,
+        "seconds": 150.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 0.0,
+        "position": [
+          -11420.2607421875,
+          184.9980010986328,
+          -316.3382873535156
+        ],
+        "remaining": 357.6935119628906,
+        "seconds": 180.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 1.3235448598861694,
+        "position": [
+          4851.5966796875,
+          206.4980010986328,
+          -9782.7099609375
+        ],
+        "remaining": 351.0462646484375,
+        "seconds": 30.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 1.3235448598861694,
+        "position": [
+          4851.5966796875,
+          206.4980010986328,
+          -9782.7099609375
+        ],
+        "remaining": 351.0462646484375,
+        "seconds": 60.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 1.3235448598861694,
+        "position": [
+          4851.5966796875,
+          206.4980010986328,
+          -9782.7099609375
+        ],
+        "remaining": 351.0462646484375,
+        "seconds": 90.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 1.3235448598861694,
+        "position": [
+          4851.5966796875,
+          206.4980010986328,
+          -9782.7099609375
+        ],
+        "remaining": 351.0462646484375,
+        "seconds": 120.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 1.3235448598861694,
+        "position": [
+          4851.5966796875,
+          206.4980010986328,
+          -9782.7099609375
+        ],
+        "remaining": 351.0462646484375,
+        "seconds": 150.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 1.3235448598861694,
+        "position": [
+          4851.5966796875,
+          206.4980010986328,
+          -9782.7099609375
+        ],
+        "remaining": 351.0462646484375,
+        "seconds": 180.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 0.7004084587097168,
+        "position": [
+          4290.07763671875,
+          400.99798583984375,
+          -9377.26953125
+        ],
+        "remaining": 1100.6248779296875,
+        "seconds": 30.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 0.7004084587097168,
+        "position": [
+          4290.07763671875,
+          400.99798583984375,
+          -9377.26953125
+        ],
+        "remaining": 1100.6248779296875,
+        "seconds": 60.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 0.7004084587097168,
+        "position": [
+          4290.07763671875,
+          400.99798583984375,
+          -9377.26953125
+        ],
+        "remaining": 1100.6248779296875,
+        "seconds": 90.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 0.7004084587097168,
+        "position": [
+          4290.07763671875,
+          400.99798583984375,
+          -9377.26953125
+        ],
+        "remaining": 1100.6248779296875,
+        "seconds": 120.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 0.7004084587097168,
+        "position": [
+          4290.07763671875,
+          400.99798583984375,
+          -9377.26953125
+        ],
+        "remaining": 1100.6248779296875,
+        "seconds": 150.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 0.7004084587097168,
+        "position": [
+          4290.07763671875,
+          400.99798583984375,
+          -9377.26953125
+        ],
+        "remaining": 1100.6248779296875,
+        "seconds": 180.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      }
+    ],
+    "corrected": [
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 57.14809799194336,
+        "position": [
+          -11380.63671875,
+          202.9980010986328,
+          -275.1576843261719
+        ],
+        "remaining": 300.57159423828125,
+        "seconds": 30.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 116.21711730957031,
+        "position": [
+          -11341.912109375,
+          196.4980010986328,
+          -230.5017547607422
+        ],
+        "remaining": 241.4765625,
+        "seconds": 60.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 176.03497314453125,
+        "position": [
+          -11301.6298828125,
+          182.4980010986328,
+          -186.28048706054688
+        ],
+        "remaining": 181.6587371826172,
+        "seconds": 90.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 233.79063415527344,
+        "position": [
+          -11266.4599609375,
+          170.94300842285156,
+          -140.26052856445312
+        ],
+        "remaining": 124.04350280761719,
+        "seconds": 120.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 288.8514709472656,
+        "position": [
+          -11232.41015625,
+          179.4980010986328,
+          -96.91329956054688
+        ],
+        "remaining": 69.53034210205078,
+        "seconds": 150.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 37,
+        "id": 20,
+        "initial_distance": 361.1059265136719,
+        "max_travel": 347.5997619628906,
+        "position": [
+          -11186.99609375,
+          182.49803161621094,
+          -58.63069534301758
+        ],
+        "remaining": 10.139708518981934,
+        "seconds": 180.0,
+        "target": [
+          -11179.498046875,
+          181.0,
+          -51.80479049682617
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 43.46830749511719,
+        "position": [
+          4884.97314453125,
+          189.4980010986328,
+          -9754.7646484375
+        ],
+        "remaining": 307.5420227050781,
+        "seconds": 30.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 103.17192077636719,
+        "position": [
+          4932.5546875,
+          170.6680145263672,
+          -9718.65625
+        ],
+        "remaining": 247.81495666503906,
+        "seconds": 60.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 162.38319396972656,
+        "position": [
+          4978.4375,
+          155.4980010986328,
+          -9681.22265625
+        ],
+        "remaining": 188.61805725097656,
+        "seconds": 90.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 222.15760803222656,
+        "position": [
+          5025.8984375,
+          142.4980010986328,
+          -9644.869140625
+        ],
+        "remaining": 128.83425903320312,
+        "seconds": 120.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 281.58013916015625,
+        "position": [
+          5072.466796875,
+          138.4980010986328,
+          -9607.9580078125
+        ],
+        "remaining": 69.42247772216797,
+        "seconds": 150.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 44,
+        "id": 147,
+        "initial_distance": 343.165771484375,
+        "max_travel": 341.54974365234375,
+        "position": [
+          5120.42822265625,
+          137.9980010986328,
+          -9571.931640625
+        ],
+        "remaining": 9.43750286102295,
+        "seconds": 180.0,
+        "target": [
+          5127.97412109375,
+          135.5,
+          -9566.263671875
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 48.38872528076172,
+        "position": [
+          4296.74658203125,
+          382.4430236816406,
+          -9329.212890625
+        ],
+        "remaining": 1052.10791015625,
+        "seconds": 30.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 107.44599914550781,
+        "position": [
+          4302.5830078125,
+          356.4980163574219,
+          -9270.4248046875
+        ],
+        "remaining": 993.0864868164062,
+        "seconds": 60.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 166.8699188232422,
+        "position": [
+          4310.45654296875,
+          360.49798583984375,
+          -9211.51953125
+        ],
+        "remaining": 933.6609497070312,
+        "seconds": 90.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 219.65957641601562,
+        "position": [
+          4315.8740234375,
+          323.9980163574219,
+          -9159.0009765625
+        ],
+        "remaining": 880.9119262695312,
+        "seconds": 120.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 279.60498046875,
+        "position": [
+          4324.6630859375,
+          300.3330078125,
+          -9099.6826171875
+        ],
+        "remaining": 820.9459838867188,
+        "seconds": 150.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      },
+      {
+        "action": "Migrating",
+        "destination": 57,
+        "id": 148,
+        "initial_distance": 1096.1617431640625,
+        "max_travel": 338.0921325683594,
+        "position": [
+          4334.533203125,
+          314.4980163574219,
+          -9041.9833984375
+        ],
+        "remaining": 762.4248657226562,
+        "seconds": 180.0,
+        "target": [
+          4444.71826171875,
+          216.0,
+          -8287.5625
+        ]
+      }
+    ]
+  }
+}

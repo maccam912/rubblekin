@@ -1,0 +1,1854 @@
+{
+  "source": "Committed alongside this artifact: navigation correction after edc7619.",
+  "seed": 42,
+  "completed_hours": 1,
+  "requested_hours": 24,
+  "step_seconds": 0.05,
+  "limitations": [
+    "Headless ecology only, without people or networking.",
+    "Local timings overlap server tests and builds; not a production benchmark.",
+    "One hour does not establish sustained predator balance. The day run continues separately."
+  ],
+  "hourly": [
+    {
+      "arrivals": 0,
+      "births": 0,
+      "deaths": 0,
+      "ecology_mean_ms": 0.0,
+      "ecology_peak_ms": 0.0,
+      "elapsed_seconds": 0.00027820898685604334,
+      "forage_mean": 80.0,
+      "forage_min": 80.0,
+      "habitat_details": [
+        {
+          "forage": 80.0,
+          "id": 0,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 1,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 2,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 3,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 4,
+          "prey_in_range": 6,
+          "rabbit_births": 0,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 80.0,
+          "id": 5,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 6,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 7,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 8,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 9,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 10,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 11,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 12,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 13,
+          "prey_in_range": 6,
+          "rabbit_births": 0,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 80.0,
+          "id": 14,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 15,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 16,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 17,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 18,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 19,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 20,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 21,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 22,
+          "prey_in_range": 6,
+          "rabbit_births": 0,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 80.0,
+          "id": 23,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 24,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 25,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 26,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 27,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 28,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 29,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 30,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 31,
+          "prey_in_range": 6,
+          "rabbit_births": 0,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 80.0,
+          "id": 32,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 33,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 34,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 35,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 36,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 37,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 38,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 39,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 40,
+          "prey_in_range": 6,
+          "rabbit_births": 0,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 80.0,
+          "id": 41,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 42,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 43,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 44,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 45,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 46,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 47,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 48,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 49,
+          "prey_in_range": 6,
+          "rabbit_births": 0,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 80.0,
+          "id": 50,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 51,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 52,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 53,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 54,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 55,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 56,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 57,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 58,
+          "prey_in_range": 6,
+          "rabbit_births": 0,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 80.0,
+          "id": 59,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 60,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 61,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 62,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.0,
+          "id": 63,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        }
+      ],
+      "hour": 0,
+      "hunted": 0,
+      "migrating": 0,
+      "migrations": 0,
+      "packet_bytes": 38177,
+      "rabbits": 213,
+      "seed": 42,
+      "starving": 0,
+      "stationary_migrants": 0,
+      "step_seconds": 0.05000000074505806,
+      "ticks_over_25ms": 0,
+      "ticks_over_50ms": 0,
+      "wolf_arrivals": 0,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Resting",
+          "age_hours": 12.950565338134766,
+          "breeding_seconds": 13145.5341796875,
+          "destination": null,
+          "habitat": 4,
+          "home_distance": 14.626461029052734,
+          "hunger": 34.75746154785156,
+          "id": 19,
+          "mate_distance": 13.58554744720459,
+          "position": [
+            -12103.6689453125,
+            143.0,
+            -1102.39892578125
+          ],
+          "prey_distance": 7.8560051918029785,
+          "target": [
+            -12103.6689453125,
+            143.0,
+            -1102.39892578125
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 44.51561737060547,
+          "breeding_seconds": 18578.26171875,
+          "destination": null,
+          "habitat": 4,
+          "home_distance": 14.836380004882812,
+          "hunger": 26.037891387939453,
+          "id": 20,
+          "mate_distance": 13.58554744720459,
+          "position": [
+            -12117.1533203125,
+            145.0,
+            -1104.0538330078125
+          ],
+          "prey_distance": 5.981559753417969,
+          "target": [
+            -12117.1533203125,
+            145.0,
+            -1104.0538330078125
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 27.186267852783203,
+          "breeding_seconds": 5406.63818359375,
+          "destination": null,
+          "habitat": 13,
+          "home_distance": 3.714672803878784,
+          "hunger": 50.10117721557617,
+          "id": 51,
+          "mate_distance": null,
+          "position": [
+            6624.28759765625,
+            99.0,
+            -6507.16015625
+          ],
+          "prey_distance": 5.813042163848877,
+          "target": [
+            6624.28759765625,
+            99.0,
+            -6507.16015625
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 31.58192253112793,
+          "breeding_seconds": 18242.90625,
+          "destination": null,
+          "habitat": 13,
+          "home_distance": 15.820878982543945,
+          "hunger": 48.58369445800781,
+          "id": 52,
+          "mate_distance": null,
+          "position": [
+            6617.17138671875,
+            99.0,
+            -6517.91845703125
+          ],
+          "prey_distance": 8.515157699584961,
+          "target": [
+            6617.17138671875,
+            99.0,
+            -6517.91845703125
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 35.597110748291016,
+          "breeding_seconds": 11281.2333984375,
+          "destination": null,
+          "habitat": 22,
+          "home_distance": 13.55584716796875,
+          "hunger": 41.21142578125,
+          "id": 83,
+          "mate_distance": null,
+          "position": [
+            2197.56494140625,
+            264.0,
+            2623.61376953125
+          ],
+          "prey_distance": 10.875653266906738,
+          "target": [
+            2197.56494140625,
+            264.0,
+            2623.61376953125
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 11.920167922973633,
+          "breeding_seconds": 17724.81640625,
+          "destination": null,
+          "habitat": 22,
+          "home_distance": 10.571928977966309,
+          "hunger": 56.27763366699219,
+          "id": 84,
+          "mate_distance": null,
+          "position": [
+            2181.765869140625,
+            264.0,
+            2627.517822265625
+          ],
+          "prey_distance": 4.0072102546691895,
+          "target": [
+            2181.765869140625,
+            264.0,
+            2627.517822265625
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 15.731565475463867,
+          "breeding_seconds": 20167.39453125,
+          "destination": null,
+          "habitat": 31,
+          "home_distance": 10.583308219909668,
+          "hunger": 46.76401901245117,
+          "id": 115,
+          "mate_distance": null,
+          "position": [
+            4269.27783203125,
+            163.5,
+            -6341.34375
+          ],
+          "prey_distance": 2.082984209060669,
+          "target": [
+            4269.27783203125,
+            163.5,
+            -6341.34375
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 22.248685836791992,
+          "breeding_seconds": 10568.56640625,
+          "destination": null,
+          "habitat": 31,
+          "home_distance": 9.163158416748047,
+          "hunger": 43.618896484375,
+          "id": 116,
+          "mate_distance": null,
+          "position": [
+            4270.61474609375,
+            163.5,
+            -6339.8720703125
+          ],
+          "prey_distance": 2.4569363594055176,
+          "target": [
+            4270.61474609375,
+            163.5,
+            -6339.8720703125
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 30.65467643737793,
+          "breeding_seconds": 17430.513671875,
+          "destination": null,
+          "habitat": 40,
+          "home_distance": 10.767552375793457,
+          "hunger": 41.41857147216797,
+          "id": 147,
+          "mate_distance": 8484.5478515625,
+          "position": [
+            4339.68310546875,
+            93.0,
+            -10442.26171875
+          ],
+          "prey_distance": 6.5611348152160645,
+          "target": [
+            4339.68310546875,
+            93.0,
+            -10442.26171875
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 42.48261260986328,
+          "breeding_seconds": 18416.5078125,
+          "destination": null,
+          "habitat": 40,
+          "home_distance": 6.6931586265563965,
+          "hunger": 55.707496643066406,
+          "id": 148,
+          "mate_distance": 8479.11328125,
+          "position": [
+            4342.3125,
+            93.5,
+            -10436.5830078125
+          ],
+          "prey_distance": 4.370701313018799,
+          "target": [
+            4342.3125,
+            93.5,
+            -10436.5830078125
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 41.282440185546875,
+          "breeding_seconds": 10243.5361328125,
+          "destination": null,
+          "habitat": 49,
+          "home_distance": 16.879568099975586,
+          "hunger": 59.03098678588867,
+          "id": 179,
+          "mate_distance": null,
+          "position": [
+            -6790.5322265625,
+            23.5,
+            8386.22265625
+          ],
+          "prey_distance": 5.623111724853516,
+          "target": [
+            -6790.5322265625,
+            23.5,
+            8386.22265625
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 15.704267501831055,
+          "breeding_seconds": 18235.013671875,
+          "destination": null,
+          "habitat": 49,
+          "home_distance": 3.3811893463134766,
+          "hunger": 54.82341384887695,
+          "id": 180,
+          "mate_distance": null,
+          "position": [
+            -6806.48095703125,
+            23.0,
+            8374.0654296875
+          ],
+          "prey_distance": 8.604511260986328,
+          "target": [
+            -6806.48095703125,
+            23.0,
+            8374.0654296875
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 11.789301872253418,
+          "breeding_seconds": 9983.8955078125,
+          "destination": null,
+          "habitat": 58,
+          "home_distance": 8.493642807006836,
+          "hunger": 27.51446533203125,
+          "id": 211,
+          "mate_distance": 7.6261820793151855,
+          "position": [
+            11257.3212890625,
+            92.5,
+            -5517.6455078125
+          ],
+          "prey_distance": 13.628746032714844,
+          "target": [
+            11257.3212890625,
+            92.5,
+            -5517.6455078125
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 43.913818359375,
+          "breeding_seconds": 20161.03125,
+          "destination": null,
+          "habitat": 58,
+          "home_distance": 7.74201774597168,
+          "hunger": 31.139745712280273,
+          "id": 212,
+          "mate_distance": 7.6261820793151855,
+          "position": [
+            11253.474609375,
+            92.0,
+            -5524.23046875
+          ],
+          "prey_distance": 15.835638999938965,
+          "target": [
+            11253.474609375,
+            92.0,
+            -5524.23046875
+          ]
+        }
+      ],
+      "wolf_fed": 2,
+      "wolf_losses": [],
+      "wolf_max_hunger": 59.03098678588867,
+      "wolf_migrations": 0,
+      "wolf_starving": 0,
+      "wolves": 14,
+      "wolves_with_mate": 4,
+      "wolves_with_prey": 14
+    },
+    {
+      "arrivals": 6,
+      "births": 25,
+      "deaths": 0,
+      "ecology_mean_ms": 0.7666478762083246,
+      "ecology_peak_ms": 34.906042,
+      "elapsed_seconds": 55.2853889465332,
+      "forage_mean": 92.580078125,
+      "forage_min": 62.37449645996094,
+      "habitat_details": [
+        {
+          "forage": 99.4830322265625,
+          "id": 0,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 99.97367095947266,
+          "id": 1,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 99.93022155761719,
+          "id": 2,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 75.85037994384766,
+          "id": 3,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 79.39718627929688,
+          "id": 4,
+          "prey_in_range": 4,
+          "rabbit_births": 0,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 98.39440155029297,
+          "id": 5,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 91.4061279296875,
+          "id": 6,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 96.92093658447266,
+          "id": 7,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.10406494140625,
+          "id": 8,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 1
+        },
+        {
+          "forage": 80.44810485839844,
+          "id": 9,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 10,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 11,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 97.89959716796875,
+          "id": 12,
+          "prey_in_range": 5,
+          "rabbit_births": 2,
+          "rabbits": 5,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 89.3486557006836,
+          "id": 13,
+          "prey_in_range": 6,
+          "rabbit_births": 2,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 1
+        },
+        {
+          "forage": 80.12882232666016,
+          "id": 14,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 15,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 99.08269500732422,
+          "id": 16,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 91.57539367675781,
+          "id": 17,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 91.99248504638672,
+          "id": 18,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 88.928955078125,
+          "id": 19,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 99.50637817382812,
+          "id": 20,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 88.44486236572266,
+          "id": 21,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 92.76661682128906,
+          "id": 22,
+          "prey_in_range": 6,
+          "rabbit_births": 2,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 1
+        },
+        {
+          "forage": 92.08253479003906,
+          "id": 23,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 24,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 99.32677459716797,
+          "id": 25,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 26,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 91.27967071533203,
+          "id": 27,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 28,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 29,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 98.28138732910156,
+          "id": 30,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 99.79286193847656,
+          "id": 31,
+          "prey_in_range": 4,
+          "rabbit_births": 0,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 1
+        },
+        {
+          "forage": 90.45709991455078,
+          "id": 32,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 91.60572814941406,
+          "id": 33,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 94.05766296386719,
+          "id": 34,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 92.55524444580078,
+          "id": 35,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 36,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 92.6837158203125,
+          "id": 37,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 88.60291290283203,
+          "id": 38,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 93.11739349365234,
+          "id": 39,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 62.37449645996094,
+          "id": 40,
+          "prey_in_range": 6,
+          "rabbit_births": 1,
+          "rabbits": 6,
+          "wolf_births": 0,
+          "wolves": 1
+        },
+        {
+          "forage": 100.0,
+          "id": 41,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 1
+        },
+        {
+          "forage": 98.27887725830078,
+          "id": 42,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 43,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 81.82109069824219,
+          "id": 44,
+          "prey_in_range": 2,
+          "rabbit_births": 0,
+          "rabbits": 2,
+          "wolf_births": 0,
+          "wolves": 1
+        },
+        {
+          "forage": 99.09992980957031,
+          "id": 45,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 46,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 91.83651733398438,
+          "id": 47,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 93.32158660888672,
+          "id": 48,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 85.66996765136719,
+          "id": 49,
+          "prey_in_range": 4,
+          "rabbit_births": 0,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 88.95194244384766,
+          "id": 50,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 99.25408172607422,
+          "id": 51,
+          "prey_in_range": 4,
+          "rabbit_births": 1,
+          "rabbits": 4,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 99.12274932861328,
+          "id": 52,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 1
+        },
+        {
+          "forage": 99.90058135986328,
+          "id": 53,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 85.38004302978516,
+          "id": 54,
+          "prey_in_range": 5,
+          "rabbit_births": 2,
+          "rabbits": 5,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 92.47246551513672,
+          "id": 55,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 90.5953140258789,
+          "id": 56,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 80.30500030517578,
+          "id": 57,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 62.924556732177734,
+          "id": 58,
+          "prey_in_range": 5,
+          "rabbit_births": 1,
+          "rabbits": 5,
+          "wolf_births": 0,
+          "wolves": 2
+        },
+        {
+          "forage": 93.20726013183594,
+          "id": 59,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 100.0,
+          "id": 60,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 92.12661743164062,
+          "id": 61,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 91.586181640625,
+          "id": 62,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        },
+        {
+          "forage": 91.47047424316406,
+          "id": 63,
+          "prey_in_range": 3,
+          "rabbit_births": 0,
+          "rabbits": 3,
+          "wolf_births": 0,
+          "wolves": 0
+        }
+      ],
+      "hour": 1,
+      "hunted": 14,
+      "migrating": 1,
+      "migrations": 7,
+      "packet_bytes": 43867,
+      "rabbits": 224,
+      "seed": 42,
+      "starving": 0,
+      "stationary_migrants": 0,
+      "step_seconds": 0.05000000074505806,
+      "ticks_over_25ms": 44,
+      "ticks_over_50ms": 0,
+      "wolf_arrivals": 6,
+      "wolf_births": 0,
+      "wolf_details": [
+        {
+          "action": "Resting",
+          "age_hours": 13.966190338134766,
+          "breeding_seconds": 9559.5966796875,
+          "destination": null,
+          "habitat": 37,
+          "home_distance": 0.9615455269813538,
+          "hunger": 21.25112533569336,
+          "id": 19,
+          "mate_distance": 11.174264907836914,
+          "position": [
+            -11187.2236328125,
+            184.99803161621094,
+            -41.741607666015625
+          ],
+          "prey_distance": 29.915145874023438,
+          "target": [
+            -11186.7001953125,
+            185.0,
+            -40.935020446777344
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 45.45311737060547,
+          "breeding_seconds": 14950.126953125,
+          "destination": null,
+          "habitat": 37,
+          "home_distance": 11.593010902404785,
+          "hunger": 12.54551887512207,
+          "id": 20,
+          "mate_distance": 11.174264907836914,
+          "position": [
+            -11181.072265625,
+            181.99803161621094,
+            -51.07032012939453
+          ],
+          "prey_distance": 18.86037826538086,
+          "target": [
+            -11196.791015625,
+            188.0,
+            -40.18811798095703
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 28.123767852783203,
+          "breeding_seconds": 1809.547119140625,
+          "destination": null,
+          "habitat": 13,
+          "home_distance": 15.10029411315918,
+          "hunger": 21.502666473388672,
+          "id": 51,
+          "mate_distance": null,
+          "position": [
+            6616.994140625,
+            99.49800109863281,
+            -6495.8447265625
+          ],
+          "prey_distance": 29.715919494628906,
+          "target": [
+            6644.2099609375,
+            99.0,
+            -6539.98583984375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 32.51942443847656,
+          "breeding_seconds": 14621.220703125,
+          "destination": null,
+          "habitat": 52,
+          "home_distance": 16.44464683532715,
+          "hunger": 21.071453094482422,
+          "id": 52,
+          "mate_distance": 4353.107421875,
+          "position": [
+            7025.34130859375,
+            88.49800872802734,
+            -6556.31298828125
+          ],
+          "prey_distance": 24.101768493652344,
+          "target": [
+            7043.79638671875,
+            90.0,
+            -6589.52880859375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 36.534610748291016,
+          "breeding_seconds": 7695.2958984375,
+          "destination": null,
+          "habitat": 41,
+          "home_distance": 22.63190269470215,
+          "hunger": 21.41013526916504,
+          "id": 83,
+          "mate_distance": 215.51913452148438,
+          "position": [
+            2152.803955078125,
+            267.99798583984375,
+            2854.628662109375
+          ],
+          "prey_distance": 24.894437789916992,
+          "target": [
+            2140.616455078125,
+            268.0,
+            2884.841552734375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 12.935792922973633,
+          "breeding_seconds": 14113.0947265625,
+          "destination": null,
+          "habitat": 22,
+          "home_distance": 9.115315437316895,
+          "hunger": 21.516740798950195,
+          "id": 84,
+          "mate_distance": 215.51913452148438,
+          "position": [
+            2183.43994140625,
+            264.49798583984375,
+            2641.298095703125
+          ],
+          "prey_distance": 27.238752365112305,
+          "target": [
+            2193.02392578125,
+            264.0,
+            2622.677001953125
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 16.747190475463867,
+          "breeding_seconds": 16511.14453125,
+          "destination": null,
+          "habitat": 31,
+          "home_distance": 9.134026527404785,
+          "hunger": 21.452058792114258,
+          "id": 115,
+          "mate_distance": null,
+          "position": [
+            4270.650390625,
+            163.49803161621094,
+            -6339.63916015625
+          ],
+          "prey_distance": 34.15681457519531,
+          "target": [
+            4279.77685546875,
+            163.0,
+            -6340.0107421875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 23.186185836791992,
+          "breeding_seconds": 6982.62890625,
+          "destination": null,
+          "habitat": 8,
+          "home_distance": 16.29313087463379,
+          "hunger": 21.278974533081055,
+          "id": 116,
+          "mate_distance": 1627.177734375,
+          "position": [
+            5207.2421875,
+            143.99801635742188,
+            -7955.7666015625
+          ],
+          "prey_distance": 24.67769432067871,
+          "target": [
+            5206.14794921875,
+            143.5,
+            -7928.32763671875
+          ]
+        },
+        {
+          "action": "Migrating",
+          "age_hours": 31.59217643737793,
+          "breeding_seconds": 13824.451171875,
+          "destination": 44,
+          "habitat": 40,
+          "home_distance": 1169.0025634765625,
+          "hunger": 21.073848724365234,
+          "id": 147,
+          "mate_distance": null,
+          "position": [
+            5138.86083984375,
+            129.99801635742188,
+            -9580.298828125
+          ],
+          "prey_distance": 25.98760414123535,
+          "target": [
+            5127.97412109375,
+            135.5,
+            -9566.263671875
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 43.42011260986328,
+          "breeding_seconds": 14791.484375,
+          "destination": null,
+          "habitat": 44,
+          "home_distance": 2.425616502761841,
+          "hunger": 12.33627986907959,
+          "id": 148,
+          "mate_distance": 1627.177734375,
+          "position": [
+            5126.9462890625,
+            139.4980010986328,
+            -9580.9619140625
+          ],
+          "prey_distance": 24.217662811279297,
+          "target": [
+            5127.544921875,
+            138.5,
+            -9578.611328125
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 42.219940185546875,
+          "breeding_seconds": 6657.5986328125,
+          "destination": null,
+          "habitat": 49,
+          "home_distance": 37.89862823486328,
+          "hunger": 21.486495971679688,
+          "id": 179,
+          "mate_distance": 7.194118499755859,
+          "position": [
+            -6809.490234375,
+            23.99801254272461,
+            8337.7744140625
+          ],
+          "prey_distance": 27.748891830444336,
+          "target": [
+            -6814.0302734375,
+            23.5,
+            8341.9521484375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 16.719892501831055,
+          "breeding_seconds": 14613.48046875,
+          "destination": null,
+          "habitat": 49,
+          "home_distance": 43.306793212890625,
+          "hunger": 21.51554298400879,
+          "id": 180,
+          "mate_distance": 7.194118499755859,
+          "position": [
+            -6815.32177734375,
+            23.998004913330078,
+            8333.5615234375
+          ],
+          "prey_distance": 34.78232955932617,
+          "target": [
+            -6809.451171875,
+            24.0,
+            8332.521484375
+          ]
+        },
+        {
+          "action": "Roaming",
+          "age_hours": 12.804926872253418,
+          "breeding_seconds": 6397.9580078125,
+          "destination": null,
+          "habitat": 58,
+          "home_distance": 41.5728645324707,
+          "hunger": 13.810534477233887,
+          "id": 211,
+          "mate_distance": 8.698423385620117,
+          "position": [
+            11264.4619140625,
+            89.49800109863281,
+            -5566.6669921875
+          ],
+          "prey_distance": 29.196794509887695,
+          "target": [
+            11267.482421875,
+            89.5,
+            -5571.4638671875
+          ]
+        },
+        {
+          "action": "Resting",
+          "age_hours": 44.851318359375,
+          "breeding_seconds": 16504.78125,
+          "destination": null,
+          "habitat": 58,
+          "home_distance": 37.440155029296875,
+          "hunger": 17.449260711669922,
+          "id": 212,
+          "mate_distance": 8.698423385620117,
+          "position": [
+            11271.283203125,
+            89.49800872802734,
+            -5561.26953125
+          ],
+          "prey_distance": 25.563756942749023,
+          "target": [
+            11266.76953125,
+            89.5,
+            -5560.6181640625
+          ]
+        }
+      ],
+      "wolf_fed": 14,
+      "wolf_losses": [],
+      "wolf_max_hunger": 21.516740798950195,
+      "wolf_migrations": 7,
+      "wolf_starving": 0,
+      "wolves": 14,
+      "wolves_with_mate": 6,
+      "wolves_with_prey": 14
+    }
+  ]
+}
