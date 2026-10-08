@@ -20,9 +20,23 @@ use crate::{
 const SAVE_VERSION: u32 = 8;
 pub(crate) const MAX_EDITS: usize = 100_000;
 
-/// The sidecar remains on disk, but its OS lock is released on close or crash.
+/// The sidecar remains on disk; this guard releases its OS lock on drop.
 /// Locking the save itself would not survive atomic file replacement.
-pub(crate) fn lock_save(path: &Path) -> io::Result<File> {
+pub(crate) struct SaveLock {
+    file: File,
+}
+
+impl Drop for SaveLock {
+    fn drop(&mut self) {
+        // A concurrently spawned child can briefly inherit this descriptor.
+        // Closing our handle alone would leave its copy holding the world lock.
+        if let Err(error) = self.file.unlock() {
+            eprintln!("Failed to release world save lock: {error}");
+        }
+    }
+}
+
+pub(crate) fn lock_save(path: &Path) -> io::Result<SaveLock> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -44,7 +58,7 @@ pub(crate) fn lock_save(path: &Path) -> io::Result<File> {
             path.display()
         ))
     })?;
-    Ok(lock)
+    Ok(SaveLock { file: lock })
 }
 
 #[derive(Serialize, Deserialize)]
@@ -507,6 +521,27 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.0);
         }
+    }
+
+    #[test]
+    fn stopped_save_owner_releases_its_lock_while_an_inherited_handle_remains() {
+        let path = TestPath::new();
+        let owner = lock_save(&path.0).unwrap();
+        let inherited = owner.file.try_clone().unwrap();
+        assert!(
+            lock_save(&path.0).is_err(),
+            "a live owner still excludes another server"
+        );
+        drop(owner);
+        let restarted =
+            lock_save(&path.0).expect("stopped owner must release its lock immediately");
+        drop(inherited);
+        assert!(
+            lock_save(&path.0).is_err(),
+            "closing the old copy must not unlock the new owner"
+        );
+        drop(restarted);
+        assert!(lock_save(&path.0).is_ok());
     }
 
     #[test]
