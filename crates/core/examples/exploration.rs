@@ -88,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (i, gap) in gaps
                 .iter()
                 .enumerate()
-                .filter(|(_, g)| g.as_f64().unwrap() > 750.0)
+                .filter(|(_, g)| g.as_f64().unwrap() > 456.0)
             {
                 let middle = stops[i].as_f64().unwrap() + gap.as_f64().unwrap() * 0.5;
                 let mut distance = 0.0;
@@ -112,6 +112,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     trail["to"],
                     gap.as_f64().unwrap()
                 );
+                let nearby_distance = |p: [f32; 3]| (p[0] - anchor[0]).hypot(p[2] - anchor[2]);
+                if let Some(village) = plan
+                    .villages
+                    .iter()
+                    .min_by(|a, b| nearby_distance(a.center).total_cmp(&nearby_distance(b.center)))
+                {
+                    println!(
+                        "  nearest village: {} {:.0}m",
+                        village.name,
+                        nearby_distance(village.center)
+                    );
+                }
+                if let Some(site) = plan.roadside_landmarks.iter().min_by(|a, b| {
+                    nearby_distance(a.building.entrance())
+                        .total_cmp(&nearby_distance(b.building.entrance()))
+                }) {
+                    let entry = site.building.entrance();
+                    println!(
+                        "  nearest discovery: {:?} {:.0}m, height delta {:.1}m",
+                        site.building.kind,
+                        nearby_distance(entry),
+                        entry[1] - anchor[1]
+                    );
+                }
                 for side in [-30.0, -16.0, -8.0, 0.0, 8.0, 16.0, 30.0] {
                     let sample = world
                         .geography()
