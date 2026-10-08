@@ -9,6 +9,10 @@ use rubblekin_core::{
     world::{Block, BlockPos, CELL_SIZE, World},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[path = "ecology/navigation.rs"]
+mod navigation;
 
 pub(crate) const MAX_ANIMALS: usize = 256;
 const MAX_HABITATS: usize = 64;
@@ -71,6 +75,8 @@ pub(crate) struct Ecology {
     pub deaths: u64,
     pub migrations: u64,
     pub arrivals: u64,
+    #[serde(skip)]
+    navigation: HashMap<u64, navigation::Navigation>,
 }
 impl Default for Ecology {
     fn default() -> Self {
@@ -84,6 +90,7 @@ impl Default for Ecology {
             deaths: 0,
             migrations: 0,
             arrivals: 0,
+            navigation: HashMap::new(),
         }
     }
 }
@@ -324,6 +331,15 @@ impl Ecology {
             h.forage = (h.forage + dt * 0.012 * h.fertility).min(100.);
         }
         let before = self.animals.clone();
+        // Bound expensive local searches across the entire population. Longest
+        // waiting animals go first without changing biology/RNG iteration order.
+        let mut searches: Vec<_> = self
+            .navigation
+            .iter()
+            .filter_map(|(&id, nav)| nav.search_urgency().map(|wait| (id, wait)))
+            .collect();
+        searches.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        searches.truncate(2);
         let mut attempted_hunts = Vec::new();
         let mut hunted = Vec::new();
         let mut births = Vec::new();
@@ -381,7 +397,7 @@ impl Ecology {
                     }
                 });
             let habitat = &self.habitats[a.habitat as usize];
-            let mut speed;
+            let mut speed: f32;
             let mut direction;
             if let Some(threat) = threat {
                 a.action = WildlifeAction::Fleeing;
@@ -597,40 +613,34 @@ impl Ecology {
                 direction[0] /= length;
                 direction[1] /= length;
             }
-            // Short fan probes steer around trees, small walls and water.
-            // Reject steep drops instead of deliberately jumping off cliffs.
+            // Threat avoidance stays immediate. Ordinary journeys can take a
+            // short detour when direct progress stalls; all motion remains swept.
             if speed > 0. {
-                let mut found = false;
-                for angle in [0_f32, 0.5, -0.5, 1., -1., 1.5, -1.5] {
-                    let d = [
-                        direction[0] * angle.cos() - direction[1] * angle.sin(),
-                        direction[0] * angle.sin() + direction[1] * angle.cos(),
-                    ];
-                    let p = [
-                        a.body.position[0] + d[0] * 0.9,
-                        a.body.position[1],
-                        a.body.position[2] + d[1] * 0.9,
-                    ];
-                    let ground = (world.height_at(
-                        (p[0] / CELL_SIZE).floor() as i32,
-                        (p[2] / CELL_SIZE).floor() as i32,
-                    ) + 1) as f32
-                        * CELL_SIZE;
-                    if habitable(world, p[0], p[2])
-                        && ground >= p[1] - 1.5
-                        && ground <= p[1] + 0.5
-                        && (position_is_clear(world, p, a.species)
-                            || position_is_clear(world, [p[0], p[1] + 0.5, p[2]], a.species))
-                    {
-                        direction = d;
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
+                let allowed = |p: [f32; 3]| habitable(world, p[0], p[2]);
+                let steering = if a.action == WildlifeAction::Fleeing {
+                    self.navigation.remove(&a.id);
+                    navigation::fan(world, &a.body, a.species, a.target, &allowed)
+                        .map(|d| (d, f32::MAX))
+                } else {
+                    self.navigation.entry(a.id).or_default().steer(
+                        world,
+                        &a.body,
+                        a.species,
+                        a.target,
+                        dt,
+                        searches.iter().any(|&(id, _)| id == a.id),
+                        allowed,
+                    )
+                };
+                if let Some((d, cap)) = steering {
+                    direction = d;
+                    speed = speed.min(cap);
+                } else {
                     speed = 0.;
                     a.decision = 0.;
                 }
+            } else {
+                self.navigation.remove(&a.id);
             }
             let hop = a.species == Species::Rabbit && speed > 0. && a.hop <= 0. && a.body.on_ground;
             if hop {
@@ -651,6 +661,7 @@ impl Ecology {
                     a.body = Body::new(p);
                 }
                 a.decision = 0.;
+                self.navigation.remove(&a.id);
             }
             if speed > 0. && distance(old, a.body.position) < dt * speed * 0.1 {
                 a.decision = 0.;
@@ -715,6 +726,10 @@ impl Ecology {
         self.animals
             .retain(|a| a.starving < 600. && a.age < lifetime(a.species));
         self.deaths += (count - self.animals.len()) as u64;
+        if self.animals.len() != before.len() {
+            self.navigation
+                .retain(|id, _| self.animals.iter().any(|a| a.id == *id));
+        }
         for (parent, species, habitat, center) in births {
             if self.animals.iter().any(|a| a.id == parent)
                 && self.spawn_near(world, species, habitat, center, true)

@@ -36,9 +36,19 @@ fn main() {
     let mut wolf_births = 0;
     let steps_per_hour = (3600. / dt).round() as u32;
     for hour in 0..=hours {
+        let mut tick_total_ms = 0_f64;
+        let mut tick_peak_ms = 0_f64;
+        let mut ticks_over_25ms = 0_u32;
+        let mut ticks_over_50ms = 0_u32;
         if hour > 0 {
             for _ in 0..steps_per_hour {
+                let tick_start = Instant::now();
                 ecology.tick(&world, dt, &[]);
+                let ms = tick_start.elapsed().as_secs_f64() * 1000.;
+                tick_total_ms += ms;
+                tick_peak_ms = tick_peak_ms.max(ms);
+                ticks_over_25ms += u32::from(ms > 25.);
+                ticks_over_50ms += u32::from(ms > 50.);
                 wolf_births += ecology
                     .animals
                     .iter()
@@ -134,7 +144,7 @@ fn main() {
             .len();
         println!(
             "{}",
-            serde_json::json!({"seed":seed,"hour":hour,"step_seconds":dt,"rabbits":rabbits,"wolves":wolves,"births":ecology.births,"wolf_births":wolf_births,"wolf_fed":wolf_fed,"wolf_starving":wolf_starving,"wolf_max_hunger":wolf_max_hunger,"wolves_with_mate":wolves_with_mate,"wolves_with_prey":wolves_with_prey,"wolf_details":wolf_details,"hunted":ecology.hunted,"deaths":ecology.deaths,"migrations":ecology.migrations,"arrivals":ecology.arrivals,"migrating":migrating,"stationary_migrants":stationary_migrants,"starving":starving,"forage_min":food_min,"forage_mean":food_mean,"packet_bytes":packet_bytes,"elapsed_seconds":start.elapsed().as_secs_f32()})
+            serde_json::json!({"seed":seed,"hour":hour,"step_seconds":dt,"rabbits":rabbits,"wolves":wolves,"births":ecology.births,"wolf_births":wolf_births,"wolf_fed":wolf_fed,"wolf_starving":wolf_starving,"wolf_max_hunger":wolf_max_hunger,"wolves_with_mate":wolves_with_mate,"wolves_with_prey":wolves_with_prey,"wolf_details":wolf_details,"hunted":ecology.hunted,"deaths":ecology.deaths,"migrations":ecology.migrations,"arrivals":ecology.arrivals,"migrating":migrating,"stationary_migrants":stationary_migrants,"starving":starving,"forage_min":food_min,"forage_mean":food_mean,"packet_bytes":packet_bytes,"ecology_mean_ms":tick_total_ms / steps_per_hour as f64,"ecology_peak_ms":tick_peak_ms,"ticks_over_25ms":ticks_over_25ms,"ticks_over_50ms":ticks_over_50ms,"elapsed_seconds":start.elapsed().as_secs_f32()})
         );
         previous = ecology
             .animals
