@@ -26,6 +26,9 @@ const RABBIT_LIFETIME: f32 = 24. * 3600.;
 const WOLF_LIFETIME: f32 = 72. * 3600.;
 const RABBIT_BREEDING: f32 = 2. * 3600.;
 const WOLF_BREEDING: f32 = 6. * 3600.;
+// Six rabbits' ordinary needs consume about 0.009 forage points/s, matching
+// woodland regeneration (0.012 * 0.75). Crowding and dry scrub still deplete it.
+const GRAZING_COST: f32 = 0.18;
 fn lifetime(species: Species) -> f32 {
     if species == Species::Rabbit {
         RABBIT_LIFETIME
@@ -186,10 +189,13 @@ impl Ecology {
         }
         for index in 0..out.habitats.len() {
             let center = out.habitats[index].position;
-            for _ in 0..3 {
+            let predators = index % 9 == 4;
+            for _ in 0..if predators { 6 } else { 3 } {
                 out.spawn_near(world, Species::Rabbit, index as u32, center, false);
             }
-            if index % 9 == 4 {
+            // Early hunts must leave a local prey breeding group. This is only
+            // world seeding; losses are never replaced during simulation.
+            if predators && nearby_prey(&out.animals, center, RANGE) >= 6 {
                 for _ in 0..2 {
                     out.spawn_near(world, Species::Wolf, index as u32, center, false);
                 }
@@ -614,12 +620,22 @@ impl Ecology {
                             ((a.body.position[1] + 0.01) / CELL_SIZE).floor() as i32 - 1,
                             (a.body.position[2] / CELL_SIZE).floor() as i32,
                         );
-                        if a.body.on_ground
-                            && world.block(cell) == Block::Grass
-                            && h.forage > dt * 0.45
-                        {
-                            h.forage -= dt * 0.45;
-                            a.hunger = (a.hunger - dt * 3.).max(0.);
+                        if a.body.on_ground && world.block(cell) == Block::Grass && h.forage > 0. {
+                            // Charge only nutrition actually consumed. A full
+                            // rabbit stops feeding; a nearly empty patch can
+                            // provide its remaining fraction without overdraft.
+                            let cost = (dt * GRAZING_COST)
+                                .min(a.hunger * GRAZING_COST / 3.)
+                                .min(h.forage);
+                            h.forage = (h.forage - cost).max(0.);
+                            a.hunger = (a.hunger - cost * 3. / GRAZING_COST).max(0.);
+                            if a.hunger <= 0.01 {
+                                a.action = WildlifeAction::Resting;
+                                a.decision = 0.;
+                            } else if h.forage <= 0. {
+                                a.action = WildlifeAction::Roaming;
+                                a.decision = 0.;
+                            }
                         } else {
                             a.action = WildlifeAction::Roaming;
                         }
@@ -1036,7 +1052,7 @@ mod tests {
         }
         assert!(e.animals[0].body.on_ground);
         assert!(e.animals[0].hunger < before.animals[0].hunger - 2.);
-        assert!(e.habitats[0].forage < before.habitats[0].forage - 0.4);
+        assert!(e.habitats[0].forage < before.habitats[0].forage - 0.1);
         let p = e.animals[0].body.position;
         world
             .set_block(
@@ -1059,6 +1075,63 @@ mod tests {
             1,
             "wildlife must not edit terrain or property"
         );
+    }
+    #[test]
+    fn grazing_stops_when_full_and_takes_the_last_available_fraction_without_overdraft() {
+        let (world, mut e) = fixture();
+        e.animals[0].hunger = 0.01;
+        e.animals[0].action = WildlifeAction::Grazing;
+        e.animals[0].decision = 10.;
+        let food = e.habitats[0].forage;
+        e.tick(&world, 0.05, &[]);
+        assert!(e.animals[0].hunger < 0.001);
+        assert_eq!(e.animals[0].action, WildlifeAction::Resting);
+        assert!((e.habitats[0].forage - food).abs() < 0.001);
+
+        e.animals[0].hunger = 50.;
+        e.animals[0].action = WildlifeAction::Grazing;
+        e.animals[0].decision = 10.;
+        e.habitats[0].forage = 0.001;
+        e.tick(&world, 0.05, &[]);
+        assert_eq!(e.habitats[0].forage, 0.);
+        assert!(e.animals[0].hunger < 50.);
+        assert!(e.animals[0].hunger > 49.9);
+        assert_eq!(e.animals[0].action, WildlifeAction::Roaming);
+        assert!(world.edits().is_empty());
+        assert!(e.validate(&world));
+    }
+    #[test]
+    fn a_woodland_prey_group_can_feed_for_an_hour_without_exhausting_its_range() {
+        let (world, mut e) = fixture();
+        e.habitats.truncate(1);
+        e.habitats[0].fertility = 0.75;
+        while e.animals.len() < 6 {
+            let mut a = e.animals[0].clone();
+            a.id = e.next_id;
+            e.next_id += 1;
+            e.animals.push(a);
+        }
+        for a in &mut e.animals {
+            a.hunger = 50.;
+            a.age = 3600.;
+            a.breeding = RABBIT_BREEDING;
+            a.action = WildlifeAction::Grazing;
+            a.decision = 10.;
+        }
+        for _ in 0..14400 {
+            e.tick(&world, 0.25, &[]);
+        }
+        assert_eq!(e.animals.len(), 6);
+        assert!(e.animals.iter().all(|a| a.hunger < 80.));
+        assert!(
+            e.habitats[0].forage > 40.,
+            "renewable food must support the initial prey group; remaining {}",
+            e.habitats[0].forage
+        );
+        assert_eq!(e.births, 0);
+        assert_eq!(e.deaths, 0);
+        assert!(world.edits().is_empty());
+        assert!(e.validate(&world));
     }
     #[test]
     fn both_species_flee_people_and_predation_consumes_exactly_one_actual_prey() {
@@ -1526,6 +1599,17 @@ mod tests {
         assert!(e.habitats.len() >= 40);
         assert!(e.animals.len() >= 120);
         assert!(e.validate(&world));
+        for h in e.habitats.iter().filter(|h| {
+            e.animals
+                .iter()
+                .any(|a| a.habitat == h.id && a.species == Species::Wolf)
+        }) {
+            assert!(
+                nearby_prey(&e.animals, h.position, RANGE) >= 6,
+                "predator home {} needs enough prey to retain a breeding group after early hunts",
+                h.id
+            );
+        }
         let initial = e.clone();
         let start = std::time::Instant::now();
         let mut hopped = false;
