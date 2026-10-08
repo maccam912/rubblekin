@@ -1,0 +1,5702 @@
+{
+  "source_commit": "e39692afb5b7edade492fe46dc14077a4de4bb10",
+  "notes": "Corrected contact sampling and visible grazing, before individual arrival points and the later renewable-grazing/initial-prey correction. Actual 20 Hz steps. Local scheduling overlapped other validation and ecology runs; timing is not a production-load benchmark. No sockets, external saves or population floors.",
+  "runs": [
+    {
+      "seed": 42,
+      "hours": 24,
+      "step_seconds": 0.05,
+      "samples": [
+        {
+          "arrivals": 0,
+          "births": 0,
+          "deaths": 0,
+          "ecology_mean_ms": 0.0,
+          "ecology_peak_ms": 0.0,
+          "elapsed_seconds": 0.00019550000433810055,
+          "forage_mean": 80.0,
+          "forage_min": 80.0,
+          "hour": 0,
+          "hunted": 0,
+          "migrating": 0,
+          "migrations": 0,
+          "packet_bytes": 35170,
+          "rabbits": 192,
+          "seed": 42,
+          "starving": 0,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 0,
+          "ticks_over_50ms": 0,
+          "wolf_births": 0,
+          "wolf_details": [
+            {
+              "action": "Resting",
+              "age_hours": 42.46766662597656,
+              "breeding_seconds": 20280.8984375,
+              "destination": null,
+              "habitat": 4,
+              "home_distance": 16.503742218017578,
+              "hunger": 35.03022766113281,
+              "id": 16,
+              "mate_distance": null,
+              "position": [
+                -12097.193359375,
+                142.0,
+                -1097.9510498046875
+              ],
+              "prey_distance": 15.642240524291992,
+              "target": [
+                -12097.193359375,
+                142.0,
+                -1097.9510498046875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 24.505802154541016,
+              "breeding_seconds": 7161.8046875,
+              "destination": null,
+              "habitat": 4,
+              "home_distance": 17.57600975036621,
+              "hunger": 48.746334075927734,
+              "id": 17,
+              "mate_distance": null,
+              "position": [
+                -12126.322265625,
+                147.0,
+                -1100.0928955078125
+              ],
+              "prey_distance": 1.9750231504440308,
+              "target": [
+                -12126.322265625,
+                147.0,
+                -1100.0928955078125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 11.496574401855469,
+              "breeding_seconds": 17395.486328125,
+              "destination": null,
+              "habitat": 13,
+              "home_distance": 9.483489990234375,
+              "hunger": 57.457279205322266,
+              "id": 45,
+              "mate_distance": 17.09544563293457,
+              "position": [
+                6619.013671875,
+                99.0,
+                -6509.60498046875
+              ],
+              "prey_distance": 4.360406398773193,
+              "target": [
+                6619.013671875,
+                99.0,
+                -6509.60498046875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 17.929061889648438,
+              "breeding_seconds": 14811.5615234375,
+              "destination": null,
+              "habitat": 13,
+              "home_distance": 15.94922161102295,
+              "hunger": 31.469093322753906,
+              "id": 46,
+              "mate_distance": null,
+              "position": [
+                6619.83544921875,
+                99.5,
+                -6492.529296875
+              ],
+              "prey_distance": 6.171485900878906,
+              "target": [
+                6619.83544921875,
+                99.5,
+                -6492.529296875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 15.509955406188965,
+              "breeding_seconds": 20211.212890625,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 6.027315139770508,
+              "hunger": 58.98604965209961,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                2192.613525390625,
+                264.5,
+                2639.82666015625
+              ],
+              "prey_distance": 8.788958549499512,
+              "target": [
+                2192.613525390625,
+                264.5,
+                2639.82666015625
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 22.930233001708984,
+              "breeding_seconds": 8809.6650390625,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 11.666237831115723,
+              "hunger": 51.246795654296875,
+              "id": 75,
+              "mate_distance": null,
+              "position": [
+                2178.701171875,
+                264.0,
+                2630.4833984375
+              ],
+              "prey_distance": 13.104081153869629,
+              "target": [
+                2178.701171875,
+                264.0,
+                2630.4833984375
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 36.81174850463867,
+              "breeding_seconds": 11358.97265625,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 12.015077590942383,
+              "hunger": 32.357421875,
+              "id": 103,
+              "mate_distance": null,
+              "position": [
+                4268.25732421875,
+                163.5,
+                -6336.595703125
+              ],
+              "prey_distance": 3.005361557006836,
+              "target": [
+                4268.25732421875,
+                163.5,
+                -6336.595703125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 23.87972068786621,
+              "breeding_seconds": 13508.859375,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 18.138887405395508,
+              "hunger": 45.38728332519531,
+              "id": 104,
+              "mate_distance": 26.76403045654297,
+              "position": [
+                4293.75,
+                163.5,
+                -6328.44482421875
+              ],
+              "prey_distance": 21.005216598510742,
+              "target": [
+                4293.75,
+                163.5,
+                -6328.44482421875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 19.909147262573242,
+              "breeding_seconds": 11064.0751953125,
+              "destination": null,
+              "habitat": 40,
+              "home_distance": 12.626039505004883,
+              "hunger": 37.78413391113281,
+              "id": 132,
+              "mate_distance": 6.7905049324035645,
+              "position": [
+                4350.37939453125,
+                93.5,
+                -10430.970703125
+              ],
+              "prey_distance": 5.1623969078063965,
+              "target": [
+                4350.37939453125,
+                93.5,
+                -10430.970703125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 13.318397521972656,
+              "breeding_seconds": 9321.0517578125,
+              "destination": null,
+              "habitat": 40,
+              "home_distance": 15.465353965759277,
+              "hunger": 27.881568908691406,
+              "id": 133,
+              "mate_distance": 6.7905049324035645,
+              "position": [
+                4351.34375,
+                94.0,
+                -10424.2490234375
+              ],
+              "prey_distance": 9.093585014343262,
+              "target": [
+                4351.34375,
+                94.0,
+                -10424.2490234375
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 21.58902359008789,
+              "breeding_seconds": 20087.015625,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 17.64061737060547,
+              "hunger": 46.56067657470703,
+              "id": 161,
+              "mate_distance": null,
+              "position": [
+                -6816.59326171875,
+                22.5,
+                8386.7373046875
+              ],
+              "prey_distance": 13.798165321350098,
+              "target": [
+                -6816.59326171875,
+                22.5,
+                8386.7373046875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 20.700672149658203,
+              "breeding_seconds": 12570.412109375,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 5.190732002258301,
+              "hunger": 48.340538024902344,
+              "id": 162,
+              "mate_distance": null,
+              "position": [
+                -6800.8505859375,
+                23.0,
+                8370.5751953125
+              ],
+              "prey_distance": 8.919317245483398,
+              "target": [
+                -6800.8505859375,
+                23.0,
+                8370.5751953125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 26.045663833618164,
+              "breeding_seconds": 12885.005859375,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 5.19462251663208,
+              "hunger": 42.211082458496094,
+              "id": 190,
+              "mate_distance": 7.113600730895996,
+              "position": [
+                11259.494140625,
+                92.5,
+                -5520.30322265625
+              ],
+              "prey_distance": 11.358429908752441,
+              "target": [
+                11259.494140625,
+                92.5,
+                -5520.30322265625
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 18.961360931396484,
+              "breeding_seconds": 12430.701171875,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 9.158846855163574,
+              "hunger": 26.717844009399414,
+              "id": 191,
+              "mate_distance": 8478.751953125,
+              "position": [
+                11266.017578125,
+                92.5,
+                -5517.46630859375
+              ],
+              "prey_distance": 6.458806991577148,
+              "target": [
+                11266.017578125,
+                92.5,
+                -5517.46630859375
+              ]
+            }
+          ],
+          "wolf_fed": 2,
+          "wolf_losses": [],
+          "wolf_max_hunger": 58.98604965209961,
+          "wolf_starving": 0,
+          "wolves": 14,
+          "wolves_with_mate": 4,
+          "wolves_with_prey": 14
+        },
+        {
+          "arrivals": 8,
+          "births": 46,
+          "deaths": 0,
+          "ecology_mean_ms": 0.9130275969305616,
+          "ecology_peak_ms": 76.422292,
+          "elapsed_seconds": 65.89913940429688,
+          "forage_mean": 63.369564056396484,
+          "forage_min": 35.38792037963867,
+          "hour": 1,
+          "hunted": 14,
+          "migrating": 0,
+          "migrations": 8,
+          "packet_bytes": 43890,
+          "rabbits": 224,
+          "seed": 42,
+          "starving": 0,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 52,
+          "ticks_over_50ms": 6,
+          "wolf_births": 0,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 43.40516662597656,
+              "breeding_seconds": 16624.6484375,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 12.714295387268066,
+              "hunger": 21.434690475463867,
+              "id": 16,
+              "mate_distance": 12.33535099029541,
+              "position": [
+                -11184.134765625,
+                182.49803161621094,
+                -53.3878059387207
+              ],
+              "prey_distance": 23.590587615966797,
+              "target": [
+                -11184.0126953125,
+                182.0,
+                -54.301021575927734
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 25.443302154541016,
+              "breeding_seconds": 3573.3173828125,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9394375681877136,
+              "hunger": 21.58112335205078,
+              "id": 17,
+              "mate_distance": 12.33535099029541,
+              "position": [
+                -11185.7890625,
+                184.998046875,
+                -41.16388702392578
+              ],
+              "prey_distance": 29.038362503051758,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 12.512199401855469,
+              "breeding_seconds": 13790.09765625,
+              "destination": null,
+              "habitat": 52,
+              "home_distance": 46.7359504699707,
+              "hunger": 21.575733184814453,
+              "id": 45,
+              "mate_distance": 9.837793350219727,
+              "position": [
+                7048.79443359375,
+                89.49800109863281,
+                -6586.90234375
+              ],
+              "prey_distance": 31.20879554748535,
+              "target": [
+                7049.77587890625,
+                89.0,
+                -6587.02294921875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 18.887744903564453,
+              "breeding_seconds": 11225.6240234375,
+              "destination": null,
+              "habitat": 52,
+              "home_distance": 39.78195571899414,
+              "hunger": 17.867597579956055,
+              "id": 46,
+              "mate_distance": 9.837793350219727,
+              "position": [
+                7040.38720703125,
+                89.99800109863281,
+                -6581.79345703125
+              ],
+              "prey_distance": 30.947277069091797,
+              "target": [
+                7043.65673828125,
+                90.0,
+                -6589.31298828125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 16.52558135986328,
+              "breeding_seconds": 16554.962890625,
+              "destination": null,
+              "habitat": 41,
+              "home_distance": 6.689148902893066,
+              "hunger": 21.50236701965332,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                2148.842529296875,
+                267.99798583984375,
+                2883.484130859375
+              ],
+              "prey_distance": 28.591806411743164,
+              "target": [
+                2147.54833984375,
+                268.5,
+                2923.25830078125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 23.867733001708984,
+              "breeding_seconds": 5223.7275390625,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 14.365090370178223,
+              "hunger": 19.92095184326172,
+              "id": 75,
+              "mate_distance": null,
+              "position": [
+                2014.7537841796875,
+                243.9980010986328,
+                2172.637451171875
+              ],
+              "prey_distance": 24.010528564453125,
+              "target": [
+                2042.31298828125,
+                243.5,
+                2172.61474609375
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 37.74924850463867,
+              "breeding_seconds": 7773.03515625,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 24.333106994628906,
+              "hunger": 18.610841751098633,
+              "id": 103,
+              "mate_distance": 13.483660697937012,
+              "position": [
+                4258.47705078125,
+                165.9980010986328,
+                -6351.77587890625
+              ],
+              "prey_distance": 29.694700241088867,
+              "target": [
+                4254.0439453125,
+                167.5,
+                -6363.7099609375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 24.81722068786621,
+              "breeding_seconds": 9922.921875,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 34.635498046875,
+              "hunger": 21.53680419921875,
+              "id": 104,
+              "mate_distance": 13.483660697937012,
+              "position": [
+                4255.78125,
+                167.4980010986328,
+                -6364.9873046875
+              ],
+              "prey_distance": 41.69943618774414,
+              "target": [
+                4259.1767578125,
+                166.5,
+                -6367.48388671875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 20.846647262573242,
+              "breeding_seconds": 7478.1376953125,
+              "destination": null,
+              "habitat": 44,
+              "home_distance": 7.349757671356201,
+              "hunger": 21.490388870239258,
+              "id": 132,
+              "mate_distance": 1.8336892127990723,
+              "position": [
+                5120.30615234375,
+                139.49803161621094,
+                -9579.8837890625
+              ],
+              "prey_distance": 26.924362182617188,
+              "target": [
+                5121.91650390625,
+                139.5,
+                -9579.5908203125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 14.334022521972656,
+              "breeding_seconds": 5735.1142578125,
+              "destination": null,
+              "habitat": 44,
+              "home_distance": 7.0472822189331055,
+              "hunger": 14.307408332824707,
+              "id": 133,
+              "mate_distance": 1.8336892127990723,
+              "position": [
+                5120.51904296875,
+                138.99801635742188,
+                -9578.0625
+              ],
+              "prey_distance": 25.468379974365234,
+              "target": [
+                5115.90625,
+                138.0,
+                -9573.02734375
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 22.52652359008789,
+              "breeding_seconds": 16430.765625,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 45.92632293701172,
+              "hunger": 21.461341857910156,
+              "id": 161,
+              "mate_distance": 14.31296443939209,
+              "position": [
+                -6807.8828125,
+                23.998008728027344,
+                8329.4658203125
+              ],
+              "prey_distance": 51.61540603637695,
+              "target": [
+                -6792.02392578125,
+                24.0,
+                8341.3828125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 21.638172149658203,
+              "breeding_seconds": 8984.474609375,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 41.690738677978516,
+              "hunger": 21.480806350708008,
+              "id": 162,
+              "mate_distance": 14.31296443939209,
+              "position": [
+                -6794.453125,
+                23.998003005981445,
+                8334.416015625
+              ],
+              "prey_distance": 51.491600036621094,
+              "target": [
+                -6798.0244140625,
+                24.0,
+                8330.25
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 26.983163833618164,
+              "breeding_seconds": 9299.068359375,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 37.81498718261719,
+              "hunger": 21.288856506347656,
+              "id": 190,
+              "mate_distance": 13.572429656982422,
+              "position": [
+                11261.541015625,
+                89.99800109863281,
+                -5563.0390625
+              ],
+              "prey_distance": 45.616966247558594,
+              "target": [
+                11262.130859375,
+                89.5,
+                -5562.30078125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 19.898860931396484,
+              "breeding_seconds": 8844.763671875,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 39.20075607299805,
+              "hunger": 12.89309024810791,
+              "id": 191,
+              "mate_distance": 13.572429656982422,
+              "position": [
+                11275.0634765625,
+                89.49800109863281,
+                -5561.87548828125
+              ],
+              "prey_distance": 50.123046875,
+              "target": [
+                11255.3818359375,
+                90.0,
+                -5557.125
+              ]
+            }
+          ],
+          "wolf_fed": 14,
+          "wolf_losses": [],
+          "wolf_max_hunger": 21.58112335205078,
+          "wolf_starving": 0,
+          "wolves": 14,
+          "wolves_with_mate": 12,
+          "wolves_with_prey": 14
+        },
+        {
+          "arrivals": 32,
+          "births": 58,
+          "deaths": 0,
+          "ecology_mean_ms": 0.8342500001111112,
+          "ecology_peak_ms": 59.836041,
+          "elapsed_seconds": 126.07665252685547,
+          "forage_mean": 49.60862731933594,
+          "forage_min": 0.024427128955721855,
+          "hour": 2,
+          "hunted": 25,
+          "migrating": 7,
+          "migrations": 39,
+          "packet_bytes": 44177,
+          "rabbits": 224,
+          "seed": 42,
+          "starving": 0,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 188,
+          "ticks_over_50ms": 3,
+          "wolf_births": 1,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 44.34266662597656,
+              "breeding_seconds": 13034.083984375,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 8.278791427612305,
+              "hunger": 7.525564193725586,
+              "id": 16,
+              "mate_distance": 7.370427131652832,
+              "position": [
+                -11193.1640625,
+                187.99803161621094,
+                -35.76232147216797
+              ],
+              "prey_distance": 33.5007438659668,
+              "target": [
+                -11193.7099609375,
+                188.0,
+                -34.9515266418457
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 26.380802154541016,
+              "breeding_seconds": 21570.59765625,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 1.6658258438110352,
+              "hunger": 7.760109901428223,
+              "id": 17,
+              "mate_distance": 7.370427131652832,
+              "position": [
+                -11188.3212890625,
+                185.4980010986328,
+                -41.31846618652344
+              ],
+              "prey_distance": 27.589441299438477,
+              "target": [
+                -11189.2802734375,
+                185.5,
+                -41.48243713378906
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 13.527824401855469,
+              "breeding_seconds": 10204.16015625,
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 806.8536376953125,
+              "hunger": 7.926271438598633,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                7840.2509765625,
+                83.49800872802734,
+                -6505.47900390625
+              ],
+              "prey_distance": 799.8028564453125,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 19.825244903564453,
+              "breeding_seconds": 7639.6865234375,
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 1018.8115234375,
+              "hunger": 4.1489458084106445,
+              "id": 46,
+              "mate_distance": null,
+              "position": [
+                8050.67578125,
+                74.49800872802734,
+                -6612.12060546875
+              ],
+              "prey_distance": 812.5530395507812,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 17.54120635986328,
+              "breeding_seconds": 12965.73828125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 26.0229434967041,
+              "hunger": 7.777505874633789,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                2002.708984375,
+                242.998046875,
+                2150.781982421875
+              ],
+              "prey_distance": 28.89397621154785,
+              "target": [
+                2003.13427734375,
+                242.5,
+                2146.53662109375
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 24.805233001708984,
+              "breeding_seconds": 1625.73974609375,
+              "destination": 41,
+              "habitat": 30,
+              "home_distance": 150.07237243652344,
+              "hunger": 5.80576229095459,
+              "id": 75,
+              "mate_distance": null,
+              "position": [
+                2117.542724609375,
+                249.4980010986328,
+                2271.283935546875
+              ],
+              "prey_distance": 139.67271423339844,
+              "target": [
+                2148.33251953125,
+                268.0,
+                2876.814453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 38.68674850463867,
+              "breeding_seconds": 4187.09765625,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 34.291805267333984,
+              "hunger": 40.22356033325195,
+              "id": 103,
+              "mate_distance": 11.480406761169434,
+              "position": [
+                4300.548828125,
+                160.33302307128906,
+                -6367.29541015625
+              ],
+              "prey_distance": 1331.290283203125,
+              "target": [
+                4299.45654296875,
+                158.5,
+                -6377.94189453125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 25.75472068786621,
+              "breeding_seconds": 6336.984375,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 45.24644088745117,
+              "hunger": 7.8012003898620605,
+              "id": 104,
+              "mate_distance": null,
+              "position": [
+                4310.21630859375,
+                159.4980010986328,
+                -6373.4873046875
+              ],
+              "prey_distance": 1337.1787109375,
+              "target": [
+                4302.267578125,
+                162.0,
+                -6358.10107421875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 21.784147262573242,
+              "breeding_seconds": 3891.201171875,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 28.27914047241211,
+              "hunger": 1.1469016075134277,
+              "id": 132,
+              "mate_distance": 6.008991241455078,
+              "position": [
+                4418.04736328125,
+                217.9980010986328,
+                -8282.908203125
+              ],
+              "prey_distance": 29.87200355529785,
+              "target": [
+                4402.365234375,
+                219.5,
+                -8285.583984375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 15.349647521972656,
+              "breeding_seconds": 2139.63330078125,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 27.185224533081055,
+              "hunger": 0.6722879409790039,
+              "id": 133,
+              "mate_distance": 6.008991241455078,
+              "position": [
+                4417.8251953125,
+                217.4980010986328,
+                -8288.9130859375
+              ],
+              "prey_distance": 23.9951171875,
+              "target": [
+                4420.93212890625,
+                217.5,
+                -8292.4072265625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 23.46402359008789,
+              "breeding_seconds": 12843.9296875,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 47.1866569519043,
+              "hunger": 6.861217975616455,
+              "id": 161,
+              "mate_distance": null,
+              "position": [
+                -6806.1630859375,
+                23.99800682067871,
+                8328.0625
+              ],
+              "prey_distance": 2122.8642578125,
+              "target": [
+                -6806.9794921875,
+                24.0,
+                8328.5615234375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 22.575672149658203,
+              "breeding_seconds": 5398.537109375,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 47.02498245239258,
+              "hunger": 43.1118049621582,
+              "id": 162,
+              "mate_distance": 4.289620399475098,
+              "position": [
+                -6801.87451171875,
+                23.998004913330078,
+                8328.1572265625
+              ],
+              "prey_distance": 2126.291015625,
+              "target": [
+                -6809.18115234375,
+                24.0,
+                8327.7998046875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 27.920663833618164,
+              "breeding_seconds": 5713.130859375,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 42.556575775146484,
+              "hunger": 7.582551002502441,
+              "id": 190,
+              "mate_distance": 2.7518839836120605,
+              "position": [
+                11243.0419921875,
+                90.49800109863281,
+                -5563.73681640625
+              ],
+              "prey_distance": 2547.95654296875,
+              "target": [
+                11241.076171875,
+                91.0,
+                -5557.2919921875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 20.836360931396484,
+              "breeding_seconds": 5258.826171875,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 39.9873161315918,
+              "hunger": 34.47931671142578,
+              "id": 191,
+              "mate_distance": 2.7518839836120605,
+              "position": [
+                11245.0048828125,
+                90.49800872802734,
+                -5561.80810546875
+              ],
+              "prey_distance": 2550.493896484375,
+              "target": [
+                11262.4716796875,
+                89.5,
+                -5564.19775390625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 0.008041623048484325,
+              "breeding_seconds": 21570.59765625,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 3.642824649810791,
+              "hunger": 10.173935890197754,
+              "id": 264,
+              "mate_distance": 2.1603376865386963,
+              "position": [
+                -11190.3154296875,
+                186.49801635742188,
+                -40.487525939941406
+              ],
+              "prey_distance": 28.4918270111084,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            }
+          ],
+          "wolf_fed": 12,
+          "wolf_losses": [],
+          "wolf_max_hunger": 43.1118049621582,
+          "wolf_starving": 0,
+          "wolves": 15,
+          "wolves_with_mate": 8,
+          "wolves_with_prey": 6
+        },
+        {
+          "arrivals": 61,
+          "births": 62,
+          "deaths": 4,
+          "ecology_mean_ms": 1.5621894939444523,
+          "ecology_peak_ms": 83.67279099999999,
+          "elapsed_seconds": 238.65562438964844,
+          "forage_mean": 39.049560546875,
+          "forage_min": 0.013999110087752342,
+          "hour": 3,
+          "hunted": 25,
+          "migrating": 27,
+          "migrations": 92,
+          "packet_bytes": 43737,
+          "rabbits": 224,
+          "seed": 42,
+          "starving": 0,
+          "stationary_migrants": 3,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 147,
+          "ticks_over_50ms": 1,
+          "wolf_births": 1,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 45.28016662597656,
+              "breeding_seconds": 9448.146484375,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9245035648345947,
+              "hunger": 29.112384796142578,
+              "id": 16,
+              "mate_distance": 0.21127738058567047,
+              "position": [
+                -11187.5751953125,
+                185.49803161621094,
+                -41.23348617553711
+              ],
+              "prey_distance": 35.69115447998047,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 27.318302154541016,
+              "breeding_seconds": 17914.34765625,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9935852289199829,
+              "hunger": 29.3465576171875,
+              "id": 17,
+              "mate_distance": 0.21127738058567047,
+              "position": [
+                -11187.5537109375,
+                185.4980010986328,
+                -41.443668365478516
+              ],
+              "prey_distance": 35.486270904541016,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 14.543449401855469,
+              "breeding_seconds": 6618.22265625,
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 806.8536376953125,
+              "hunger": 29.512454986572266,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                7840.2509765625,
+                83.49800872802734,
+                -6505.47900390625
+              ],
+              "prey_distance": 810.976318359375,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 20.762744903564453,
+              "breeding_seconds": 4053.541748046875,
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 1018.8115234375,
+              "hunger": 25.741134643554688,
+              "id": 46,
+              "mate_distance": null,
+              "position": [
+                8050.67578125,
+                74.49800872802734,
+                -6612.12060546875
+              ],
+              "prey_distance": 818.9835815429688,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 18.52972412109375,
+              "breeding_seconds": 9379.80078125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 15.121581077575684,
+              "hunger": 29.36392593383789,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                2015.4229736328125,
+                243.998046875,
+                2172.23876953125
+              ],
+              "prey_distance": 25.82461929321289,
+              "target": [
+                2000.9893798828125,
+                245.5,
+                2176.748046875
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 25.742733001708984,
+              "breeding_seconds": 0.0,
+              "destination": 41,
+              "habitat": 30,
+              "home_distance": 150.07237243652344,
+              "hunger": 27.39531707763672,
+              "id": 75,
+              "mate_distance": null,
+              "position": [
+                2117.542724609375,
+                249.4980010986328,
+                2271.283935546875
+              ],
+              "prey_distance": 145.86563110351562,
+              "target": [
+                2148.33251953125,
+                268.0,
+                2876.814453125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 39.62424850463867,
+              "breeding_seconds": 584.5651245117188,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 27.906845092773438,
+              "hunger": 61.92155838012695,
+              "id": 103,
+              "mate_distance": 5.138126373291016,
+              "position": [
+                4274.25927734375,
+                162.4980010986328,
+                -6367.36669921875
+              ],
+              "prey_distance": 1320.7060546875,
+              "target": [
+                4277.54931640625,
+                162.0,
+                -6358.9697265625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 26.69222068786621,
+              "breeding_seconds": 2744.453857421875,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 23.17255973815918,
+              "hunger": 29.387582778930664,
+              "id": 104,
+              "mate_distance": null,
+              "position": [
+                4273.42724609375,
+                162.9980010986328,
+                -6362.29638671875
+              ],
+              "prey_distance": 1315.68603515625,
+              "target": [
+                4273.564453125,
+                162.5,
+                -6363.2783203125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 22.721647262573242,
+              "breeding_seconds": 288.58349609375,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 37.36927032470703,
+              "hunger": 22.74420166015625,
+              "id": 132,
+              "mate_distance": 4.493380546569824,
+              "position": [
+                4436.78173828125,
+                216.9980010986328,
+                -8328.4482421875
+              ],
+              "prey_distance": 1410.61669921875,
+              "target": [
+                4436.01904296875,
+                217.0,
+                -8328.9921875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 16.365272521972656,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 38.18703842163086,
+              "hunger": 22.270465850830078,
+              "id": 133,
+              "mate_distance": 4.493380546569824,
+              "position": [
+                4441.015625,
+                216.4980010986328,
+                -8329.953125
+              ],
+              "prey_distance": 1407.267578125,
+              "target": [
+                4433.248046875,
+                217.0,
+                -8320.7509765625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 24.40152359008789,
+              "breeding_seconds": 9257.9921875,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 45.70486068725586,
+              "hunger": 28.449094772338867,
+              "id": 161,
+              "mate_distance": null,
+              "position": [
+                -6804.505859375,
+                23.998003005981445,
+                8329.47265625
+              ],
+              "prey_distance": 2129.32763671875,
+              "target": [
+                -6805.41748046875,
+                24.0,
+                8329.12109375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 23.513172149658203,
+              "breeding_seconds": 1801.40625,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 46.24494171142578,
+              "hunger": 64.79955291748047,
+              "id": 162,
+              "mate_distance": 4.599676132202148,
+              "position": [
+                -6799.9267578125,
+                23.998003005981445,
+                8329.0380859375
+              ],
+              "prey_distance": 2132.677001953125,
+              "target": [
+                -6807.57763671875,
+                24.0,
+                8329.4228515625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 28.858163833618164,
+              "breeding_seconds": 2117.542236328125,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 30.0793514251709,
+              "hunger": 29.169281005859375,
+              "id": 190,
+              "mate_distance": null,
+              "position": [
+                11240.9052734375,
+                90.99800872802734,
+                -5547.470703125
+              ],
+              "prey_distance": 2550.05126953125,
+              "target": [
+                11241.0732421875,
+                91.0,
+                -5546.54638671875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 21.773860931396484,
+              "breeding_seconds": 1661.010498046875,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 37.40605926513672,
+              "hunger": 56.17731475830078,
+              "id": 191,
+              "mate_distance": 13.79100227355957,
+              "position": [
+                11246.9892578125,
+                90.49800872802734,
+                -5559.84716796875
+              ],
+              "prey_distance": 2551.0849609375,
+              "target": [
+                11250.39453125,
+                90.0,
+                -5563.7607421875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 1.0086991786956787,
+              "breeding_seconds": 17914.34765625,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9267054796218872,
+              "hunger": 31.75309944152832,
+              "id": 264,
+              "mate_distance": 1.6029664278030396,
+              "position": [
+                -11185.951171875,
+                184.99803161621094,
+                -41.480682373046875
+              ],
+              "prey_distance": 34.93501663208008,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            }
+          ],
+          "wolf_fed": 11,
+          "wolf_losses": [],
+          "wolf_max_hunger": 64.79955291748047,
+          "wolf_starving": 0,
+          "wolves": 15,
+          "wolves_with_mate": 8,
+          "wolves_with_prey": 4
+        },
+        {
+          "arrivals": 188,
+          "births": 80,
+          "deaths": 20,
+          "ecology_mean_ms": 2.1881351315694513,
+          "ecology_peak_ms": 49.001042,
+          "elapsed_seconds": 396.3128662109375,
+          "forage_mean": 36.17348098754883,
+          "forage_min": 3.8061290979385376e-05,
+          "hour": 4,
+          "hunted": 27,
+          "migrating": 54,
+          "migrations": 262,
+          "packet_bytes": 44022,
+          "rabbits": 224,
+          "seed": 42,
+          "starving": 14,
+          "stationary_migrants": 9,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 28,
+          "ticks_over_50ms": 0,
+          "wolf_births": 1,
+          "wolf_details": [
+            {
+              "action": "Resting",
+              "age_hours": 46.21766662597656,
+              "breeding_seconds": 5862.208984375,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9750924110412598,
+              "hunger": 50.7919921875,
+              "id": 16,
+              "mate_distance": 11.160170555114746,
+              "position": [
+                -11187.4248046875,
+                185.49803161621094,
+                -41.5875129699707
+              ],
+              "prey_distance": 1412.8638916015625,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 28.255802154541016,
+              "breeding_seconds": 14298.98046875,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 7.331984043121338,
+              "hunger": 51.02765655517578,
+              "id": 17,
+              "mate_distance": null,
+              "position": [
+                -11193.01171875,
+                187.49803161621094,
+                -37.203712463378906
+              ],
+              "prey_distance": 1412.5601806640625,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 15.559074401855469,
+              "breeding_seconds": 3027.07080078125,
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 806.8536376953125,
+              "hunger": 51.194610595703125,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                7840.2509765625,
+                83.49800872802734,
+                -6505.47900390625
+              ],
+              "prey_distance": 821.4425048828125,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 21.700244903564453,
+              "breeding_seconds": 450.72613525390625,
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 1018.8115234375,
+              "hunger": 47.399269104003906,
+              "id": 46,
+              "mate_distance": null,
+              "position": [
+                8050.67578125,
+                74.49800872802734,
+                -6612.12060546875
+              ],
+              "prey_distance": 815.8287353515625,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 19.46722412109375,
+              "breeding_seconds": 5793.86328125,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 14.98831844329834,
+              "hunger": 15.769190788269043,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                2177.733154296875,
+                263.9980163574219,
+                2625.46435546875
+              ],
+              "prey_distance": 23.974355697631836,
+              "target": [
+                2214.021240234375,
+                263.5,
+                2609.232177734375
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 26.680233001708984,
+              "breeding_seconds": 0.0,
+              "destination": 41,
+              "habitat": 30,
+              "home_distance": 150.07237243652344,
+              "hunger": 49.063987731933594,
+              "id": 75,
+              "mate_distance": null,
+              "position": [
+                2117.542724609375,
+                249.4980010986328,
+                2271.283935546875
+              ],
+              "prey_distance": 150.18145751953125,
+              "target": [
+                2148.33251953125,
+                268.0,
+                2876.814453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 40.56174850463867,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 20.109743118286133,
+              "hunger": 83.37120819091797,
+              "id": 103,
+              "mate_distance": null,
+              "position": [
+                4265.54150390625,
+                164.4980010986328,
+                -6354.21484375
+              ],
+              "prey_distance": 1308.28125,
+              "target": [
+                4267.0791015625,
+                164.0,
+                -6344.5048828125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 27.62972068786621,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 16.221677780151367,
+              "hunger": 51.06894302368164,
+              "id": 104,
+              "mate_distance": null,
+              "position": [
+                4268.63720703125,
+                163.9980010986328,
+                -6351.802734375
+              ],
+              "prey_distance": 1305.7900390625,
+              "target": [
+                4278.8505859375,
+                161.5,
+                -6361.3486328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 23.659147262573242,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 38.49494552612305,
+              "hunger": 44.38324737548828,
+              "id": 132,
+              "mate_distance": null,
+              "position": [
+                4441.0859375,
+                216.4980010986328,
+                -8330.26953125
+              ],
+              "prey_distance": 1922.081787109375,
+              "target": [
+                4447.0703125,
+                216.0,
+                -8339.1328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 17.380897521972656,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 46.1144905090332,
+              "hunger": 43.906494140625,
+              "id": 133,
+              "mate_distance": null,
+              "position": [
+                4442.06982421875,
+                216.4980010986328,
+                -8337.9892578125
+              ],
+              "prey_distance": 1914.326904296875,
+              "target": [
+                4442.65234375,
+                216.5,
+                -8338.7890625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 25.33902359008789,
+              "breeding_seconds": 5672.0546875,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 41.956600189208984,
+              "hunger": 50.12447738647461,
+              "id": 161,
+              "mate_distance": null,
+              "position": [
+                -6823.4384765625,
+                23.49801254272461,
+                8338.36328125
+              ],
+              "prey_distance": 2117.026123046875,
+              "target": [
+                -6822.94287109375,
+                23.5,
+                8345.642578125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 24.450672149658203,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 41.34599685668945,
+              "hunger": 86.22289276123047,
+              "id": 162,
+              "mate_distance": null,
+              "position": [
+                -6821.5771484375,
+                23.498010635375977,
+                8338.0830078125
+              ],
+              "prey_distance": 2118.297607421875,
+              "target": [
+                -6821.64892578125,
+                23.5,
+                8339.2314453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 29.795663833618164,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 37.30768585205078,
+              "hunger": 50.84925079345703,
+              "id": 190,
+              "mate_distance": null,
+              "position": [
+                11245.1689453125,
+                90.49800872802734,
+                -5558.9365234375
+              ],
+              "prey_distance": 2547.6728515625,
+              "target": [
+                11244.6318359375,
+                90.5,
+                -5557.146484375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 22.711360931396484,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 43.99238967895508,
+              "hunger": 77.69967651367188,
+              "id": 191,
+              "mate_distance": null,
+              "position": [
+                11240.55859375,
+                90.49800109863281,
+                -5564.1005859375
+              ],
+              "prey_distance": 2541.4755859375,
+              "target": [
+                11239.87109375,
+                90.5,
+                -5564.8232421875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 2.005422592163086,
+              "breeding_seconds": 14298.98046875,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 10.936341285705566,
+              "hunger": 18.084102630615234,
+              "id": 264,
+              "mate_distance": null,
+              "position": [
+                -11177.9892578125,
+                181.49803161621094,
+                -47.547367095947266
+              ],
+              "prey_distance": 1414.5443115234375,
+              "target": [
+                -11183.2373046875,
+                184.0,
+                -41.11790084838867
+              ]
+            }
+          ],
+          "wolf_fed": 2,
+          "wolf_losses": [],
+          "wolf_max_hunger": 86.22289276123047,
+          "wolf_starving": 0,
+          "wolves": 15,
+          "wolves_with_mate": 1,
+          "wolves_with_prey": 1
+        },
+        {
+          "arrivals": 530,
+          "births": 103,
+          "deaths": 46,
+          "ecology_mean_ms": 1.9532143957222257,
+          "ecology_peak_ms": 27.6355,
+          "elapsed_seconds": 537.0238037109375,
+          "forage_mean": 35.98689270019531,
+          "forage_min": 0.0011403820244595408,
+          "hour": 5,
+          "hunted": 30,
+          "migrating": 93,
+          "migrations": 670,
+          "packet_bytes": 43136,
+          "rabbits": 219,
+          "seed": 42,
+          "starving": 25,
+          "stationary_migrants": 6,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 6,
+          "ticks_over_50ms": 0,
+          "wolf_births": 2,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 47.15516662597656,
+              "breeding_seconds": 2267.35107421875,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9321412444114685,
+              "hunger": 72.38252258300781,
+              "id": 16,
+              "mate_distance": 5.407805442810059,
+              "position": [
+                -11187.2314453125,
+                184.9980010986328,
+                -41.700958251953125
+              ],
+              "prey_distance": 1410.72216796875,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 29.193302154541016,
+              "breeding_seconds": 10713.04296875,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 4.596009731292725,
+              "hunger": 72.61520385742188,
+              "id": 17,
+              "mate_distance": 2.0113086700439453,
+              "position": [
+                -11191.0029296875,
+                185.99803161621094,
+                -42.55050277709961
+              ],
+              "prey_distance": 1407.61669921875,
+              "target": [
+                -11188.5859375,
+                185.5,
+                -41.68167495727539
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 16.57469940185547,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 24,
+              "home_distance": 24.754030227661133,
+              "hunger": 12.094907760620117,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                8848.3740234375,
+                32.49800109863281,
+                -6502.00390625
+              ],
+              "prey_distance": 29.36623764038086,
+              "target": [
+                8907.7138671875,
+                31.5,
+                -6524.26904296875
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 22.637744903564453,
+              "breeding_seconds": 0.0,
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 1018.7767333984375,
+              "hunger": 69.03274536132812,
+              "id": 46,
+              "mate_distance": null,
+              "position": [
+                8050.64453125,
+                74.49800872802734,
+                -6612.06689453125
+              ],
+              "prey_distance": 671.846435546875,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 20.40472412109375,
+              "breeding_seconds": 2198.67041015625,
+              "destination": 45,
+              "habitat": 30,
+              "home_distance": 654.236083984375,
+              "hunger": 0.33599892258644104,
+              "id": 74,
+              "mate_distance": 67.74988555908203,
+              "position": [
+                1826.143798828125,
+                207.4980010986328,
+                1546.30859375
+              ],
+              "prey_distance": 24.689775466918945,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 27.617733001708984,
+              "breeding_seconds": 18867.15625,
+              "destination": 45,
+              "habitat": 30,
+              "home_distance": 586.4993896484375,
+              "hunger": 19.730199813842773,
+              "id": 75,
+              "mate_distance": 67.74988555908203,
+              "position": [
+                1843.029296875,
+                208.998046875,
+                1611.9205322265625
+              ],
+              "prey_distance": 42.21515655517578,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 28.56722068786621,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 0.9943349957466125,
+              "hunger": 72.65596771240234,
+              "id": 104,
+              "mate_distance": null,
+              "position": [
+                4278.97314453125,
+                162.9980010986328,
+                -6340.59619140625
+              ],
+              "prey_distance": 1772.9205322265625,
+              "target": [
+                4279.77685546875,
+                163.0,
+                -6340.0107421875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 24.596647262573242,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 34.28371810913086,
+              "hunger": 66.05490112304688,
+              "id": 132,
+              "mate_distance": null,
+              "position": [
+                4420.98095703125,
+                216.9980010986328,
+                -8316.578125
+              ],
+              "prey_distance": 1778.9522705078125,
+              "target": [
+                4424.5302734375,
+                216.5,
+                -8310.111328125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 18.381746292114258,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 31.84493637084961,
+              "hunger": 65.58418273925781,
+              "id": 133,
+              "mate_distance": null,
+              "position": [
+                4421.51904296875,
+                216.9980010986328,
+                -8313.6435546875
+              ],
+              "prey_distance": 1781.7974853515625,
+              "target": [
+                4425.04638671875,
+                217.0,
+                -8316.4326171875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 26.27652359008789,
+              "breeding_seconds": 2076.2646484375,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 9.920453071594238,
+              "hunger": 71.72345733642578,
+              "id": 161,
+              "mate_distance": null,
+              "position": [
+                -6811.970703125,
+                22.998001098632812,
+                8379.94921875
+              ],
+              "prey_distance": 2149.839111328125,
+              "target": [
+                -6850.52734375,
+                21.0,
+                8383.6396484375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 30.733163833618164,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 46.93436050415039,
+              "hunger": 72.43905639648438,
+              "id": 190,
+              "mate_distance": null,
+              "position": [
+                11271.3154296875,
+                88.99800109863281,
+                -5571.046875
+              ],
+              "prey_distance": 2565.223388671875,
+              "target": [
+                11271.322265625,
+                89.0,
+                -5571.95751953125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 23.648860931396484,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 42.881324768066406,
+              "hunger": 99.12301635742188,
+              "id": 191,
+              "mate_distance": null,
+              "position": [
+                11266.2548828125,
+                89.49800872802734,
+                -5567.802734375
+              ],
+              "prey_distance": 2561.668701171875,
+              "target": [
+                11264.265625,
+                89.5,
+                -5557.59912109375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 3.001516342163086,
+              "breeding_seconds": 10713.04296875,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 5.944400310516357,
+              "hunger": 39.69346618652344,
+              "id": 264,
+              "mate_distance": null,
+              "position": [
+                -11192.62890625,
+                186.4980010986328,
+                -41.36662673950195
+              ],
+              "prey_distance": 1407.4552001953125,
+              "target": [
+                -11197.076171875,
+                188.0,
+                -41.01948165893555
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 0.7478474974632263,
+              "breeding_seconds": 18867.15625,
+              "destination": 41,
+              "habitat": 22,
+              "home_distance": 51.67497253417969,
+              "hunger": 26.134449005126953,
+              "id": 294,
+              "mate_distance": null,
+              "position": [
+                2189.075439453125,
+                265.99798583984375,
+                2686.268310546875
+              ],
+              "prey_distance": 383.8257141113281,
+              "target": [
+                2148.33251953125,
+                268.0,
+                2876.814453125
+              ]
+            }
+          ],
+          "wolf_fed": 4,
+          "wolf_losses": [
+            {
+              "action": "Roaming",
+              "age_hours": 25.20982551574707,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 43.74909210205078,
+              "hunger": 100.0,
+              "id": 162,
+              "position": [
+                -6794.775390625,
+                23.998003005981445,
+                8332.2470703125
+              ],
+              "simulation_hour": 4.809777736663818,
+              "target": [
+                -6799.6533203125,
+                24.0,
+                8342.7744140625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 41.44569396972656,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 24.004438400268555,
+              "hunger": 100.0,
+              "id": 103,
+              "position": [
+                4286.94189453125,
+                160.4980010986328,
+                -6362.9208984375
+              ],
+              "simulation_hour": 4.9428887367248535,
+              "target": [
+                4282.6103515625,
+                161.0,
+                -6361.00390625
+              ]
+            }
+          ],
+          "wolf_max_hunger": 99.12301635742188,
+          "wolf_starving": 0,
+          "wolves": 14,
+          "wolves_with_mate": 2,
+          "wolves_with_prey": 3
+        },
+        {
+          "arrivals": 859,
+          "births": 114,
+          "deaths": 81,
+          "ecology_mean_ms": 1.429361010208339,
+          "ecology_peak_ms": 44.431875000000005,
+          "elapsed_seconds": 640.0015869140625,
+          "forage_mean": 38.753726959228516,
+          "forage_min": 0.005335517227649689,
+          "hour": 6,
+          "hunted": 31,
+          "migrating": 53,
+          "migrations": 994,
+          "packet_bytes": 39151,
+          "rabbits": 194,
+          "seed": 42,
+          "starving": 32,
+          "stationary_migrants": 5,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 10,
+          "ticks_over_50ms": 0,
+          "wolf_births": 3,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 48.09266662597656,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 11.936358451843262,
+              "hunger": 93.80586242675781,
+              "id": 16,
+              "mate_distance": null,
+              "position": [
+                -11176.6396484375,
+                180.9980010986328,
+                -47.35857391357422
+              ],
+              "prey_distance": 1409.138671875,
+              "target": [
+                -11216.66015625,
+                199.5,
+                -19.2294921875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 30.130802154541016,
+              "breeding_seconds": 7127.10546875,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9309365153312683,
+              "hunger": 94.03854370117188,
+              "id": 17,
+              "mate_distance": null,
+              "position": [
+                -11187.630859375,
+                185.49803161621094,
+                -40.957542419433594
+              ],
+              "prey_distance": 1406.672607421875,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 17.59032440185547,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 24,
+              "home_distance": 9.399730682373047,
+              "hunger": 33.6786003112793,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                8869.181640625,
+                31.998064041137695,
+                -6502.02783203125
+              ],
+              "prey_distance": 30.45537757873535,
+              "target": [
+                8871.1474609375,
+                32.0,
+                -6510.94189453125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 23.575244903564453,
+              "breeding_seconds": 0.0,
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 1018.7793579101562,
+              "hunger": 90.45608520507812,
+              "id": 46,
+              "mate_distance": null,
+              "position": [
+                8050.64794921875,
+                74.49800872802734,
+                -6612.05615234375
+              ],
+              "prey_distance": 851.6755981445312,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 21.34222412109375,
+              "breeding_seconds": 20950.5078125,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 36.48127746582031,
+              "hunger": 21.934778213500977,
+              "id": 74,
+              "mate_distance": 3.650377035140991,
+              "position": [
+                396.60394287109375,
+                207.99801635742188,
+                683.9784545898438
+              ],
+              "prey_distance": 370.263916015625,
+              "target": [
+                405.6981506347656,
+                208.0,
+                679.601318359375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 28.555233001708984,
+              "breeding_seconds": 15233.4658203125,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 35.54564666748047,
+              "hunger": 5.637501239776611,
+              "id": 75,
+              "mate_distance": 3.650377035140991,
+              "position": [
+                400.1129150390625,
+                207.9980010986328,
+                684.984619140625
+              ],
+              "prey_distance": 366.6452941894531,
+              "target": [
+                404.40655517578125,
+                208.0,
+                687.9509887695312
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 29.50472068786621,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 14.746003150939941,
+              "hunger": 94.07930755615234,
+              "id": 104,
+              "mate_distance": null,
+              "position": [
+                4288.93408203125,
+                161.4980010986328,
+                -6351.56884765625
+              ],
+              "prey_distance": 1296.1405029296875,
+              "target": [
+                4279.77685546875,
+                163.0,
+                -6340.0107421875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 25.534147262573242,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 33.94822692871094,
+              "hunger": 87.47824096679688,
+              "id": 132,
+              "mate_distance": null,
+              "position": [
+                4448.62646484375,
+                216.4980010986328,
+                -8325.6943359375
+              ],
+              "prey_distance": 1766.6689453125,
+              "target": [
+                4438.24609375,
+                217.0,
+                -8330.8193359375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 19.319246292114258,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 46.71940612792969,
+              "hunger": 87.00752258300781,
+              "id": 133,
+              "mate_distance": null,
+              "position": [
+                4449.25,
+                215.4980010986328,
+                -8338.46875
+              ],
+              "prey_distance": 1753.9031982421875,
+              "target": [
+                4449.71240234375,
+                215.5,
+                -8339.2646484375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 27.21402359008789,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 13.012700080871582,
+              "hunger": 93.14679718017578,
+              "id": 161,
+              "mate_distance": null,
+              "position": [
+                -6795.38427734375,
+                23.498014450073242,
+                8364.8193359375
+              ],
+              "prey_distance": 2152.135498046875,
+              "target": [
+                -6767.037109375,
+                24.0,
+                8370.2802734375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 31.670663833618164,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 18.067405700683594,
+              "hunger": 93.86239624023438,
+              "id": 190,
+              "mate_distance": null,
+              "position": [
+                11277.8408203125,
+                91.49800109863281,
+                -5532.14892578125
+              ],
+              "prey_distance": 2575.922119140625,
+              "target": [
+                11296.9853515625,
+                90.5,
+                -5530.15234375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 3.997610092163086,
+              "breeding_seconds": 7127.10546875,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9880972504615784,
+              "hunger": 61.39146423339844,
+              "id": 264,
+              "mate_distance": null,
+              "position": [
+                -11187.4775390625,
+                185.4980010986328,
+                -40.325042724609375
+              ],
+              "prey_distance": 1407.249755859375,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 1.7458434104919434,
+              "breeding_seconds": 15233.4658203125,
+              "destination": 41,
+              "habitat": 22,
+              "home_distance": 51.67497253417969,
+              "hunger": 47.79508590698242,
+              "id": 294,
+              "mate_distance": null,
+              "position": [
+                2189.075439453125,
+                265.99798583984375,
+                2686.268310546875
+              ],
+              "prey_distance": 306.204833984375,
+              "target": [
+                2148.33251953125,
+                268.0,
+                2876.814453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 0.1776159554719925,
+              "breeding_seconds": 20950.5078125,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 36.97845458984375,
+              "hunger": 13.84221076965332,
+              "id": 320,
+              "mate_distance": 3.235898017883301,
+              "position": [
+                403.1538391113281,
+                207.99801635742188,
+                683.8783569335938
+              ],
+              "prey_distance": 364.3084716796875,
+              "target": [
+                404.06512451171875,
+                208.0,
+                684.0341796875
+              ]
+            }
+          ],
+          "wolf_fed": 3,
+          "wolf_losses": [
+            {
+              "action": "Roaming",
+              "age_hours": 23.843496322631836,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 41.798789978027344,
+              "hunger": 100.0,
+              "id": 191,
+              "position": [
+                11272.8623046875,
+                89.49800109863281,
+                -5565.35107421875
+              ],
+              "simulation_hour": 5.207624912261963,
+              "target": [
+                11273.783203125,
+                89.5,
+                -5565.29345703125
+              ]
+            }
+          ],
+          "wolf_max_hunger": 94.07930755615234,
+          "wolf_starving": 0,
+          "wolves": 14,
+          "wolves_with_mate": 2,
+          "wolves_with_prey": 1
+        },
+        {
+          "arrivals": 1115,
+          "births": 131,
+          "deaths": 104,
+          "ecology_mean_ms": 0.6479710328194529,
+          "ecology_peak_ms": 39.934667,
+          "elapsed_seconds": 686.7020874023438,
+          "forage_mean": 40.59150314331055,
+          "forage_min": 0.003877568058669567,
+          "hour": 7,
+          "hunted": 34,
+          "migrating": 44,
+          "migrations": 1258,
+          "packet_bytes": 37826,
+          "rabbits": 193,
+          "seed": 42,
+          "starving": 30,
+          "stationary_migrants": 1,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 9,
+          "ticks_over_50ms": 0,
+          "wolf_births": 3,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 18.57506561279297,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 24,
+              "home_distance": 10.423898696899414,
+              "hunger": 19.59514617919922,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                8863.2919921875,
+                32.49800109863281,
+                -6499.455078125
+              ],
+              "prey_distance": 1971.9224853515625,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 22.27972412109375,
+              "breeding_seconds": 17294.2578125,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 29.003639221191406,
+              "hunger": 7.893279075622559,
+              "id": 74,
+              "mate_distance": 10.182936668395996,
+              "position": [
+                1684.0770263671875,
+                206.4980010986328,
+                1049.8226318359375
+              ],
+              "prey_distance": 24.183879852294922,
+              "target": [
+                1689.941162109375,
+                206.5,
+                1052.8822021484375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 29.492733001708984,
+              "breeding_seconds": 11647.5283203125,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 32.93947982788086,
+              "hunger": 27.227323532104492,
+              "id": 75,
+              "mate_distance": 10.182936668395996,
+              "position": [
+                1692.5107421875,
+                206.49801635742188,
+                1044.1160888671875
+              ],
+              "prey_distance": 31.41189193725586,
+              "target": [
+                1698.051513671875,
+                206.0,
+                1039.2325439453125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 5.002382278442383,
+              "breeding_seconds": 3538.447998046875,
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 14.862137794494629,
+              "hunger": 82.84782409667969,
+              "id": 264,
+              "mate_distance": null,
+              "position": [
+                -11199.759765625,
+                187.4980010986328,
+                -48.02943801879883
+              ],
+              "prey_distance": 1397.1817626953125,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 2.7419371604919434,
+              "breeding_seconds": 11647.5283203125,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 40.0941276550293,
+              "hunger": 20.500394821166992,
+              "id": 294,
+              "mate_distance": 16.55621910095215,
+              "position": [
+                1708.4215087890625,
+                205.998046875,
+                1039.538330078125
+              ],
+              "prey_distance": 42.95442199707031,
+              "target": [
+                1693.2457275390625,
+                206.5,
+                1049.3756103515625
+              ]
+            },
+            {
+              "action": "Hunting",
+              "age_hours": 1.1782636642456055,
+              "breeding_seconds": 17294.2578125,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 314.0035095214844,
+              "hunger": 35.43144607543945,
+              "id": 320,
+              "mate_distance": 329.4158935546875,
+              "position": [
+                1493.37109375,
+                205.9980010986328,
+                1318.4228515625
+              ],
+              "prey_distance": 1.031563639640808,
+              "target": [
+                1492.8531494140625,
+                205.4980010986328,
+                1319.0345458984375
+              ]
+            }
+          ],
+          "wolf_fed": 4,
+          "wolf_losses": [
+            {
+              "action": "Roaming",
+              "age_hours": 29.920072555541992,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 31,
+              "home_distance": 0.9602550864219666,
+              "hunger": 100.0,
+              "id": 104,
+              "position": [
+                4279.30517578125,
+                162.99803161621094,
+                -6340.84716796875
+              ],
+              "simulation_hour": 6.443055629730225,
+              "target": [
+                4279.77685546875,
+                163.0,
+                -6340.0107421875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 30.54793930053711,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9467065930366516,
+              "hunger": 100.0,
+              "id": 17,
+              "position": [
+                -11186.203125,
+                184.9980010986328,
+                -41.7407341003418
+              ],
+              "simulation_hour": 6.444958209991455,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 32.09550857543945,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 58,
+              "home_distance": 9.786697387695312,
+              "hunger": 100.0,
+              "id": 190,
+              "position": [
+                11253.5634765625,
+                91.49800872802734,
+                -5531.40576171875
+              ],
+              "simulation_hour": 6.45318078994751,
+              "target": [
+                11251.2548828125,
+                93.5,
+                -5490.4072265625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 48.519981384277344,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 0.9307757616043091,
+              "hunger": 100.0,
+              "id": 16,
+              "position": [
+                -11185.916015625,
+                184.99803161621094,
+                -41.436424255371094
+              ],
+              "simulation_hour": 6.455819606781006,
+              "target": [
+                -11186.7001953125,
+                185.0,
+                -40.935020446777344
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 27.670183181762695,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 49,
+              "home_distance": 7.461769104003906,
+              "hunger": 100.0,
+              "id": 161,
+              "position": [
+                -6796.53369140625,
+                22.998004913330078,
+                8378.3447265625
+              ],
+              "simulation_hour": 6.486583232879639,
+              "target": [
+                -6799.791015625,
+                23.0,
+                8363.0185546875
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 24.149150848388672,
+              "cause": "starvation",
+              "destination": 24,
+              "habitat": 52,
+              "home_distance": 1018.7793579101562,
+              "hunger": 100.0,
+              "id": 46,
+              "position": [
+                8050.64794921875,
+                74.49800872802734,
+                -6612.05615234375
+              ],
+              "simulation_hour": 6.612180709838867,
+              "target": [
+                8871.3896484375,
+                33.0,
+                -6492.89111328125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 26.238365173339844,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 45.44808578491211,
+              "hunger": 100.0,
+              "id": 132,
+              "position": [
+                4459.34716796875,
+                214.9980010986328,
+                -8335.0283203125
+              ],
+              "simulation_hour": 6.751180648803711,
+              "target": [
+                4455.3720703125,
+                216.0,
+                -8329.095703125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 20.044065475463867,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 57,
+              "home_distance": 7.0341596603393555,
+              "hunger": 100.0,
+              "id": 133,
+              "position": [
+                4449.76123046875,
+                215.9980010986328,
+                -8286.9326171875
+              ],
+              "simulation_hour": 6.773152828216553,
+              "target": [
+                4481.06494140625,
+                217.0,
+                -8323.44921875
+              ]
+            }
+          ],
+          "wolf_max_hunger": 82.84782409667969,
+          "wolf_starving": 0,
+          "wolves": 6,
+          "wolves_with_mate": 3,
+          "wolves_with_prey": 4
+        },
+        {
+          "arrivals": 1422,
+          "births": 138,
+          "deaths": 119,
+          "ecology_mean_ms": 0.8390449379166769,
+          "ecology_peak_ms": 33.010083,
+          "elapsed_seconds": 747.1837768554688,
+          "forage_mean": 43.188777923583984,
+          "forage_min": 0.009137678891420364,
+          "hour": 8,
+          "hunted": 37,
+          "migrating": 37,
+          "migrations": 1572,
+          "packet_bytes": 35922,
+          "rabbits": 183,
+          "seed": 42,
+          "starving": 47,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 4,
+          "ticks_over_50ms": 0,
+          "wolf_births": 3,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 19.51256561279297,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 24,
+              "home_distance": 23.90818977355957,
+              "hunger": 41.214134216308594,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                8872.552734375,
+                31.498004913330078,
+                -6516.77099609375
+              ],
+              "prey_distance": 1840.0924072265625,
+              "target": [
+                8914.974609375,
+                32.0,
+                -6510.89013671875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 23.21722412109375,
+              "breeding_seconds": 13690.8154296875,
+              "destination": null,
+              "habitat": 41,
+              "home_distance": 18.152748107910156,
+              "hunger": 29.479515075683594,
+              "id": 74,
+              "mate_distance": 3.3036577701568604,
+              "position": [
+                2137.884033203125,
+                267.4980163574219,
+                2861.97021484375
+              ],
+              "prey_distance": 24.94593620300293,
+              "target": [
+                2127.1279296875,
+                267.5,
+                2857.081787109375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 30.430233001708984,
+              "breeding_seconds": 8061.5908203125,
+              "destination": null,
+              "habitat": 41,
+              "home_distance": 21.3353214263916,
+              "hunger": 13.53355884552002,
+              "id": 75,
+              "mate_distance": 3.3036577701568604,
+              "position": [
+                2136.85009765625,
+                266.99798583984375,
+                2858.83251953125
+              ],
+              "prey_distance": 26.106403350830078,
+              "target": [
+                2132.4736328125,
+                267.0,
+                2852.03662109375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 3.7380309104919434,
+              "breeding_seconds": 8061.5908203125,
+              "destination": null,
+              "habitat": 41,
+              "home_distance": 30.87783432006836,
+              "hunger": 6.798232555389404,
+              "id": 294,
+              "mate_distance": 9.875283241271973,
+              "position": [
+                2129.2216796875,
+                266.99798583984375,
+                2852.561279296875
+              ],
+              "prey_distance": 23.999629974365234,
+              "target": [
+                2128.060791015625,
+                267.5,
+                2857.37109375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 2.1743574142456055,
+              "breeding_seconds": 13690.8154296875,
+              "destination": null,
+              "habitat": 41,
+              "home_distance": 23.654714584350586,
+              "hunger": 21.53680419921875,
+              "id": 320,
+              "mate_distance": 9.13705825805664,
+              "position": [
+                2144.27685546875,
+                266.9980163574219,
+                2853.510009765625
+              ],
+              "prey_distance": 28.043169021606445,
+              "target": [
+                2128.683837890625,
+                267.0,
+                2853.2373046875
+              ]
+            }
+          ],
+          "wolf_fed": 4,
+          "wolf_losses": [
+            {
+              "action": "Roaming",
+              "age_hours": 5.984801769256592,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 37,
+              "home_distance": 1.6843730211257935,
+              "hunger": 100.0,
+              "id": 264,
+              "position": [
+                -11187.251953125,
+                185.4980010986328,
+                -39.34358215332031
+              ],
+              "simulation_hour": 7.967319488525391,
+              "target": [
+                -11199.162109375,
+                192.5,
+                -19.593748092651367
+              ]
+            }
+          ],
+          "wolf_max_hunger": 41.214134216308594,
+          "wolf_starving": 0,
+          "wolves": 5,
+          "wolves_with_mate": 4,
+          "wolves_with_prey": 4
+        },
+        {
+          "arrivals": 1645,
+          "births": 150,
+          "deaths": 140,
+          "ecology_mean_ms": 0.9586264202361081,
+          "ecology_peak_ms": 29.429958,
+          "elapsed_seconds": 816.25048828125,
+          "forage_mean": 45.43742370605469,
+          "forage_min": 0.0054075815714895725,
+          "hour": 9,
+          "hunted": 39,
+          "migrating": 50,
+          "migrations": 1831,
+          "packet_bytes": 34184,
+          "rabbits": 172,
+          "seed": 42,
+          "starving": 38,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 13,
+          "ticks_over_50ms": 0,
+          "wolf_births": 3,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 20.45006561279297,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 24,
+              "home_distance": 25.501651763916016,
+              "hunger": 62.912132263183594,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                8846.9443359375,
+                32.49801254272461,
+                -6500.15478515625
+              ],
+              "prey_distance": 1955.2681884765625,
+              "target": [
+                8846.033203125,
+                32.5,
+                -6500.53173828125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 24.15472412109375,
+              "breeding_seconds": 10104.8779296875,
+              "destination": 45,
+              "habitat": 30,
+              "home_distance": 399.8282470703125,
+              "hunger": 11.750640869140625,
+              "id": 74,
+              "mate_distance": 2188.802490234375,
+              "position": [
+                1923.5113525390625,
+                221.4980010986328,
+                1784.4984130859375
+              ],
+              "prey_distance": 7.59647798538208,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Hunting",
+              "age_hours": 31.367733001708984,
+              "breeding_seconds": 4475.6533203125,
+              "destination": 21,
+              "habitat": 61,
+              "home_distance": 1116.3045654296875,
+              "hunger": 35.12181854248047,
+              "id": 75,
+              "mate_distance": 2188.802490234375,
+              "position": [
+                1017.468505859375,
+                222.9980010986328,
+                -207.97311401367188
+              ],
+              "prey_distance": 9.776905059814453,
+              "target": [
+                1013.552001953125,
+                222.4980010986328,
+                -216.67971801757812
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 4.73771333694458,
+              "breeding_seconds": 4475.6533203125,
+              "destination": 21,
+              "habitat": 61,
+              "home_distance": 1124.7391357421875,
+              "hunger": 28.38620948791504,
+              "id": 294,
+              "mate_distance": 6.7350993156433105,
+              "position": [
+                1101.965576171875,
+                208.998046875,
+                -156.4681396484375
+              ],
+              "prey_distance": 27.687496185302734,
+              "target": [
+                1422.7117919921875,
+                206.0,
+                -561.62255859375
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 3.1704511642456055,
+              "breeding_seconds": 10104.8779296875,
+              "destination": 21,
+              "habitat": 61,
+              "home_distance": 1120.6876220703125,
+              "hunger": 6.952996730804443,
+              "id": 320,
+              "mate_distance": 6.7350993156433105,
+              "position": [
+                1095.2332763671875,
+                209.49801635742188,
+                -156.6623077392578
+              ],
+              "prey_distance": 27.70477867126465,
+              "target": [
+                1422.7117919921875,
+                206.0,
+                -561.62255859375
+              ]
+            }
+          ],
+          "wolf_fed": 3,
+          "wolf_losses": [],
+          "wolf_max_hunger": 62.912132263183594,
+          "wolf_starving": 0,
+          "wolves": 5,
+          "wolves_with_mate": 2,
+          "wolves_with_prey": 4
+        },
+        {
+          "arrivals": 1782,
+          "births": 161,
+          "deaths": 167,
+          "ecology_mean_ms": 0.8331356275277836,
+          "ecology_peak_ms": 29.152791,
+          "elapsed_seconds": 876.2677612304688,
+          "forage_mean": 48.234230041503906,
+          "forage_min": 0.0039271521382033825,
+          "hour": 10,
+          "hunted": 41,
+          "migrating": 17,
+          "migrations": 1956,
+          "packet_bytes": 31465,
+          "rabbits": 154,
+          "seed": 42,
+          "starving": 39,
+          "stationary_migrants": 1,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 8,
+          "ticks_over_50ms": 0,
+          "wolf_births": 3,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 21.38756561279297,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 24,
+              "home_distance": 7.772712707519531,
+              "hunger": 84.3492431640625,
+              "id": 45,
+              "mate_distance": null,
+              "position": [
+                8875.70703125,
+                32.49801254272461,
+                -6499.3544921875
+              ],
+              "prey_distance": 2227.281982421875,
+              "target": [
+                8876.2255859375,
+                32.5,
+                -6500.20751953125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 25.09222412109375,
+              "breeding_seconds": 6518.9404296875,
+              "destination": 45,
+              "habitat": 30,
+              "home_distance": 399.8282470703125,
+              "hunger": 33.3332405090332,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                1923.5113525390625,
+                221.4980010986328,
+                1784.4984130859375
+              ],
+              "prey_distance": 646.9178466796875,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 32.305233001708984,
+              "breeding_seconds": 874.1815185546875,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 46.164466857910156,
+              "hunger": 21.266098022460938,
+              "id": 75,
+              "mate_distance": 8.682140350341797,
+              "position": [
+                373.7310485839844,
+                206.9980010986328,
+                680.9594116210938
+              ],
+              "prey_distance": 35.89604949951172,
+              "target": [
+                373.2185363769531,
+                207.0,
+                680.1640625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 5.75333833694458,
+              "breeding_seconds": 874.1815185546875,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 41.47695541381836,
+              "hunger": 14.269256591796875,
+              "id": 294,
+              "mate_distance": 8.682140350341797,
+              "position": [
+                370.5552062988281,
+                206.9980010986328,
+                689.0398559570312
+              ],
+              "prey_distance": 32.335296630859375,
+              "target": [
+                380.1628723144531,
+                207.0,
+                677.5097045898438
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 4.1665449142456055,
+              "breeding_seconds": 6518.9404296875,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 36.96007537841797,
+              "hunger": 28.540727615356445,
+              "id": 320,
+              "mate_distance": 11.727566719055176,
+              "position": [
+                384.3365173339844,
+                206.99801635742188,
+                685.9653930664062
+              ],
+              "prey_distance": 25.984872817993164,
+              "target": [
+                393.38958740234375,
+                207.5,
+                684.4807739257812
+              ]
+            }
+          ],
+          "wolf_fed": 3,
+          "wolf_losses": [],
+          "wolf_max_hunger": 84.3492431640625,
+          "wolf_starving": 0,
+          "wolves": 5,
+          "wolves_with_mate": 3,
+          "wolves_with_prey": 3
+        },
+        {
+          "arrivals": 1905,
+          "births": 174,
+          "deaths": 185,
+          "ecology_mean_ms": 0.5910629585138929,
+          "ecology_peak_ms": 30.012542,
+          "elapsed_seconds": 918.8530883789062,
+          "forage_mean": 48.9730224609375,
+          "forage_min": 0.004966823384165764,
+          "hour": 11,
+          "hunted": 44,
+          "migrating": 30,
+          "migrations": 2100,
+          "packet_bytes": 30078,
+          "rabbits": 146,
+          "seed": 42,
+          "starving": 31,
+          "stationary_migrants": 3,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 4,
+          "ticks_over_50ms": 0,
+          "wolf_births": 4,
+          "wolf_details": [
+            {
+              "action": "Migrating",
+              "age_hours": 26.02972412109375,
+              "breeding_seconds": 2927.3017578125,
+              "destination": 45,
+              "habitat": 30,
+              "home_distance": 399.8282470703125,
+              "hunger": 55.0312385559082,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                1923.5113525390625,
+                221.4980010986328,
+                1784.4984130859375
+              ],
+              "prey_distance": 413.7782287597656,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 33.242733001708984,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 16.969228744506836,
+              "hunger": 7.514466762542725,
+              "id": 75,
+              "mate_distance": null,
+              "position": [
+                2016.58203125,
+                243.99801635742188,
+                2170.052978515625
+              ],
+              "prey_distance": 34.50345230102539,
+              "target": [
+                2047.14501953125,
+                244.5,
+                2189.926025390625
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 6.76896333694458,
+              "breeding_seconds": 19584.390625,
+              "destination": 30,
+              "habitat": 45,
+              "home_distance": 427.2525634765625,
+              "hunger": 0.41789624094963074,
+              "id": 294,
+              "mate_distance": 455.9111328125,
+              "position": [
+                1661.8468017578125,
+                208.9980010986328,
+                1503.0419921875
+              ],
+              "prey_distance": 407.8804626464844,
+              "target": [
+                2000.9893798828125,
+                245.5,
+                2176.748046875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 5.174629211425781,
+              "breeding_seconds": 2927.3017578125,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 36.744972229003906,
+              "hunger": 11.864194869995117,
+              "id": 320,
+              "mate_distance": 8.361343383789062,
+              "position": [
+                1695.0516357421875,
+                205.9980010986328,
+                1040.2794189453125
+              ],
+              "prey_distance": 32.676025390625,
+              "target": [
+                1693.20751953125,
+                206.5,
+                1049.419677734375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 0.5514892935752869,
+              "breeding_seconds": 19584.390625,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 28.937129974365234,
+              "hunger": 21.904964447021484,
+              "id": 377,
+              "mate_distance": 8.361343383789062,
+              "position": [
+                1692.2099609375,
+                206.49801635742188,
+                1048.14306640625
+              ],
+              "prey_distance": 27.86076545715332,
+              "target": [
+                1686.67236328125,
+                206.5,
+                1041.0499267578125
+              ]
+            }
+          ],
+          "wolf_fed": 4,
+          "wolf_losses": [
+            {
+              "action": "Roaming",
+              "age_hours": 22.228710174560547,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 24,
+              "home_distance": 25.195833206176758,
+              "hunger": 100.0,
+              "id": 45,
+              "position": [
+                8846.2431640625,
+                32.99800491333008,
+                -6491.31494140625
+              ],
+              "simulation_hour": 10.897235870361328,
+              "target": [
+                8845.4775390625,
+                33.0,
+                -6491.8076171875
+              ]
+            }
+          ],
+          "wolf_max_hunger": 55.0312385559082,
+          "wolf_starving": 0,
+          "wolves": 5,
+          "wolves_with_mate": 2,
+          "wolves_with_prey": 3
+        },
+        {
+          "arrivals": 2102,
+          "births": 191,
+          "deaths": 199,
+          "ecology_mean_ms": 0.7409124810694497,
+          "ecology_peak_ms": 29.148125,
+          "elapsed_seconds": 972.2296142578125,
+          "forage_mean": 50.75299835205078,
+          "forage_min": 0.005047316197305918,
+          "hour": 12,
+          "hunted": 45,
+          "migrating": 17,
+          "migrations": 2291,
+          "packet_bytes": 30461,
+          "rabbits": 147,
+          "seed": 42,
+          "starving": 26,
+          "stationary_migrants": 2,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 14,
+          "ticks_over_50ms": 0,
+          "wolf_births": 5,
+          "wolf_details": [
+            {
+              "action": "Migrating",
+              "age_hours": 26.96722412109375,
+              "breeding_seconds": 0.0,
+              "destination": 45,
+              "habitat": 30,
+              "home_distance": 399.8282470703125,
+              "hunger": 76.56810760498047,
+              "id": 74,
+              "mate_distance": 0.01209543738514185,
+              "position": [
+                1923.5113525390625,
+                221.4980010986328,
+                1784.4984130859375
+              ],
+              "prey_distance": 653.244384765625,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 34.180233001708984,
+              "breeding_seconds": 21028.15234375,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 42.967491149902344,
+              "hunger": 29.10130500793457,
+              "id": 75,
+              "mate_distance": 6.647110462188721,
+              "position": [
+                1654.9635009765625,
+                205.99801635742188,
+                1059.4320068359375
+              ],
+              "prey_distance": 47.62839889526367,
+              "target": [
+                1658.383544921875,
+                206.0,
+                1064.0223388671875
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 7.78458833694458,
+              "breeding_seconds": 15936.9072265625,
+              "destination": 45,
+              "habitat": 22,
+              "home_distance": 890.7796630859375,
+              "hunger": 22.016529083251953,
+              "id": 294,
+              "mate_distance": null,
+              "position": [
+                1923.520263671875,
+                221.498046875,
+                1784.490234375
+              ],
+              "prey_distance": 653.2455444335938,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 6.190254211425781,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 36.995609283447266,
+              "hunger": 33.4471549987793,
+              "id": 320,
+              "mate_distance": 6.647110462188721,
+              "position": [
+                1661.610595703125,
+                206.4980010986328,
+                1059.4464111328125
+              ],
+              "prey_distance": 41.14247512817383,
+              "target": [
+                1660.9254150390625,
+                206.5,
+                1060.1427001953125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 1.5504429340362549,
+              "breeding_seconds": 15936.9072265625,
+              "destination": null,
+              "habitat": 41,
+              "home_distance": 22.292667388916016,
+              "hunger": 8.02889347076416,
+              "id": 377,
+              "mate_distance": null,
+              "position": [
+                2163.95751953125,
+                267.9980163574219,
+                2860.9140625
+              ],
+              "prey_distance": 39.4808464050293,
+              "target": [
+                2159.265625,
+                267.5,
+                2830.076171875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 0.15638501942157745,
+              "breeding_seconds": 21028.15234375,
+              "destination": null,
+              "habitat": 45,
+              "home_distance": 34.02594757080078,
+              "hunger": 13.382887840270996,
+              "id": 396,
+              "mate_distance": 9.029034614562988,
+              "position": [
+                1668.9437255859375,
+                206.49801635742188,
+                1054.1787109375
+              ],
+              "prey_distance": 35.93156433105469,
+              "target": [
+                1668.6220703125,
+                206.5,
+                1053.3157958984375
+              ]
+            }
+          ],
+          "wolf_fed": 4,
+          "wolf_losses": [],
+          "wolf_max_hunger": 76.56810760498047,
+          "wolf_starving": 0,
+          "wolves": 6,
+          "wolves_with_mate": 3,
+          "wolves_with_prey": 4
+        },
+        {
+          "arrivals": 2273,
+          "births": 204,
+          "deaths": 213,
+          "ecology_mean_ms": 0.7320623398611109,
+          "ecology_peak_ms": 42.062292,
+          "elapsed_seconds": 1024.9747314453125,
+          "forage_mean": 52.79056167602539,
+          "forage_min": 0.004989313427358866,
+          "hour": 13,
+          "hunted": 48,
+          "migrating": 41,
+          "migrations": 2494,
+          "packet_bytes": 30015,
+          "rabbits": 142,
+          "seed": 42,
+          "starving": 12,
+          "stationary_migrants": 2,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 17,
+          "ticks_over_50ms": 0,
+          "wolf_births": 6,
+          "wolf_details": [
+            {
+              "action": "Migrating",
+              "age_hours": 27.90472412109375,
+              "breeding_seconds": 0.0,
+              "destination": 61,
+              "habitat": 45,
+              "home_distance": 1210.691162109375,
+              "hunger": 33.06909942626953,
+              "id": 74,
+              "mate_distance": 4.395360946655273,
+              "position": [
+                528.9502563476562,
+                212.99801635742188,
+                748.3225708007812
+              ],
+              "prey_distance": 189.28451538085938,
+              "target": [
+                397.64892578125,
+                207.0,
+                720.4447631835938
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 35.117733001708984,
+              "breeding_seconds": 17371.90234375,
+              "destination": 61,
+              "habitat": 45,
+              "home_distance": 1234.0772705078125,
+              "hunger": 15.388875007629395,
+              "id": 75,
+              "mate_distance": 0.6040366888046265,
+              "position": [
+                506.0279235839844,
+                207.99801635742188,
+                743.4465942382812
+              ],
+              "prey_distance": 186.45913696289062,
+              "target": [
+                397.64892578125,
+                207.0,
+                720.4447631835938
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 8.800212860107422,
+              "breeding_seconds": 12350.9697265625,
+              "destination": 45,
+              "habitat": 22,
+              "home_distance": 890.7796630859375,
+              "hunger": 43.65093994140625,
+              "id": 294,
+              "mate_distance": null,
+              "position": [
+                1923.520263671875,
+                221.498046875,
+                1784.490234375
+              ],
+              "prey_distance": 192.92051696777344,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 7.205879211425781,
+              "breeding_seconds": 19184.48828125,
+              "destination": 61,
+              "habitat": 45,
+              "home_distance": 1245.1507568359375,
+              "hunger": 19.72211456298828,
+              "id": 320,
+              "mate_distance": 8.288924217224121,
+              "position": [
+                495.1731872558594,
+                207.498046875,
+                741.1431884765625
+              ],
+              "prey_distance": 186.14389038085938,
+              "target": [
+                397.64892578125,
+                207.0,
+                720.4447631835938
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 2.546536684036255,
+              "breeding_seconds": 12350.9697265625,
+              "destination": 61,
+              "habitat": 45,
+              "home_distance": 1233.4744873046875,
+              "hunger": 29.6148681640625,
+              "id": 377,
+              "mate_distance": 0.6040366888046265,
+              "position": [
+                506.6189880371094,
+                207.99801635742188,
+                743.5711059570312
+              ],
+              "prey_distance": 186.4943389892578,
+              "target": [
+                397.64892578125,
+                207.0,
+                720.4447631835938
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 1.1571104526519775,
+              "breeding_seconds": 17371.90234375,
+              "destination": 61,
+              "habitat": 45,
+              "home_distance": 1215.0770263671875,
+              "hunger": 34.970664978027344,
+              "id": 396,
+              "mate_distance": 4.395360946655273,
+              "position": [
+                524.6507568359375,
+                211.99801635742188,
+                747.4096069335938
+              ],
+              "prey_distance": 188.53758239746094,
+              "target": [
+                397.64892578125,
+                207.0,
+                720.4447631835938
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 0.6609710454940796,
+              "breeding_seconds": 19184.48828125,
+              "destination": 61,
+              "habitat": 45,
+              "home_distance": 1236.87890625,
+              "hunger": 24.26316261291504,
+              "id": 406,
+              "mate_distance": 2.8075156211853027,
+              "position": [
+                503.28131103515625,
+                207.49801635742188,
+                742.864990234375
+              ],
+              "prey_distance": 186.3181915283203,
+              "target": [
+                397.64892578125,
+                207.0,
+                720.4447631835938
+              ]
+            }
+          ],
+          "wolf_fed": 4,
+          "wolf_losses": [],
+          "wolf_max_hunger": 43.65093994140625,
+          "wolf_starving": 0,
+          "wolves": 7,
+          "wolves_with_mate": 6,
+          "wolves_with_prey": 0
+        },
+        {
+          "arrivals": 2474,
+          "births": 222,
+          "deaths": 224,
+          "ecology_mean_ms": 0.5838466164722121,
+          "ecology_peak_ms": 51.752209,
+          "elapsed_seconds": 1067.0609130859375,
+          "forage_mean": 52.62442398071289,
+          "forage_min": 0.0020581188146024942,
+          "hour": 14,
+          "hunted": 54,
+          "migrating": 30,
+          "migrations": 2697,
+          "packet_bytes": 29881,
+          "rabbits": 142,
+          "seed": 42,
+          "starving": 14,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 4,
+          "ticks_over_50ms": 1,
+          "wolf_births": 7,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 28.84222412109375,
+              "breeding_seconds": 19953.875,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 45.21639633178711,
+              "hunger": 19.430147171020508,
+              "id": 74,
+              "mate_distance": 3.933009624481201,
+              "position": [
+                411.21295166015625,
+                208.4980010986328,
+                677.310791015625
+              ],
+              "prey_distance": 189.99961853027344,
+              "target": [
+                413.4460754394531,
+                208.0,
+                678.460693359375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 36.055233001708984,
+              "breeding_seconds": 13766.966796875,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 45.84236145019531,
+              "hunger": 36.98302459716797,
+              "id": 75,
+              "mate_distance": 5.938992500305176,
+              "position": [
+                384.84490966796875,
+                206.99801635742188,
+                676.4268188476562
+              ],
+              "prey_distance": 212.91725158691406,
+              "target": [
+                385.2118835449219,
+                207.0,
+                675.576416015625
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 9.815837860107422,
+              "breeding_seconds": 8765.0322265625,
+              "destination": 30,
+              "habitat": 45,
+              "home_distance": 972.214111328125,
+              "hunger": 5.075131416320801,
+              "id": 294,
+              "mate_distance": null,
+              "position": [
+                1955.947509765625,
+                234.4980010986328,
+                2013.3216552734375
+              ],
+              "prey_distance": 36.683746337890625,
+              "target": [
+                2000.9893798828125,
+                245.5,
+                2176.748046875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 8.221504211425781,
+              "breeding_seconds": 15544.6953125,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 46.86146545410156,
+              "hunger": 6.025911331176758,
+              "id": 320,
+              "mate_distance": 5.938992500305176,
+              "position": [
+                378.9957275390625,
+                206.9980010986328,
+                677.4557495117188
+              ],
+              "prey_distance": 217.5142822265625,
+              "target": [
+                378.1641845703125,
+                207.0,
+                677.9754638671875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 3.542630434036255,
+              "breeding_seconds": 8765.0322265625,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 37.55942916870117,
+              "hunger": 12.193441390991211,
+              "id": 377,
+              "mate_distance": 6.088841438293457,
+              "position": [
+                403.393310546875,
+                207.9980010986328,
+                683.3272094726562
+              ],
+              "prey_distance": 193.41976928710938,
+              "target": [
+                402.6472473144531,
+                208.0,
+                683.869873046875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 2.1532042026519775,
+              "breeding_seconds": 13766.966796875,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 42.66181945800781,
+              "hunger": 19.669410705566406,
+              "id": 396,
+              "mate_distance": 3.933009624481201,
+              "position": [
+                407.6476135253906,
+                208.4980010986328,
+                678.97119140625
+              ],
+              "prey_distance": 192.0836639404297,
+              "target": [
+                408.62347412109375,
+                208.5,
+                679.1785888671875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 1.6593906879425049,
+              "breeding_seconds": 15544.6953125,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 36.70402145385742,
+              "hunger": 10.0993013381958,
+              "id": 406,
+              "mate_distance": 11.829569816589355,
+              "position": [
+                378.28546142578125,
+                206.9980010986328,
+                689.2639770507812
+              ],
+              "prey_distance": 212.7154541015625,
+              "target": [
+                377.3163757324219,
+                207.0,
+                678.821044921875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 0.4503350555896759,
+              "breeding_seconds": 19953.875,
+              "destination": null,
+              "habitat": 61,
+              "home_distance": 46.89409255981445,
+              "hunger": 19.726139068603516,
+              "id": 418,
+              "mate_distance": 4.874333381652832,
+              "position": [
+                406.1598205566406,
+                208.49801635742188,
+                674.3294677734375
+              ],
+              "prey_distance": 195.8589324951172,
+              "target": [
+                407.1445007324219,
+                208.5,
+                674.1597900390625
+              ]
+            }
+          ],
+          "wolf_fed": 7,
+          "wolf_losses": [],
+          "wolf_max_hunger": 36.98302459716797,
+          "wolf_starving": 0,
+          "wolves": 8,
+          "wolves_with_mate": 6,
+          "wolves_with_prey": 1
+        },
+        {
+          "arrivals": 2715,
+          "births": 238,
+          "deaths": 236,
+          "ecology_mean_ms": 0.4356256636527785,
+          "ecology_peak_ms": 9.173833,
+          "elapsed_seconds": 1098.460693359375,
+          "forage_mean": 51.91448974609375,
+          "forage_min": 0.014253522269427776,
+          "hour": 15,
+          "hunted": 58,
+          "migrating": 39,
+          "migrations": 2954,
+          "packet_bytes": 29881,
+          "rabbits": 142,
+          "seed": 42,
+          "starving": 13,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 0,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 29.77972412109375,
+              "breeding_seconds": 16299.2861328125,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 45.12827682495117,
+              "hunger": 5.550521373748779,
+              "id": 74,
+              "mate_distance": 6.059390544891357,
+              "position": [
+                2197.5185546875,
+                262.49798583984375,
+                2590.164794921875
+              ],
+              "prey_distance": 34.12309646606445,
+              "target": [
+                2198.093994140625,
+                262.5,
+                2589.4541015625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 36.992733001708984,
+              "breeding_seconds": 10181.029296875,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 44.148223876953125,
+              "hunger": 19.755054473876953,
+              "id": 75,
+              "mate_distance": 5.562626361846924,
+              "position": [
+                2147.97998046875,
+                262.99798583984375,
+                2619.9228515625
+              ],
+              "prey_distance": 37.603919982910156,
+              "target": [
+                2148.200439453125,
+                263.0,
+                2620.836181640625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 10.831462860107422,
+              "breeding_seconds": 5179.0947265625,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 41.4393196105957,
+              "hunger": 26.665847778320312,
+              "id": 294,
+              "mate_distance": 6.059390544891357,
+              "position": [
+                2201.356201171875,
+                262.9980163574219,
+                2594.85400390625
+              ],
+              "prey_distance": 30.823265075683594,
+              "target": [
+                2183.100830078125,
+                263.0,
+                2595.671875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 9.237129211425781,
+              "breeding_seconds": 11958.7578125,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 46.707027435302734,
+              "hunger": 27.615116119384766,
+              "id": 320,
+              "mate_distance": 7.940643787384033,
+              "position": [
+                2148.731201171875,
+                262.99798583984375,
+                2612.017822265625
+              ],
+              "prey_distance": 42.46653747558594,
+              "target": [
+                2148.12060546875,
+                263.0,
+                2611.226318359375
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 4.538724422454834,
+              "breeding_seconds": 5179.0947265625,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 39.669063568115234,
+              "hunger": 33.77744674682617,
+              "id": 377,
+              "mate_distance": 8.025418281555176,
+              "position": [
+                2156.748046875,
+                262.99798583984375,
+                2612.388671875
+              ],
+              "prey_distance": 34.6882438659668,
+              "target": [
+                2151.414794921875,
+                263.0,
+                2613.499755859375
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 3.1492979526519775,
+              "breeding_seconds": 10181.029296875,
+              "destination": 45,
+              "habitat": 30,
+              "home_distance": 963.126953125,
+              "hunger": 5.881344795227051,
+              "id": 396,
+              "mate_distance": 13.29857349395752,
+              "position": [
+                1742.2041015625,
+                206.1680145263672,
+                1249.0391845703125
+              ],
+              "prey_distance": 178.68238830566406,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 2.655484437942505,
+              "breeding_seconds": 11958.7578125,
+              "destination": null,
+              "habitat": 22,
+              "home_distance": 39.928306579589844,
+              "hunger": 31.67870330810547,
+              "id": 406,
+              "mate_distance": 5.562626361846924,
+              "position": [
+                2150.955810546875,
+                262.99798583984375,
+                2624.62255859375
+              ],
+              "prey_distance": 32.107635498046875,
+              "target": [
+                2151.85986328125,
+                263.0,
+                2624.301025390625
+              ]
+            },
+            {
+              "action": "Migrating",
+              "age_hours": 1.449782133102417,
+              "breeding_seconds": 16299.2861328125,
+              "destination": 45,
+              "habitat": 30,
+              "home_distance": 949.828369140625,
+              "hunger": 5.737678050994873,
+              "id": 418,
+              "mate_distance": 13.29857349395752,
+              "position": [
+                1745.77587890625,
+                206.49803161621094,
+                1261.84912109375
+              ],
+              "prey_distance": 191.96829223632812,
+              "target": [
+                1694.169189453125,
+                206.0,
+                1077.0137939453125
+              ]
+            }
+          ],
+          "wolf_fed": 6,
+          "wolf_losses": [],
+          "wolf_max_hunger": 33.77744674682617,
+          "wolf_starving": 0,
+          "wolves": 8,
+          "wolves_with_mate": 8,
+          "wolves_with_prey": 6
+        },
+        {
+          "arrivals": 2936,
+          "births": 250,
+          "deaths": 253,
+          "ecology_mean_ms": 0.6146347941944434,
+          "ecology_peak_ms": 43.147917,
+          "elapsed_seconds": 1142.76416015625,
+          "forage_mean": 52.02656555175781,
+          "forage_min": 0.008182269521057606,
+          "hour": 16,
+          "hunted": 63,
+          "migrating": 10,
+          "migrations": 3159,
+          "packet_bytes": 28272,
+          "rabbits": 132,
+          "seed": 42,
+          "starving": 12,
+          "stationary_migrants": 1,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 3,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 30.71722412109375,
+              "breeding_seconds": 12713.3486328125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 37.75440979003906,
+              "hunger": 27.14048194885254,
+              "id": 74,
+              "mate_distance": 6.27103328704834,
+              "position": [
+                1984.2899169921875,
+                242.498046875,
+                2142.8876953125
+              ],
+              "prey_distance": 34.816856384277344,
+              "target": [
+                1980.0587158203125,
+                242.0,
+                2139.825927734375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 37.930233001708984,
+              "breeding_seconds": 6595.091796875,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 31.82171058654785,
+              "hunger": 1.5546692609786987,
+              "id": 75,
+              "mate_distance": 11.154632568359375,
+              "position": [
+                2003.8956298828125,
+                242.4980010986328,
+                2145.059326171875
+              ],
+              "prey_distance": 32.07574462890625,
+              "target": [
+                2004.755859375,
+                242.0,
+                2144.677734375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 11.847087860107422,
+              "breeding_seconds": 1580.88818359375,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 39.25065994262695,
+              "hunger": 11.246557235717773,
+              "id": 294,
+              "mate_distance": 4.8533101081848145,
+              "position": [
+                2018.174072265625,
+                241.4980010986328,
+                2141.459228515625
+              ],
+              "prey_distance": 24.075536727905273,
+              "target": [
+                2022.602783203125,
+                241.0,
+                2134.229736328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 10.252754211425781,
+              "breeding_seconds": 8372.8203125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 31.25396156311035,
+              "hunger": 13.771181106567383,
+              "id": 320,
+              "mate_distance": 4.172741413116455,
+              "position": [
+                1987.8739013671875,
+                242.99801635742188,
+                2148.379150390625
+              ],
+              "prey_distance": 28.58330535888672,
+              "target": [
+                1988.448486328125,
+                243.0,
+                2147.588623046875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 5.55410623550415,
+              "breeding_seconds": 1580.88818359375,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 29.73548698425293,
+              "hunger": 20.274906158447266,
+              "id": 377,
+              "mate_distance": 4.172741413116455,
+              "position": [
+                1992.046630859375,
+                242.998046875,
+                2148.38916015625
+              ],
+              "prey_distance": 27.924419403076172,
+              "target": [
+                1991.3336181640625,
+                243.0,
+                2148.98974609375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 4.145391941070557,
+              "breeding_seconds": 6595.091796875,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 34.69929122924805,
+              "hunger": 27.470779418945312,
+              "id": 396,
+              "mate_distance": 6.27103328704834,
+              "position": [
+                1981.1217041015625,
+                242.9980010986328,
+                2148.299560546875
+              ],
+              "prey_distance": 30.895898818969727,
+              "target": [
+                1987.8739013671875,
+                243.0,
+                2148.379150390625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 3.651578187942505,
+              "breeding_seconds": 8372.8203125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 34.563995361328125,
+              "hunger": 17.968812942504883,
+              "id": 406,
+              "mate_distance": 4.8533101081848145,
+              "position": [
+                2015.0496826171875,
+                241.998046875,
+                2145.173095703125
+              ],
+              "prey_distance": 28.18509292602539,
+              "target": [
+                2007.0924072265625,
+                242.0,
+                2145.73681640625
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 2.445875883102417,
+              "breeding_seconds": 12713.3486328125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 27.175092697143555,
+              "hunger": 27.327341079711914,
+              "id": 418,
+              "mate_distance": 4.428769111633301,
+              "position": [
+                1988.1458740234375,
+                243.49803161621094,
+                2152.799560546875
+              ],
+              "prey_distance": 24.22757911682129,
+              "target": [
+                1987.8739013671875,
+                243.0,
+                2148.379150390625
+              ]
+            }
+          ],
+          "wolf_fed": 8,
+          "wolf_losses": [],
+          "wolf_max_hunger": 27.470779418945312,
+          "wolf_starving": 0,
+          "wolves": 8,
+          "wolves_with_mate": 8,
+          "wolves_with_prey": 8
+        },
+        {
+          "arrivals": 3063,
+          "births": 261,
+          "deaths": 264,
+          "ecology_mean_ms": 1.2947680210972086,
+          "ecology_peak_ms": 49.802459,
+          "elapsed_seconds": 1236.0513916015625,
+          "forage_mean": 53.337799072265625,
+          "forage_min": 0.0031478286255151033,
+          "hour": 17,
+          "hunted": 68,
+          "migrating": 36,
+          "migrations": 3321,
+          "packet_bytes": 27480,
+          "rabbits": 127,
+          "seed": 42,
+          "starving": 12,
+          "stationary_migrants": 1,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 20,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 31.65472412109375,
+              "breeding_seconds": 9127.4111328125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 25.112998962402344,
+              "hunger": 13.325977325439453,
+              "id": 74,
+              "mate_distance": 8.24831485748291,
+              "position": [
+                1992.775390625,
+                243.49803161621094,
+                2153.016357421875
+              ],
+              "prey_distance": 255.98880004882812,
+              "target": [
+                2000.0657958984375,
+                242.0,
+                2142.7724609375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 38.867733001708984,
+              "breeding_seconds": 3003.826416015625,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 34.46478271484375,
+              "hunger": 23.151159286499023,
+              "id": 75,
+              "mate_distance": 4.982784748077393,
+              "position": [
+                1980.135498046875,
+                242.9980010986328,
+                2149.308349609375
+              ],
+              "prey_distance": 253.52713012695312,
+              "target": [
+                1984.459716796875,
+                243.0,
+                2145.51904296875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 12.862712860107422,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 29.872894287109375,
+              "hunger": 32.82755661010742,
+              "id": 294,
+              "mate_distance": 7.360198974609375,
+              "position": [
+                1978.9578857421875,
+                243.9980010986328,
+                2156.57373046875
+              ],
+              "prey_distance": 246.47718811035156,
+              "target": [
+                1980.02587890625,
+                244.0,
+                2156.5234375
+              ]
+            },
+            {
+              "action": "Hunting",
+              "age_hours": 11.268379211425781,
+              "breeding_seconds": 4786.8828125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 239.15689086914062,
+              "hunger": 35.36019515991211,
+              "id": 320,
+              "mate_distance": null,
+              "position": [
+                1871.4346923828125,
+                249.4980010986328,
+                2377.7744140625
+              ],
+              "prey_distance": 1.090532898902893,
+              "target": [
+                1870.5751953125,
+                249.4980010986328,
+                2377.818359375
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 6.56973123550415,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 47.017032623291016,
+              "hunger": 6.517497539520264,
+              "id": 377,
+              "mate_distance": 15.821287155151367,
+              "position": [
+                1964.4630126953125,
+                241.4980010986328,
+                2147.1435546875
+              ],
+              "prey_distance": 249.14727783203125,
+              "target": [
+                1981.738037109375,
+                243.5,
+                2153.20654296875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 5.153061389923096,
+              "breeding_seconds": 3003.826416015625,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 43.26542663574219,
+              "hunger": 13.68436336517334,
+              "id": 396,
+              "mate_distance": 1.0123544931411743,
+              "position": [
+                1989.6173095703125,
+                241.4980010986328,
+                2135.00390625
+              ],
+              "prey_distance": 270.53704833984375,
+              "target": [
+                1990.6204833984375,
+                241.5,
+                2136.792724609375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 4.64956521987915,
+              "breeding_seconds": 4786.8828125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 44.27277374267578,
+              "hunger": 4.274016857147217,
+              "id": 406,
+              "mate_distance": 1.0123544931411743,
+              "position": [
+                1989.25439453125,
+                241.498046875,
+                2134.058837890625
+              ],
+              "prey_distance": 271.226318359375,
+              "target": [
+                1985.3272705078125,
+                241.0,
+                2131.7412109375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 3.441969633102417,
+              "breeding_seconds": 9127.4111328125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 31.031064987182617,
+              "hunger": 13.654022216796875,
+              "id": 418,
+              "mate_distance": 4.982784748077393,
+              "position": [
+                1985.05126953125,
+                243.49801635742188,
+                2150.122802734375
+              ],
+              "prey_distance": 254.96665954589844,
+              "target": [
+                1981.9703369140625,
+                244.0,
+                2155.459716796875
+              ]
+            }
+          ],
+          "wolf_fed": 6,
+          "wolf_losses": [],
+          "wolf_max_hunger": 35.36019515991211,
+          "wolf_starving": 0,
+          "wolves": 8,
+          "wolves_with_mate": 7,
+          "wolves_with_prey": 1
+        },
+        {
+          "arrivals": 3205,
+          "births": 275,
+          "deaths": 287,
+          "ecology_mean_ms": 0.5266099967916686,
+          "ecology_peak_ms": 14.181375,
+          "elapsed_seconds": 1274.0018310546875,
+          "forage_mean": 53.12017059326172,
+          "forage_min": 0.004089188762009144,
+          "hour": 18,
+          "hunted": 69,
+          "migrating": 28,
+          "migrations": 3472,
+          "packet_bytes": 25995,
+          "rabbits": 117,
+          "seed": 42,
+          "starving": 9,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 0,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 32.59222412109375,
+              "breeding_seconds": 5541.4736328125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 37.25923156738281,
+              "hunger": 34.913578033447266,
+              "id": 74,
+              "mate_distance": 2.550537109375,
+              "position": [
+                1988.290283203125,
+                241.99803161621094,
+                2141.7197265625
+              ],
+              "prey_distance": 368.7903747558594,
+              "target": [
+                1988.6551513671875,
+                242.5,
+                2142.603515625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 39.805233001708984,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 29.986652374267578,
+              "hunger": 44.79279708862305,
+              "id": 75,
+              "mate_distance": 5.860240936279297,
+              "position": [
+                1984.4481201171875,
+                243.4980010986328,
+                2151.736328125
+              ],
+              "prey_distance": 367.43585205078125,
+              "target": [
+                1979.697998046875,
+                243.5,
+                2152.939208984375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 13.878337860107422,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 37.2662239074707,
+              "hunger": 54.52555465698242,
+              "id": 294,
+              "mate_distance": 0.024579821154475212,
+              "position": [
+                1988.2657470703125,
+                242.1680145263672,
+                2141.72119140625
+              ],
+              "prey_distance": 368.81109619140625,
+              "target": [
+                1989.0316162109375,
+                242.5,
+                2143.97265625
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 12.284004211425781,
+              "breeding_seconds": 1186.753662109375,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 39.02933120727539,
+              "hunger": 21.57902717590332,
+              "id": 320,
+              "mate_distance": 2.550537109375,
+              "position": [
+                1985.93603515625,
+                241.9980010986328,
+                2140.738525390625
+              ],
+              "prey_distance": 371.3249206542969,
+              "target": [
+                1991.8245849609375,
+                242.0,
+                2140.638916015625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 7.58535623550415,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 24.324155807495117,
+              "hunger": 28.105920791625977,
+              "id": 377,
+              "mate_distance": 5.73324728012085,
+              "position": [
+                1986.4591064453125,
+                244.44300842285156,
+                2157.24072265625
+              ],
+              "prey_distance": 363.1382751464844,
+              "target": [
+                1996.4781494140625,
+                242.5,
+                2145.113037109375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 6.168686389923096,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 30.671751022338867,
+              "hunger": 35.273101806640625,
+              "id": 396,
+              "mate_distance": 7.537568092346191,
+              "position": [
+                1979.2197265625,
+                243.4980010986328,
+                2155.1416015625
+              ],
+              "prey_distance": 370.5494384765625,
+              "target": [
+                1981.2781982421875,
+                244.0,
+                2158.118408203125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 5.66519021987915,
+              "breeding_seconds": 1186.753662109375,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 35.836578369140625,
+              "hunger": 25.86600685119629,
+              "id": 406,
+              "mate_distance": 6.473669528961182,
+              "position": [
+                1982.3594970703125,
+                242.998046875,
+                2146.134521484375
+              ],
+              "prey_distance": 371.8904724121094,
+              "target": [
+                1979.8387451171875,
+                242.0,
+                2141.20166015625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 4.438063621520996,
+              "breeding_seconds": 5541.4736328125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 20.201539993286133,
+              "hunger": 35.2426643371582,
+              "id": 418,
+              "mate_distance": 5.73324728012085,
+              "position": [
+                1992.016845703125,
+                243.99801635742188,
+                2158.6484375
+              ],
+              "prey_distance": 357.5446472167969,
+              "target": [
+                2000.9893798828125,
+                245.5,
+                2176.748046875
+              ]
+            }
+          ],
+          "wolf_fed": 3,
+          "wolf_losses": [],
+          "wolf_max_hunger": 54.52555465698242,
+          "wolf_starving": 0,
+          "wolves": 8,
+          "wolves_with_mate": 8,
+          "wolves_with_prey": 0
+        },
+        {
+          "arrivals": 3391,
+          "births": 292,
+          "deaths": 303,
+          "ecology_mean_ms": 0.3916567923472235,
+          "ecology_peak_ms": 10.15825,
+          "elapsed_seconds": 1302.2314453125,
+          "forage_mean": 54.268619537353516,
+          "forage_min": 0.006700161378830671,
+          "hour": 19,
+          "hunted": 69,
+          "migrating": 28,
+          "migrations": 3668,
+          "packet_bytes": 26066,
+          "rabbits": 118,
+          "seed": 42,
+          "starving": 4,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 0,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 33.52972412109375,
+              "breeding_seconds": 1945.04345703125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 39.29745864868164,
+              "hunger": 56.611576080322266,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                2021.9150390625,
+                241.49803161621094,
+                2143.4853515625
+              ],
+              "prey_distance": 346.1913757324219,
+              "target": [
+                2005.3760986328125,
+                241.5,
+                2138.397705078125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 40.742733001708984,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 38.212890625,
+              "hunger": 66.45926666259766,
+              "id": 75,
+              "mate_distance": null,
+              "position": [
+                1976.1558837890625,
+                242.4980010986328,
+                2147.70458984375
+              ],
+              "prey_distance": 384.50537109375,
+              "target": [
+                1967.019287109375,
+                241.5,
+                2144.629638671875
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 14.893962860107422,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 42.11322784423828,
+              "hunger": 76.0688247680664,
+              "id": 294,
+              "mate_distance": null,
+              "position": [
+                1974.060546875,
+                241.9980010986328,
+                2144.36962890625
+              ],
+              "prey_distance": 387.8670654296875,
+              "target": [
+                1972.7218017578125,
+                242.0,
+                2145.698486328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 13.299629211425781,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 26.832250595092773,
+              "hunger": 43.21065139770508,
+              "id": 320,
+              "mate_distance": null,
+              "position": [
+                1986.57861328125,
+                243.9980010986328,
+                2154.114013671875
+              ],
+              "prey_distance": 372.32330322265625,
+              "target": [
+                1985.9432373046875,
+                244.0,
+                2154.834716796875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 8.600981712341309,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 27.00995635986328,
+              "hunger": 49.779117584228516,
+              "id": 377,
+              "mate_distance": null,
+              "position": [
+                1991.90185546875,
+                243.4980010986328,
+                2151.312744140625
+              ],
+              "prey_distance": 368.8099365234375,
+              "target": [
+                1985.796875,
+                244.5,
+                2159.363037109375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 7.184311389923096,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 43.04776382446289,
+              "hunger": 56.971099853515625,
+              "id": 396,
+              "mate_distance": null,
+              "position": [
+                1972.1959228515625,
+                241.9980010986328,
+                2144.747314453125
+              ],
+              "prey_distance": 389.3667907714844,
+              "target": [
+                1977.2188720703125,
+                242.5,
+                2148.1669921875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 6.68081521987915,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 29.474666595458984,
+              "hunger": 47.52493667602539,
+              "id": 406,
+              "mate_distance": null,
+              "position": [
+                1986.405029296875,
+                243.498046875,
+                2151.134521484375
+              ],
+              "prey_distance": 373.8004455566406,
+              "target": [
+                1989.93408203125,
+                242.0,
+                2141.439453125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 5.45147180557251,
+              "breeding_seconds": 1945.04345703125,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 30.74265480041504,
+              "hunger": 56.9406623840332,
+              "id": 418,
+              "mate_distance": null,
+              "position": [
+                2018.3800048828125,
+                241.99801635742188,
+                2151.39697265625
+              ],
+              "prey_distance": 345.36083984375,
+              "target": [
+                2019.0521240234375,
+                242.0,
+                2152.1171875
+              ]
+            }
+          ],
+          "wolf_fed": 0,
+          "wolf_losses": [],
+          "wolf_max_hunger": 76.0688247680664,
+          "wolf_starving": 0,
+          "wolves": 8,
+          "wolves_with_mate": 0,
+          "wolves_with_prey": 0
+        },
+        {
+          "arrivals": 3532,
+          "births": 297,
+          "deaths": 320,
+          "ecology_mean_ms": 0.40954673905555655,
+          "ecology_peak_ms": 6.901792,
+          "elapsed_seconds": 1331.746826171875,
+          "forage_mean": 58.02682876586914,
+          "forage_min": 0.020694559440016747,
+          "hour": 20,
+          "hunted": 69,
+          "migrating": 41,
+          "migrations": 3831,
+          "packet_bytes": 24056,
+          "rabbits": 106,
+          "seed": 42,
+          "starving": 6,
+          "stationary_migrants": 1,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 0,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [
+            {
+              "action": "Roaming",
+              "age_hours": 34.46722412109375,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 31.549907684326172,
+              "hunger": 78.1284408569336,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                1982.5078125,
+                243.49803161621094,
+                2151.177978515625
+              ],
+              "prey_distance": 380.1320495605469,
+              "target": [
+                1981.4959716796875,
+                243.5,
+                2151.750244140625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 41.680233001708984,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 19.220991134643555,
+              "hunger": 87.88260650634766,
+              "id": 75,
+              "mate_distance": null,
+              "position": [
+                2001.0946044921875,
+                243.4980010986328,
+                2157.52734375
+              ],
+              "prey_distance": 360.6455383300781,
+              "target": [
+                2000.1107177734375,
+                242.0,
+                2140.074462890625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 15.909587860107422,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 37.45631408691406,
+              "hunger": 97.4921646118164,
+              "id": 294,
+              "mate_distance": null,
+              "position": [
+                2027.647705078125,
+                241.9980010986328,
+                2150.436279296875
+              ],
+              "prey_distance": 340.44989013671875,
+              "target": [
+                2026.7840576171875,
+                242.0,
+                2150.1123046875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 14.315254211425781,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 32.55961990356445,
+              "hunger": 64.89714813232422,
+              "id": 320,
+              "mate_distance": null,
+              "position": [
+                1987.5546875,
+                242.9980010986328,
+                2147.08935546875
+              ],
+              "prey_distance": 377.4209899902344,
+              "target": [
+                1984.5469970703125,
+                243.5,
+                2152.3642578125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 9.616605758666992,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 46.73030090332031,
+              "hunger": 71.3824691772461,
+              "id": 377,
+              "mate_distance": null,
+              "position": [
+                1984.509033203125,
+                241.4980010986328,
+                2133.020263671875
+              ],
+              "prey_distance": 386.63812255859375,
+              "target": [
+                1983.6029052734375,
+                241.0,
+                2132.671142578125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 8.199936866760254,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 37.39006423950195,
+              "hunger": 78.48341369628906,
+              "id": 396,
+              "mate_distance": null,
+              "position": [
+                2027.0814208984375,
+                241.9980010986328,
+                2149.967041015625
+              ],
+              "prey_distance": 341.17340087890625,
+              "target": [
+                2027.1387939453125,
+                242.0,
+                2150.9384765625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 7.69644021987915,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 36.50318908691406,
+              "hunger": 69.15682220458984,
+              "id": 406,
+              "mate_distance": null,
+              "position": [
+                1980.1414794921875,
+                242.83306884765625,
+                2146.783935546875
+              ],
+              "prey_distance": 384.1897277832031,
+              "target": [
+                1977.812255859375,
+                242.5,
+                2147.4580078125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 6.46709680557251,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 46.75645065307617,
+              "hunger": 78.45336151123047,
+              "id": 418,
+              "mate_distance": null,
+              "position": [
+                2037.943603515625,
+                241.49801635742188,
+                2148.102783203125
+              ],
+              "prey_distance": 332.68853759765625,
+              "target": [
+                2038.86474609375,
+                241.5,
+                2148.263916015625
+              ]
+            }
+          ],
+          "wolf_fed": 0,
+          "wolf_losses": [],
+          "wolf_max_hunger": 97.4921646118164,
+          "wolf_starving": 0,
+          "wolves": 8,
+          "wolves_with_mate": 0,
+          "wolves_with_prey": 0
+        },
+        {
+          "arrivals": 3709,
+          "births": 305,
+          "deaths": 339,
+          "ecology_mean_ms": 0.29722968445833325,
+          "ecology_peak_ms": 8.370000000000001,
+          "elapsed_seconds": 1353.1702880859375,
+          "forage_mean": 59.99504470825195,
+          "forage_min": 0.02664376050233841,
+          "hour": 21,
+          "hunted": 69,
+          "migrating": 26,
+          "migrations": 4007,
+          "packet_bytes": 22249,
+          "rabbits": 97,
+          "seed": 42,
+          "starving": 7,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 0,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [
+            {
+              "action": "Resting",
+              "age_hours": 35.40472412109375,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 24.473108291625977,
+              "hunger": 99.5517807006836,
+              "id": 74,
+              "mate_distance": null,
+              "position": [
+                1998.5411376953125,
+                243.49803161621094,
+                2152.397705078125
+              ],
+              "prey_distance": 349.60699462890625,
+              "target": [
+                1996.5457763671875,
+                243.5,
+                2155.152587890625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 15.330879211425781,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 33.291236877441406,
+              "hunger": 86.32048797607422,
+              "id": 320,
+              "mate_distance": null,
+              "position": [
+                1990.79248046875,
+                242.4980010986328,
+                2145.056884765625
+              ],
+              "prey_distance": 359.9560546875,
+              "target": [
+                1990.123046875,
+                242.5,
+                2144.427490234375
+              ]
+            },
+            {
+              "action": "Resting",
+              "age_hours": 10.632230758666992,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 15.12961196899414,
+              "hunger": 92.8058090209961,
+              "id": 377,
+              "mate_distance": null,
+              "position": [
+                1996.7908935546875,
+                244.4980010986328,
+                2162.212646484375
+              ],
+              "prey_distance": 346.49615478515625,
+              "target": [
+                1997.4886474609375,
+                245.0,
+                2169.29052734375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 9.215560913085938,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 24.090837478637695,
+              "hunger": 99.90675354003906,
+              "id": 396,
+              "mate_distance": null,
+              "position": [
+                1984.7086181640625,
+                244.4980010986328,
+                2158.9912109375
+              ],
+              "prey_distance": 358.7105712890625,
+              "target": [
+                1997.032958984375,
+                244.0,
+                2161.292236328125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 8.712065696716309,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 10.956524848937988,
+              "hunger": 90.58016204833984,
+              "id": 406,
+              "mate_distance": null,
+              "position": [
+                1992.421875,
+                245.498046875,
+                2169.91845703125
+              ],
+              "prey_distance": 346.92462158203125,
+              "target": [
+                1990.944091796875,
+                246.0,
+                2172.86572265625
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 7.48272180557251,
+              "breeding_seconds": 0.0,
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 16.3345947265625,
+              "hunger": 99.87670135498047,
+              "id": 418,
+              "mate_distance": null,
+              "position": [
+                2004.2880859375,
+                243.49801635742188,
+                2160.75
+              ],
+              "prey_distance": 340.5556335449219,
+              "target": [
+                1986.5045166015625,
+                244.5,
+                2161.1796875
+              ]
+            }
+          ],
+          "wolf_fed": 0,
+          "wolf_losses": [
+            {
+              "action": "Roaming",
+              "age_hours": 16.197757720947266,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 36.173614501953125,
+              "hunger": 100.0,
+              "id": 294,
+              "position": [
+                1995.998291015625,
+                241.9980010986328,
+                2140.92041015625
+              ],
+              "simulation_hour": 20.283750534057617,
+              "target": [
+                1995.7138671875,
+                242.0,
+                2142.94677734375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 42.366756439208984,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 45.2440071105957,
+              "hunger": 100.0,
+              "id": 75,
+              "position": [
+                2012.3426513671875,
+                240.4980010986328,
+                2132.95166015625
+              ],
+              "simulation_hour": 20.7323055267334,
+              "target": [
+                2012.907470703125,
+                240.5,
+                2132.132568359375
+              ]
+            }
+          ],
+          "wolf_max_hunger": 99.90675354003906,
+          "wolf_starving": 0,
+          "wolves": 6,
+          "wolves_with_mate": 0,
+          "wolves_with_prey": 0
+        },
+        {
+          "arrivals": 3836,
+          "births": 313,
+          "deaths": 354,
+          "ecology_mean_ms": 0.22737879093055635,
+          "ecology_peak_ms": 1.660042,
+          "elapsed_seconds": 1369.5526123046875,
+          "forage_mean": 62.50285339355469,
+          "forage_min": 0.024843841791152954,
+          "hour": 22,
+          "hunted": 69,
+          "migrating": 34,
+          "migrations": 4151,
+          "packet_bytes": 21306,
+          "rabbits": 96,
+          "seed": 42,
+          "starving": 6,
+          "stationary_migrants": 1,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 0,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [],
+          "wolf_fed": 0,
+          "wolf_losses": [
+            {
+              "action": "Roaming",
+              "age_hours": 9.389261245727539,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 32.999446868896484,
+              "hunger": 100.0,
+              "id": 396,
+              "position": [
+                2006.7586669921875,
+                241.9980010986328,
+                2144.2568359375
+              ],
+              "simulation_hour": 21.17104148864746,
+              "target": [
+                2007.638916015625,
+                242.0,
+                2144.6826171875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 7.657846450805664,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 19.47405242919922,
+              "hunger": 100.0,
+              "id": 418,
+              "position": [
+                1989.316162109375,
+                244.49801635742188,
+                2161.160400390625
+              ],
+              "simulation_hour": 21.17244529724121,
+              "target": [
+                1984.5032958984375,
+                245.0,
+                2162.2373046875
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 35.580596923828125,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 37.53894805908203,
+              "hunger": 100.0,
+              "id": 74,
+              "position": [
+                2007.137939453125,
+                241.49803161621094,
+                2139.716064453125
+              ],
+              "simulation_hour": 21.187610626220703,
+              "target": [
+                2007.891357421875,
+                241.5,
+                2138.63427734375
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 11.142568588256836,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 41.10565948486328,
+              "hunger": 100.0,
+              "id": 377,
+              "position": [
+                1990.6767578125,
+                241.4980010986328,
+                2136.95703125
+              ],
+              "simulation_hour": 21.502500534057617,
+              "target": [
+                1991.006103515625,
+                241.0,
+                2134.0673828125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 9.327914237976074,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 40.235694885253906,
+              "hunger": 100.0,
+              "id": 406,
+              "position": [
+                1975.640869140625,
+                241.998046875,
+                2145.501220703125
+              ],
+              "simulation_hour": 21.606388092041016,
+              "target": [
+                1980.2425537109375,
+                241.0,
+                2133.580078125
+              ]
+            },
+            {
+              "action": "Roaming",
+              "age_hours": 16.14866828918457,
+              "cause": "starvation",
+              "destination": null,
+              "habitat": 30,
+              "home_distance": 8.425701141357422,
+              "hunger": 100.0,
+              "id": 320,
+              "position": [
+                2005.051513671875,
+                244.4980010986328,
+                2169.3662109375
+              ],
+              "simulation_hour": 21.805221557617188,
+              "target": [
+                2026.7578125,
+                243.0,
+                2162.240478515625
+              ]
+            }
+          ],
+          "wolf_max_hunger": 0.0,
+          "wolf_starving": 0,
+          "wolves": 0,
+          "wolves_with_mate": 0,
+          "wolves_with_prey": 0
+        },
+        {
+          "arrivals": 3973,
+          "births": 321,
+          "deaths": 364,
+          "ecology_mean_ms": 0.2715642204444445,
+          "ecology_peak_ms": 8.044292,
+          "elapsed_seconds": 1389.1102294921875,
+          "forage_mean": 64.98237609863281,
+          "forage_min": 0.00429690582677722,
+          "hour": 23,
+          "hunted": 69,
+          "migrating": 28,
+          "migrations": 4292,
+          "packet_bytes": 20844,
+          "rabbits": 94,
+          "seed": 42,
+          "starving": 4,
+          "stationary_migrants": 0,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 0,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [],
+          "wolf_fed": 0,
+          "wolf_losses": [],
+          "wolf_max_hunger": 0.0,
+          "wolf_starving": 0,
+          "wolves": 0,
+          "wolves_with_mate": 0,
+          "wolves_with_prey": 0
+        },
+        {
+          "arrivals": 4089,
+          "births": 336,
+          "deaths": 378,
+          "ecology_mean_ms": 0.33165677493055634,
+          "ecology_peak_ms": 28.001084,
+          "elapsed_seconds": 1412.9947509765625,
+          "forage_mean": 67.69762420654297,
+          "forage_min": 0.020772596821188927,
+          "hour": 24,
+          "hunted": 69,
+          "migrating": 17,
+          "migrations": 4411,
+          "packet_bytes": 21093,
+          "rabbits": 95,
+          "seed": 42,
+          "starving": 7,
+          "stationary_migrants": 1,
+          "step_seconds": 0.05000000074505806,
+          "ticks_over_25ms": 1,
+          "ticks_over_50ms": 0,
+          "wolf_births": 7,
+          "wolf_details": [],
+          "wolf_fed": 0,
+          "wolf_losses": [],
+          "wolf_max_hunger": 0.0,
+          "wolf_starving": 0,
+          "wolves": 0,
+          "wolves_with_mate": 0,
+          "wolves_with_prey": 0
+        }
+      ]
+    }
+  ]
+}

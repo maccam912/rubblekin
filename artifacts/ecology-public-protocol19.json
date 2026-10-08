@@ -1,0 +1,22 @@
+{
+  "welcome": {
+    "version": 19,
+    "seed": 4025928631,
+    "generation": "GeographyV6",
+    "can_admin": false,
+    "residents": 54
+  },
+  "initial": {
+    "animals": 225,
+    "habitats": 64
+  },
+  "state_samples": 397,
+  "wildlife_samples": 100,
+  "wall_seconds": 19.973618625081144,
+  "simulation_seconds": 19.80000029504299,
+  "simulation_ratio": 0.9913076176482043,
+  "wildlife_median_interval": 0.20060604205355048,
+  "source_commit": "4d3f4f14ce54c25aea13d3f78f45bb7a2fc67df6",
+  "pod": "rubblekin-54457484d-dhwnc",
+  "notes": "Guest state-stream verification following authorized disposable server restart. No editing/admin commands. Brief single connection; not a sustained load or native gameplay check."
+}
