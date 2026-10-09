@@ -14,6 +14,7 @@ impl Fixture {
         let world = World::new(42);
         let network = AirshipNetwork::new(&world);
         let sim = Simulation {
+            gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
@@ -51,6 +52,8 @@ impl Fixture {
         let mut connection = Connection::new(socket).unwrap();
         connection.mode = Some(SessionMode::Player);
         connection.player = Some(PlayerSnapshot {
+            glider_ride: None,
+            gliding: false,
             id,
             name: name.into(),
             body: Body::new(position),
@@ -542,6 +545,7 @@ fn named_airship_teleports_attach_inside_rotated_deck_and_follow_its_fast_motion
     let world = World::generate(42, WorldGeneration::GeographyV3);
     f.network = AirshipNetwork::new(&world);
     f.sim = Simulation {
+        gliders: crate::gliders::GliderService::default(),
         profiles: Default::default(),
         consumed_resource_cells: Vec::new(),
         ecology: crate::ecology::Ecology::default(),

@@ -169,6 +169,8 @@ fn execute(
     };
     let connection = connections.get_mut(&target_id).unwrap();
     let player = connection.player.as_mut().unwrap();
+    player.glider_ride = None;
+    player.gliding = false;
     let movement_epoch = player.movement_epoch.checked_add(1).ok_or_else(|| {
         "This player's movement stream has reached its limit; reconnect".to_owned()
     })?;

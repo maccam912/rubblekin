@@ -31,12 +31,15 @@ pub(crate) struct SavedPlayer {
     pub yaw: f32,
     pub ride: Option<AirshipRide>,
     pub deck_position: Option<[f32; 3]>,
+    #[serde(default)]
+    pub gliding: bool,
 }
 
 impl SavedPlayer {
     pub fn new(player: &PlayerSnapshot) -> Self {
         Self {
             ledger: PlayerEconomy::default(),
+            gliding: player.gliding || player.glider_ride.is_some(),
             position: player.body.position,
             yaw: player.yaw,
             ride: player.ride,
@@ -45,6 +48,7 @@ impl SavedPlayer {
     }
 
     pub fn checkpoint(&mut self, player: &PlayerSnapshot) {
+        self.gliding = player.gliding || player.glider_ride.is_some();
         self.position = player.body.position;
         self.yaw = player.yaw;
         self.ride = player.ride;
@@ -94,14 +98,16 @@ impl SavedPlayer {
                         world, position, obstacles, network, time,
                     ) {
                         return Some(PlayerSnapshot {
+                            glider_ride: None,
+                            gliding: self.gliding || (self.ride.is_some() && ship.is_none()),
                             id,
                             name,
                             body: Body::new(position),
                             yaw: self.yaw,
                             last_input_sequence: 0,
                             movement_epoch: 0,
-                            ride: self.ride,
-                            deck_position: local,
+                            ride: self.ride.filter(|_| ship.is_some()),
+                            deck_position: local.filter(|_| ship.is_some()),
                         });
                     }
                 }
@@ -729,6 +735,7 @@ mod tests {
         let position = world.settlements().unwrap().villages[1].market;
         let mut saved = SavedPlayer {
             ledger: PlayerEconomy::default(),
+            gliding: false,
             position,
             yaw: 0.5,
             ride: None,

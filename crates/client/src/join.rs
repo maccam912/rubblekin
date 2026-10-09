@@ -1166,6 +1166,7 @@ pub(crate) fn session_from_welcome(
         villages,
         world_time,
         can_admin,
+        gliders,
     } = welcome
     else {
         return Err("Server did not send a welcome message".into());
@@ -1182,7 +1183,10 @@ pub(crate) fn session_from_welcome(
     let prediction = own_player.map_or_else(Prediction::default, Prediction::from_snapshot);
     let ride = own_player.and_then(|player| player.ride);
     let deck_position = own_player.and_then(|player| player.deck_position);
-    let airships = rubblekin_core::airships::AirshipNetwork::new(&world);
+    let airships = rubblekin_core::airships::AirshipNetwork::default();
+    let whip_stations = rubblekin_core::gliders::stations(&world);
+    let glider_ride = own_player.and_then(|p| p.glider_ride);
+    let gliding = own_player.is_some_and(|p| p.gliding);
     let (body, observer, status) = match mode {
         SessionMode::Player => {
             let player = own_player.ok_or("Server did not provide your player avatar")?;
@@ -1235,6 +1239,10 @@ pub(crate) fn session_from_welcome(
             players,
             world_time,
             airships,
+            whip_stations,
+            gliders,
+            glider_ride,
+            gliding,
             ride,
             deck_position,
             airship_clock: crate::airships::AirshipClock::new(world_time, now),
@@ -1394,6 +1402,7 @@ pub(crate) mod tests {
 
     pub(crate) fn welcome(mode: SessionMode) -> ServerMessage {
         ServerMessage::Welcome {
+            gliders: Vec::new(),
             version: PROTOCOL_VERSION,
             session_id: 17,
             mode,
@@ -1402,6 +1411,8 @@ pub(crate) mod tests {
             edits: Vec::new(),
             players: if mode == SessionMode::Player {
                 vec![PlayerSnapshot {
+                    glider_ride: None,
+                    gliding: false,
                     id: 17,
                     name: "Tester".into(),
                     body: Body::new([0.25, 2.52, 0.25]),

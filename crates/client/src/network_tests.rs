@@ -97,6 +97,7 @@ fn preserves_delta_for_mode(mode: SessionMode) {
         ));
 
         let welcome = ServerMessage::Welcome {
+            gliders: Vec::new(),
             version: PROTOCOL_VERSION,
             session_id: 17,
             mode,
@@ -105,6 +106,8 @@ fn preserves_delta_for_mode(mode: SessionMode) {
             edits: Vec::new(),
             players: if mode == SessionMode::Player {
                 vec![PlayerSnapshot {
+                    glider_ride: None,
+                    gliding: false,
                     id: 17,
                     name: "Joiner".into(),
                     body: Body::new([0.25, 2.52, 0.25]),

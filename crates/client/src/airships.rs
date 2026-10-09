@@ -73,6 +73,7 @@ impl AirshipClock {
 #[derive(Resource, Default)]
 pub(crate) struct PilotConversation {
     pub ship_id: Option<u64>,
+    pub station_id: Option<u32>,
     pub text: String,
     pub input_blocked: bool,
     pub just_closed: bool,
@@ -81,7 +82,7 @@ pub(crate) struct PilotConversation {
 }
 impl PilotConversation {
     pub fn open(&self) -> bool {
-        self.ship_id.is_some()
+        self.ship_id.is_some() || self.station_id.is_some()
     }
     pub fn reply(&mut self, ship_id: u64, text: String) {
         if self.ship_id == Some(ship_id) {
@@ -89,7 +90,8 @@ impl PilotConversation {
             self.answered = true;
         }
     }
-    fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
+        self.station_id = None;
         self.ship_id = None;
         self.just_closed = true;
         self.input_blocked = true;
@@ -962,7 +964,7 @@ mod tests {
         if let ServerMessage::Welcome { generation, .. } = &mut welcome {
             *generation = WorldGeneration::GeographyV3;
         }
-        let (world, session) = session_from_welcome(
+        let (world, mut session) = session_from_welcome(
             welcome,
             "test".into(),
             GraphicsQuality::Low,
@@ -970,6 +972,7 @@ mod tests {
             SessionMode::Player,
         )
         .unwrap();
+        session.airships = rubblekin_core::airships::AirshipNetwork::new(&world);
         (VoxelWorld(world), session)
     }
 

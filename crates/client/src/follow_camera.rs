@@ -17,12 +17,13 @@ pub struct CameraFollow {
     // World coordinates on foot, deck coordinates while following this ship.
     eye: Option<Vec3>,
     ship_id: Option<u64>,
+    carriage_id: Option<u64>,
     airship_camera_fraction: Option<f32>,
 }
 
 impl CameraFollow {
     pub fn advance(&mut self, target: Vec3, dt: f32) -> Vec3 {
-        if self.ship_id.take().is_some() {
+        if self.ship_id.take().is_some() || self.carriage_id.take().is_some() {
             self.eye = None;
             self.airship_camera_fraction = None;
         }
@@ -41,6 +42,34 @@ impl CameraFollow {
         let local_target = Vec3::from_array(deck_local_position(ship, target.to_array()));
         let local_eye = self.advance_eye(local_target, dt);
         Vec3::from_array(deck_position(ship, local_eye.to_array()))
+    }
+
+    pub fn advance_on_glider(
+        &mut self,
+        target: Vec3,
+        dt: f32,
+        id: u64,
+        position: Vec3,
+        yaw: f32,
+    ) -> Vec3 {
+        if self.carriage_id != Some(id) {
+            self.eye = None;
+            self.carriage_id = Some(id);
+            self.ship_id = None;
+        }
+        let rotation = Quat::from_rotation_y(yaw);
+        let local = rotation.inverse() * (target - position);
+        position + rotation * self.advance_eye(local, dt)
+    }
+
+    /// Airborne bodies move smoothly and can cover several metres per frame.
+    /// Following directly avoids the ground smoother's repeated correction snaps.
+    pub fn advance_gliding(&mut self, target: Vec3) -> Vec3 {
+        self.eye = Some(target);
+        self.ship_id = None;
+        self.carriage_id = None;
+        self.airship_camera_fraction = None;
+        target
     }
 
     /// Clip immediately on the current ray, but recover from an obstruction
@@ -118,6 +147,23 @@ pub fn transform(
 mod tests {
     use super::*;
     use rubblekin_core::world::{Block, BlockPos, CELL_SIZE};
+
+    #[test]
+    fn fast_canopy_follow_has_no_world_lag_or_repeated_snaps_at_low_frame_rates() {
+        for fps in [15.0, 20.0, 60.0] {
+            let mut follow = CameraFollow::default();
+            let mut previous = Vec3::ZERO;
+            for frame in 0..60 {
+                let target = Vec3::new(80.0 * frame as f32 / fps, 2000.0, 0.0);
+                let actual = follow.advance_gliding(target);
+                assert_eq!(actual, target);
+                if frame > 0 {
+                    assert!(((actual - previous).length() - 80.0 / fps).abs() < 0.001);
+                }
+                previous = actual;
+            }
+        }
+    }
 
     fn eye() -> Vec3 {
         // Open air above the test world's terrain and trees.

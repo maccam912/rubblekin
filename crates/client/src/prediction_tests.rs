@@ -4,6 +4,8 @@ use rubblekin_core::world::{Block, BlockPos};
 
 fn snapshot(body: Body, last_input_sequence: u64) -> PlayerSnapshot {
     PlayerSnapshot {
+        glider_ride: None,
+        gliding: false,
         id: 1,
         name: "Walker".into(),
         body,
@@ -893,4 +895,66 @@ fn input_count_and_transport_pressure_pause_without_spending_sequences() {
             ..
         }
     ));
+}
+
+#[test]
+fn carriage_jump_replays_from_acknowledgment_without_reboarding() {
+    use rubblekin_core::gliders::*;
+    let world = World::new(42);
+    let network = AirshipNetwork::default();
+    let f = GliderFlight {
+        id: 1,
+        station_id: 0,
+        destination: GliderDestination::Village(1),
+        destination_name: "Test".into(),
+        from: [0.0, 40.0, 0.0],
+        to: [20.0, 10.0, 0.0],
+        apex: 60.0,
+        duration: 40.0,
+        created_at: 0.0,
+        started_at: Some(0.0),
+    };
+    let mut state = snapshot(Body::new([0.0, 60.0, 0.0]), 0);
+    state.glider_ride = Some(GliderRide {
+        carriage_id: 1,
+        seat: 0,
+    });
+    let mut prediction = Prediction::from_snapshot(&state);
+    let mut body = state.body.clone();
+    let mut ride = state.glider_ride;
+    let mut gliding = false;
+    prediction
+        .advance_gliders(
+            &world,
+            &mut body,
+            MoveInput {
+                jump: true,
+                ..Default::default()
+            },
+            0.0,
+            0.1,
+            &[],
+            &network,
+            10.0,
+            std::slice::from_ref(&f),
+            &mut ride,
+            &mut gliding,
+        )
+        .unwrap();
+    let expected = body.position;
+    prediction
+        .reconcile_gliders(
+            &world,
+            &mut body,
+            &state,
+            |_| Vec::new(),
+            &network,
+            10.0,
+            &[f],
+            &mut ride,
+            &mut gliding,
+        )
+        .unwrap();
+    assert_eq!(body.position, expected);
+    assert!(ride.is_none() && gliding);
 }

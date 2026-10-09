@@ -7,8 +7,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-// Creative block IDs require matching catalogs; older peers cannot decode new edits.
-pub const PROTOCOL_VERSION: u32 = 22;
+// Whip carriages and personal gliding require matching rebuilt peers.
+pub const PROTOCOL_VERSION: u32 = 23;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -63,6 +63,9 @@ pub enum ClientMessage {
         request_id: u64,
         action: WorkAction,
     },
+    Glider {
+        action: crate::gliders::GliderAction,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +83,7 @@ pub enum ServerMessage {
         residents: Vec<ResidentSnapshot>,
         #[serde(default)]
         villages: Vec<VillageSnapshot>,
+        gliders: Vec<crate::gliders::GliderFlight>,
         world_time: f64,
         can_admin: bool,
     },
@@ -90,6 +94,7 @@ pub enum ServerMessage {
         residents: Vec<ResidentSnapshot>,
         #[serde(default)]
         villages: Vec<VillageSnapshot>,
+        gliders: Vec<crate::gliders::GliderFlight>,
         world_time: f64,
     },
     BlockChanged {
@@ -144,6 +149,10 @@ pub struct PlayerSnapshot {
     pub movement_epoch: u64,
     #[serde(default)]
     pub ride: Option<AirshipRide>,
+    #[serde(default)]
+    pub glider_ride: Option<crate::gliders::GliderRide>,
+    #[serde(default)]
+    pub gliding: bool,
     /// Ship-local [side, height, fore] offset; absent on the ground.
     #[serde(default)]
     pub deck_position: Option<[f32; 3]>,

@@ -3119,3 +3119,77 @@ fn creative_catalog_blocks_replicate_and_survive_server_restart() {
     );
     server.stop().unwrap();
 }
+
+#[test]
+fn whip_carriage_is_shared_and_jump_out_replicates_over_tcp() {
+    use rubblekin_core::gliders::{GliderAction, GliderDestination, stations};
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV3;
+    let world = World::generate(42, config.generation);
+    let stops = stations(&world);
+    let origin = &stops[0];
+    let destination = stops
+        .iter()
+        .filter(|s| s.village_id != origin.village_id)
+        .min_by(|a, b| {
+            rubblekin_core::gliders::horizontal_distance(origin.position, a.position).total_cmp(
+                &rubblekin_core::gliders::horizontal_distance(origin.position, b.position),
+            )
+        })
+        .unwrap();
+    let server = spawn(config).unwrap();
+    let (mut first, welcome) = Client::connect(server.addr, "WhipOne");
+    let id = match welcome {
+        ServerMessage::Welcome { session_id, .. } => session_id,
+        _ => unreachable!(),
+    };
+    first.teleport(origin.position);
+    let (mut second, _) = Client::connect(server.addr, "WhipTwo");
+    let mut nearby = origin.position;
+    nearby[0] += 1.0;
+    second.teleport(nearby);
+    let action = GliderAction::Board {
+        station_id: origin.village_id,
+        destination: GliderDestination::Village(destination.village_id),
+    };
+    first.send(ClientMessage::Glider {
+        action: action.clone(),
+    });
+    first.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.glider_ride.is_some())));
+    second.send(ClientMessage::Glider { action });
+    second.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().filter(|p|p.glider_ride.is_some()).count()==2));
+    thread::sleep(Duration::from_millis(220));
+    first.send(ClientMessage::Glider {
+        action: GliderAction::Launch,
+    });
+    let state=second.until(|m|matches!(m,ServerMessage::State{gliders,..} if gliders.iter().any(|f|f.started_at.is_some())));
+    if let ServerMessage::State {
+        players, gliders, ..
+    } = state
+    {
+        assert_eq!(gliders.len(), 1);
+        assert_eq!(
+            players
+                .iter()
+                .filter(|p| p
+                    .glider_ride
+                    .is_some_and(|r| r.carriage_id == gliders[0].id))
+                .count(),
+            2
+        );
+    }
+    thread::sleep(Duration::from_millis(2300));
+    first.send(ClientMessage::Glider {
+        action: GliderAction::Leave,
+    });
+    second.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.gliding && p.glider_ride.is_none())));
+    let (mut observer, _) = Client::connect_mode(server.addr, "Observer", SessionMode::Observer);
+    observer.send(ClientMessage::Glider {
+        action: GliderAction::Launch,
+    });
+    assert!(
+        matches!(observer.until(|m|matches!(m,ServerMessage::Notice{..})),ServerMessage::Notice{text} if text.contains("read-only"))
+    );
+    server.stop().unwrap();
+}

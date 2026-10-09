@@ -593,7 +593,7 @@ fn transform(origin: [f32; 3], yaw: f32, offset: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-fn port(world: &World, village: &Village) -> AirshipPort {
+pub(crate) fn port(world: &World, village: &Village) -> AirshipPort {
     // The first generated lane joins the existing central street and storage
     // entrance. Walk toward town by four meters to keep the doorway free.
     let lane: Vec<_> = village.lanes[0]

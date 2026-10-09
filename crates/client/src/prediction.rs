@@ -6,14 +6,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(test)]
-use rubblekin_core::physics::move_character_with_obstacles;
 use rubblekin_core::{
-    airships::{AirshipNetwork, AirshipRide},
-    physics::{Body, MoveInput, move_character_with_airships},
+    airships::AirshipNetwork,
+    physics::{Body, MoveInput},
     protocol::{ClientMessage, MAX_INPUT_DT, PlayerSnapshot},
     world::World,
 };
+use rubblekin_core::{airships::AirshipRide, physics::move_character_with_airships};
+
+#[cfg(test)]
+use rubblekin_core::physics::move_character_with_obstacles;
 
 const MAX_PENDING_INPUTS: usize = 512;
 const MAX_PENDING_SECONDS: f32 = 2.0;
@@ -114,6 +116,61 @@ impl Prediction {
             world, body, input, dt, obstacles, network, time, ride, local,
         );
         Ok(message)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance_gliders(
+        &mut self,
+        world: &World,
+        body: &mut Body,
+        input: MoveInput,
+        yaw: f32,
+        dt: f32,
+        obstacles: &[[f32; 3]],
+        _network: &AirshipNetwork,
+        time: f64,
+        flights: &[rubblekin_core::gliders::GliderFlight],
+        ride: &mut Option<rubblekin_core::gliders::GliderRide>,
+        gliding: &mut bool,
+    ) -> Result<ClientMessage, &'static str> {
+        let message = self.record(input, yaw, dt, Some(time))?;
+        rubblekin_core::gliders::move_with_gliders(
+            world, body, input, dt, obstacles, flights, time, ride, gliding,
+        );
+        Ok(message)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn reconcile_gliders(
+        &mut self,
+        world: &World,
+        body: &mut Body,
+        authoritative: &PlayerSnapshot,
+        obstacles_at: impl Fn(f64) -> Vec<[f32; 3]>,
+        _network: &AirshipNetwork,
+        world_time: f64,
+        flights: &[rubblekin_core::gliders::GliderFlight],
+        ride: &mut Option<rubblekin_core::gliders::GliderRide>,
+        gliding: &mut bool,
+    ) -> Result<(), &'static str> {
+        self.acknowledge(authoritative)?;
+        *body = authoritative.body.clone();
+        *ride = authoritative.glider_ride;
+        *gliding = authoritative.gliding;
+        for pending in &self.pending {
+            let time = pending.time.unwrap_or(world_time).max(world_time);
+            rubblekin_core::gliders::move_with_gliders(
+                world,
+                body,
+                pending.input,
+                pending.dt,
+                &obstacles_at(time),
+                flights,
+                time,
+                ride,
+                gliding,
+            );
+        }
+        Ok(())
     }
 
     fn record(

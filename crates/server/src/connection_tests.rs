@@ -14,6 +14,7 @@ fn state(time: f64) -> ServerMessage {
     // Similar to a populated world's full snapshots, without generating an island.
     npc.reason = "x".repeat(32 * 1024);
     ServerMessage::State {
+        gliders: Vec::new(),
         players: Vec::new(),
         npc,
         residents: Vec::new(),

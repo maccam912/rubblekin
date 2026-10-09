@@ -6,6 +6,7 @@ pub mod blocks;
 pub mod economy;
 pub mod forage;
 pub mod geography;
+pub mod gliders;
 pub mod physics;
 pub mod protocol;
 pub mod settlement;

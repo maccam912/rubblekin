@@ -90,6 +90,7 @@ fn next_message(peer: &mut BufReader<TcpStream>) -> ClientMessage {
 fn acknowledge(app: &mut App, peer: &mut BufReader<TcpStream>, player: &PlayerSnapshot) {
     let session = app.world().resource::<Session>();
     let state = ServerMessage::State {
+        gliders: Vec::new(),
         players: vec![player.clone()],
         npc: session.npc.clone(),
         residents: session.residents.clone(),
@@ -110,6 +111,46 @@ fn acknowledge(app: &mut App, peer: &mut BufReader<TcpStream>, player: &PlayerSn
         assert!(Instant::now() < deadline, "acknowledgment never arrived");
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+#[test]
+fn mouse_camera_aim_is_sent_and_steers_the_canopy_without_walking_keys() {
+    let (mut app, mut peer, _) = fixture();
+    {
+        let mut session = app.world_mut().resource_mut::<Session>();
+        session.flying = false;
+        session.gliding = true;
+        session.yaw = std::f32::consts::FRAC_PI_2;
+        session.pitch = 0.0;
+        session.body.velocity = [0.0, -2.0, -25.0];
+    }
+    app.world_mut()
+        .resource_mut::<AccumulatedMouseMotion>()
+        .delta = Vec2::new(-40.0, 240.0);
+    app.world_mut().run_schedule(Update);
+    let ClientMessage::Input { input, .. } = next_message(&mut peer) else {
+        panic!("missing movement")
+    };
+    assert_eq!(input.direction, [0.0; 2]);
+    let aim = Vec3::from_array(
+        input
+            .glide_direction
+            .expect("camera aim missing from input"),
+    );
+    assert!(aim.x > 0.8 && aim.y < -0.5);
+    let session = app.world().resource::<Session>();
+    assert!(session.body.velocity[0] > 15.0 && session.body.velocity[1] < -8.0);
+    let heading = Vec2::new(session.body.velocity[0], session.body.velocity[2]).normalize();
+    assert!(heading.dot(Vec2::new(aim.x, aim.z).normalize()) > 0.9999);
+    app.world_mut()
+        .resource_mut::<AccumulatedMouseMotion>()
+        .delta = Vec2::new(0.0, -480.0);
+    app.world_mut().run_schedule(Update);
+    let ClientMessage::Input { input, .. } = next_message(&mut peer) else {
+        panic!("missing pull-up")
+    };
+    assert!(input.glide_direction.unwrap()[1] > 0.5);
+    assert!(app.world().resource::<Session>().body.velocity[1] > 0.0);
 }
 
 #[test]

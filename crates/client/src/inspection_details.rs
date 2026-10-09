@@ -444,6 +444,7 @@ mod tests {
     fn session() -> (GameWorld, Session) {
         session_from_welcome(
             ServerMessage::Welcome {
+                gliders: Vec::new(),
                 version: PROTOCOL_VERSION,
                 session_id: 1,
                 mode: SessionMode::Observer,

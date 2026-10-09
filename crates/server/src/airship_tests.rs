@@ -14,6 +14,7 @@ impl Fixture {
         let world = World::generate(42, WorldGeneration::GeographyV3);
         let network = AirshipNetwork::new(&world);
         let sim = Simulation {
+            gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
@@ -38,6 +39,8 @@ impl Fixture {
         let mut connection = Connection::new(socket).unwrap();
         connection.mode = Some(SessionMode::Player);
         connection.player = Some(PlayerSnapshot {
+            glider_ride: None,
+            gliding: false,
             id,
             name: format!("Passenger {id}"),
             body: Body::new(position),

@@ -2,6 +2,7 @@ mod admin_console;
 mod airship_mesh;
 #[cfg(test)]
 mod airship_motion_tests;
+#[allow(dead_code)]
 mod airships;
 mod block_textures;
 mod capture;
@@ -9,6 +10,7 @@ mod crash_reporting;
 mod crops;
 mod follow_camera;
 mod forage;
+mod gliders;
 mod graphics;
 mod ground_details;
 mod inspection;
@@ -100,6 +102,10 @@ pub struct Session {
     pub players: Vec<PlayerSnapshot>,
     pub world_time: f64,
     pub(crate) airships: AirshipNetwork,
+    pub(crate) whip_stations: Vec<rubblekin_core::gliders::WhipStation>,
+    pub(crate) gliders: Vec<rubblekin_core::gliders::GliderFlight>,
+    pub(crate) glider_ride: Option<rubblekin_core::gliders::GliderRide>,
+    pub(crate) gliding: bool,
     pub(crate) ride: Option<AirshipRide>,
     pub(crate) deck_position: Option<[f32; 3]>,
     pub(crate) airship_clock: airships::AirshipClock,
@@ -279,7 +285,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 hotbar slot | I inventory | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 hotbar slot | I inventory | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G whip station / travel | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -428,7 +434,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ui::setup_ui,
                     touch::setup,
                     pause::setup,
-                    airships::setup,
+                    gliders::setup,
                     admin_console::setup,
                     world_map::setup,
                     market::setup,
@@ -443,10 +449,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         inventory::read,
                         admin_console::read,
                         market::read,
-                        airships::read,
+                        gliders::read,
                         pause::read,
                         world_map::read,
                         airships::advance_clock,
+                        gliders::carry,
                         controls,
                         graphics::apply_settings,
                         camera,
@@ -461,14 +468,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         work_tools::update,
                         wildlife::update,
                         forage::update,
-                        airships::update_scene,
+                        (gliders::update_scene, gliders::animate_whips).chain(),
                         crops::update_crops,
                         inspection::update,
                         ui::update_ui,
                         ui::scroll_panels,
                         touch::refresh,
                         pause::refresh,
-                        airships::refresh,
+                        gliders::refresh,
                         admin_console::refresh,
                         world_map::refresh,
                         market::refresh,
@@ -595,6 +602,7 @@ fn receive_network(
                 residents,
                 villages,
                 world_time,
+                gliders,
             } => {
                 if session.observer.is_none()
                     && let Some(authoritative) =
@@ -602,6 +610,7 @@ fn receive_network(
                 {
                     latest_authoritative = Some(authoritative.clone());
                 }
+                session.gliders = gliders;
                 session.players = players;
                 session.npc = npc;
                 session.residents = residents;
@@ -685,25 +694,51 @@ fn receive_network(
     if let Some(authoritative) = latest_authoritative {
         let session = &mut *session;
         let previous_epoch = session.prediction.movement_epoch();
-        let result = session.prediction.reconcile_airships(
-            &world.0,
-            &mut session.body,
-            &authoritative,
-            |time| {
-                character_obstacles(
-                    session.id,
-                    &session.players,
-                    &session.npc,
-                    &session.residents,
-                    &session.airships,
-                    time,
-                )
-            },
-            &session.airships,
-            session.world_time,
-            &mut session.ride,
-            &mut session.deck_position,
-        );
+        if authoritative.glider_ride.is_some() {
+            session.flying = false;
+        }
+        let result = if session.airships.routes().is_empty() {
+            session.prediction.reconcile_gliders(
+                &world.0,
+                &mut session.body,
+                &authoritative,
+                |time| {
+                    character_obstacles(
+                        session.id,
+                        &session.players,
+                        &session.npc,
+                        &session.residents,
+                        &session.airships,
+                        time,
+                    )
+                },
+                &session.airships,
+                session.world_time,
+                &session.gliders,
+                &mut session.glider_ride,
+                &mut session.gliding,
+            )
+        } else {
+            session.prediction.reconcile_airships(
+                &world.0,
+                &mut session.body,
+                &authoritative,
+                |time| {
+                    character_obstacles(
+                        session.id,
+                        &session.players,
+                        &session.npc,
+                        &session.residents,
+                        &session.airships,
+                        time,
+                    )
+                },
+                &session.airships,
+                session.world_time,
+                &mut session.ride,
+                &mut session.deck_position,
+            )
+        };
         if let Err(error) = result {
             connection.fail(error.into());
         } else if session.prediction.movement_epoch() != previous_epoch {
@@ -991,6 +1026,11 @@ fn controls(
         observer_input = Vec3::new(x, input.vertical, z);
     }
     input.fly = session.flying;
+    input.glide_direction = Some([
+        session.yaw.sin() * session.pitch.cos(),
+        -session.pitch.sin(),
+        -session.yaw.cos() * session.pitch.cos(),
+    ]);
     if connection.error.is_none() && dt > 0.0 {
         let session = &mut *session;
         if let Some(observer) = &mut session.observer {
@@ -1014,18 +1054,34 @@ fn controls(
                 &session.airships,
                 session.airship_clock.time,
             );
-            let command = session.prediction.advance_airships(
-                &world.0,
-                &mut session.body,
-                input,
-                session.yaw,
-                dt,
-                &obstacles,
-                &session.airships,
-                session.airship_clock.time,
-                &mut session.ride,
-                &mut session.deck_position,
-            );
+            let command = if session.airships.routes().is_empty() {
+                session.prediction.advance_gliders(
+                    &world.0,
+                    &mut session.body,
+                    input,
+                    session.yaw,
+                    dt,
+                    &obstacles,
+                    &session.airships,
+                    session.airship_clock.time,
+                    &session.gliders,
+                    &mut session.glider_ride,
+                    &mut session.gliding,
+                )
+            } else {
+                session.prediction.advance_airships(
+                    &world.0,
+                    &mut session.body,
+                    input,
+                    session.yaw,
+                    dt,
+                    &obstacles,
+                    &session.airships,
+                    session.airship_clock.time,
+                    &mut session.ride,
+                    &mut session.deck_position,
+                )
+            };
             match command {
                 Ok(message) => connection.send(message),
                 Err(error) => connection.fail(error.into()),
@@ -1058,8 +1114,25 @@ fn camera(
             .airships
             .ship(ride.ship_id, session.airship_clock.time)
     });
-    let follow_eye = if let Some(ship) = &ship {
+    let glider = session.glider_ride.and_then(|r| {
+        session
+            .gliders
+            .iter()
+            .find(|f| f.id == r.carriage_id)
+            .map(|f| (f.id, f.pose(session.airship_clock.time)))
+    });
+    let follow_eye = if let Some((id, pose)) = glider {
+        follow.advance_on_glider(
+            eye,
+            time.delta_secs(),
+            id,
+            Vec3::from_array(pose.position),
+            pose.yaw,
+        )
+    } else if let Some(ship) = &ship {
         follow.advance_on_airship(eye, time.delta_secs(), ship)
+    } else if session.gliding {
+        follow.advance_gliding(eye)
     } else {
         follow.advance(eye, time.delta_secs())
     };
@@ -1373,6 +1446,13 @@ fn update_avatars(
         .map(|player| {
             if player.id == session.id {
                 session.body.position
+            } else if let Some(ride) = player.glider_ride
+                && let Some(flight) = session.gliders.iter().find(|f| f.id == ride.carriage_id)
+            {
+                rubblekin_core::gliders::seat_position(
+                    flight.pose(session.airship_clock.time),
+                    ride.seat,
+                )
             } else if let Some(ride) = player.ride
                 && let Some(ship) = session
                     .airships

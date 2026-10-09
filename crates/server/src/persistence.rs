@@ -81,6 +81,7 @@ struct Save {
 }
 
 pub(crate) struct Simulation {
+    pub gliders: crate::gliders::GliderService,
     pub world: World,
     pub npc: Forager,
     pub world_time: f64,
@@ -97,6 +98,7 @@ impl Simulation {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let world = World::generate(seed, generation);
                 return Ok(Self {
+                    gliders: crate::gliders::GliderService::new(&world),
                     ecology: crate::ecology::Ecology::new(&world),
                     npc: Forager::new(&world),
                     villages: VillageLife::new(&world),
@@ -212,6 +214,7 @@ impl Simulation {
             }
         };
         Ok(Self {
+            gliders: crate::gliders::GliderService::new(&world),
             ecology,
             world,
             npc: save.npc,
@@ -379,6 +382,7 @@ mod tests {
         sim.profiles.insert(
             profile.into(),
             SavedPlayer {
+                gliding: false,
                 ledger: PlayerEconomy {
                     coins: 12,
                     cargo: [1, 2, 3, 4, 5],
@@ -587,6 +591,7 @@ mod tests {
         let npc = Forager::new(&world);
         let npc_position = npc.snapshot.position;
         let sim = Simulation {
+            gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
@@ -637,6 +642,7 @@ mod tests {
         world.set_block(cut, Block::Air).unwrap();
         world.set_block(placed, Block::Brick).unwrap();
         let sim = Simulation {
+            gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
@@ -717,6 +723,7 @@ mod tests {
         let path = TestPath::new();
         let world = World::new(42);
         let sim = Simulation {
+            gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),

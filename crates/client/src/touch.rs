@@ -84,6 +84,15 @@ impl Layout {
     fn for_session(size: Vec2, session: &Session, menu_open: bool) -> Self {
         let mut layout = Self::new(size, session.observer.is_some(), session.flying, menu_open);
         layout.set_hotbar(&session.hotbar);
+        if session.gliding {
+            for region in &mut layout.regions {
+                match region.action {
+                    Action::Sprint => region.label = "Dive".into(),
+                    Action::Jump => region.label = "Brake".into(),
+                    _ => {}
+                }
+            }
+        }
         if session.ride.is_some() {
             layout.regions.retain(|region| {
                 matches!(
@@ -168,7 +177,7 @@ impl Layout {
                 s(14.0),
                 72.0,
                 48.0,
-                "Pilot".into(),
+                "Travel".into(),
             );
             add(
                 Action::Flight,
@@ -452,6 +461,7 @@ impl TouchControls {
             sprint: self.sprint,
             vertical: self.vertical,
             fly: flying,
+            glide_direction: None,
         }
     }
 }

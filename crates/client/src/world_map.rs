@@ -151,10 +151,13 @@ pub(super) enum MapMarker {
     Town(usize),
     Roadside(usize),
     You,
+    Explorer(usize),
     Spawn,
 }
 #[derive(Component)]
 pub(super) struct MapRoadsideGlyph(usize);
+#[derive(Component)]
+pub(crate) struct ExplorerName(usize);
 #[derive(Component)]
 pub(super) struct MapPosition;
 #[derive(Component)]
@@ -423,6 +426,34 @@ pub(crate) fn setup(
                                     ..default()
                                 },
                             ));
+                        for index in 0..31 {
+                            canvas
+                                .spawn((
+                                    MapMarker::Explorer(index),
+                                    ZIndex(4),
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        display: Display::None,
+                                        width: px(14),
+                                        height: px(14),
+                                        border_radius: BorderRadius::MAX,
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgb(0.45, 1.0, 0.45)),
+                                ))
+                                .with_child((
+                                    ExplorerName(index),
+                                    label("", &font, 14.0),
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        left: px(16),
+                                        top: px(-5),
+                                        padding: UiRect::all(px(2)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.02, 0.10, 0.13, 0.92)),
+                                ));
+                        }
                         canvas
                             .spawn((
                                 MapMarker::You,
@@ -725,12 +756,14 @@ pub(crate) fn refresh(
             Option<&MapTownDistance>,
             Option<&MapScale>,
             Option<&MapRoadsideGlyph>,
+            Option<&ExplorerName>,
         ),
         Or<(
             With<MapPosition>,
             With<MapTownDistance>,
             With<MapScale>,
             With<MapRoadsideGlyph>,
+            With<ExplorerName>,
         )>,
     >,
 ) {
@@ -740,6 +773,11 @@ pub(crate) fn refresh(
         .settlements()
         .map(|plan| plan.villages.as_slice())
         .unwrap_or(&[]);
+    let explorers: Vec<_> = session
+        .players
+        .iter()
+        .filter(|p| p.id != session.id)
+        .collect();
     let you = position(&session);
     let you_point = map.point(map_uv(&world.0, you), side);
     let points: Vec<_> = towns
@@ -803,6 +841,12 @@ pub(crate) fn refresh(
                     },
                 ),
                 MapMarker::You => (you_point, 8.),
+                MapMarker::Explorer(index) => (
+                    explorers
+                        .get(*index)
+                        .and_then(|p| map.point(map_uv(&world.0, p.body.position), side)),
+                    7.0,
+                ),
                 MapMarker::Spawn => {
                     let spawn = map.point(map_uv(&world.0, world.0.spawn_position()), side);
                     (
@@ -847,7 +891,12 @@ pub(crate) fn refresh(
             image.rect = Some(Rect::from_corners(view.min * size, view.max * size));
         }
     }
-    for (mut text, mut font, location, town, scale, glyph) in &mut texts {
+    for (mut text, mut font, location, town, scale, glyph, explorer) in &mut texts {
+        if let Some(explorer) = explorer {
+            text.0 = explorers
+                .get(explorer.0)
+                .map_or_else(String::new, |p| p.name.clone());
+        }
         if let Some(glyph) = glyph {
             text.0 = roadside.get(glyph.0).map_or_else(String::new, |site| {
                 if map.zoom < 3.0 && site.building.kind.is_exploration_site() {
@@ -914,34 +963,40 @@ pub(crate) fn refresh(
                 .iter()
                 .any(|site| site.building.kind.is_exploration_site());
             text.0 = if discoveries && compact {
-                format!("{span} · Cyan: you · Gold: towns · Violet: places · Drag/pinch")
+                format!(
+                    "{span} · Cyan: you · Gold: towns · Green: explorers · Violet: places · Drag/pinch"
+                )
             } else if discoveries && map.zoom < 3.0 {
                 format!(
-                    "{span} · Cyan: you · Gold: towns · Violet: places (zoom for symbols) | Drag/scroll · C/R: center/world"
+                    "{span} · Cyan: you · Gold: towns · Green: explorers · Violet: places (zoom for symbols) | Drag/scroll · C/R: center/world"
                 )
             } else if discoveries {
                 format!(
                     "{span} · A arch · S stone · F trunk · T camp · O tower · K kiln · R ruin · P shelter · Q quarry\nC cairn · B bench · W waycart · V survey · D snag · H split rock · E viewing deck | Drag/scroll · C/R: center/world"
                 )
             } else if extended && compact {
-                format!("{span} · Cyan: you · Gold: towns · R/S/P/Q: places · Drag/pinch")
+                format!(
+                    "{span} · Cyan: you · Gold: towns · Green: explorers · R/S/P/Q: places · Drag/pinch"
+                )
             } else if extended {
                 format!(
-                    "{span} · R ruin · S waystone · P shelter · Q quarry | Cyan: you · Gold: towns | Drag/scroll: pan/zoom · C/R: center/world"
+                    "{span} · R ruin · S waystone · P shelter · Q quarry | Cyan: you · Gold: towns · Green: explorers | Drag/scroll: pan/zoom · C/R: center/world"
                 )
             } else if !roadside.is_empty() && compact {
                 format!(
-                    "{span} · Cyan: you · Gold: towns · Violet R/S: ruins/waystones · Drag/pinch"
+                    "{span} · Cyan: you · Gold: towns · Green: explorers · Violet R/S: ruins/waystones · Drag/pinch"
                 )
             } else if !roadside.is_empty() {
                 format!(
-                    "{span} · Cyan: you · Gold: towns · Violet R/S: ruins/waystones | Drag: pan · Scroll/pinch: zoom · C/R: center/world"
+                    "{span} · Cyan: you · Gold: towns · Green: explorers · Violet R/S: ruins/waystones | Drag: pan · Scroll/pinch: zoom · C/R: center/world"
                 )
             } else if compact {
-                format!("{span}  ·  Drag: pan  ·  Pinch: zoom  ·  Cyan: you  ·  Gold: towns")
+                format!(
+                    "{span}  ·  Drag: pan  ·  Pinch: zoom  ·  Cyan: you  ·  Gold: towns · Green: explorers"
+                )
             } else {
                 format!(
-                    "{span}  ·  Cyan: you  ·  Gold: towns  ·  Ring: spawn  |  Scroll / pinch: zoom  ·  Drag: pan  ·  C: center on you  ·  R: whole world"
+                    "{span}  ·  Cyan: you  ·  Gold: towns · Green: explorers  ·  Ring: spawn  |  Scroll / pinch: zoom  ·  Drag: pan  ·  C: center on you  ·  R: whole world"
                 )
             };
         }

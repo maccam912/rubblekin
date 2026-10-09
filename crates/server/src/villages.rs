@@ -419,6 +419,15 @@ impl VillageLife {
         self.residents.iter().map(|resident| resident.body.position)
     }
 
+    /// Retire saved airship journeys; residents resume their ordinary walking goals.
+    pub fn disable_airships(&mut self) {
+        for resident in &mut self.residents {
+            resident.transit = None;
+            resident.snapshot.ride = None;
+            resident.snapshot.deck_position = None;
+        }
+    }
+
     /// Riders retain their relative berth when the server restarts.
     pub fn sync_airship_riders(&mut self, network: &AirshipNetwork, time: f64) {
         for resident in &mut self.residents {
@@ -3590,6 +3599,7 @@ mod tests {
             position: [2178.2615, 299.35, 3017.2905],
             velocity: [0.0; 3],
             on_ground: true,
+            glide_stalled: false,
         };
         resident.transit = Some(Transit {
             origin: 9,
@@ -3669,6 +3679,7 @@ mod tests {
             std::process::id()
         ));
         let simulation = crate::persistence::Simulation {
+            gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
@@ -3824,6 +3835,7 @@ mod tests {
                 std::process::id()
             ));
             let simulation = crate::persistence::Simulation {
+                gliders: crate::gliders::GliderService::default(),
                 profiles: Default::default(),
                 consumed_resource_cells: Vec::new(),
                 ecology: crate::ecology::Ecology::default(),
@@ -3916,6 +3928,7 @@ mod tests {
             std::process::id()
         ));
         let simulation = crate::persistence::Simulation {
+            gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
@@ -4616,6 +4629,7 @@ mod tests {
                 .as_nanos()
         ));
         let sim = Simulation {
+            gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),

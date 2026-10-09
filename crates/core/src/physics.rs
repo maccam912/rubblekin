@@ -29,6 +29,9 @@ pub struct Body {
     pub position: [f32; 3],
     pub velocity: [f32; 3],
     pub on_ground: bool,
+    /// A stalled canopy keeps its nose down until it regains flying speed.
+    #[serde(default)]
+    pub glide_stalled: bool,
 }
 
 impl Body {
@@ -37,6 +40,7 @@ impl Body {
             position,
             velocity: [0.0; 3],
             on_ground: false,
+            glide_stalled: false,
         }
     }
 }
@@ -50,12 +54,117 @@ pub struct MoveInput {
     pub fly: bool,
     /// Creative flight only, clamped to -1..1.
     pub vertical: f32,
+    /// Camera forward vector while gliding. Ordinary ground movement ignores it.
+    #[serde(default)]
+    pub glide_direction: Option<[f32; 3]>,
 }
 
 /// Advances at most 250 ms, subdividing collision movement to avoid tunneling.
 /// Non-finite input is neutralized and a corrupt body is returned to spawn.
 pub fn move_character(world: &World, body: &mut Body, input: MoveInput, dt: f32) {
     move_character_with_obstacles(world, body, input, dt, &[]);
+}
+
+pub const GLIDE_STALL_SPEED: f32 = 10.0;
+pub const GLIDE_RECOVERY_SPEED: f32 = 16.0;
+pub const GLIDE_MAX_SPEED: f32 = 80.0;
+
+pub fn flight_speed(velocity: [f32; 3]) -> f32 {
+    velocity.iter().map(|v| v * v).sum::<f32>().sqrt()
+}
+
+/// Camera-directed, energy-based flight. Gravity gains speed in a dive and
+/// spends it in a climb; drag dissipates energy. Low speed forces a nose-down
+/// recovery until the wing can fly again. Heading follows the camera directly,
+/// so turning never leaves the player travelling sideways across the view.
+pub fn move_gliding_body(
+    world: &World,
+    body: &mut Body,
+    input: MoveInput,
+    dt: f32,
+    obstacles: &[[f32; 3]],
+) {
+    if !dt.is_finite() || dt <= 0.0 {
+        return;
+    }
+    if body
+        .position
+        .iter()
+        .chain(&body.velocity)
+        .any(|v| !v.is_finite())
+    {
+        *body = Body::new(world.spawn_position());
+        return;
+    }
+    let dt = dt.min(0.25);
+    let aim = input
+        .glide_direction
+        .filter(|aim| aim.iter().all(|v| v.is_finite()) && flight_speed(*aim) > 0.01);
+    let forward = aim.unwrap_or(body.velocity);
+    let length = forward[0].hypot(forward[2]);
+    let heading = if length > 0.001 {
+        [forward[0] / length, forward[2] / length]
+    } else {
+        [0.0, -1.0]
+    };
+    let camera_pitch = (-forward[1]).atan2(length);
+    body.on_ground = false;
+    let steps = (dt / (1.0 / 120.0)).ceil() as usize;
+    let step_dt = dt / steps as f32;
+    for _ in 0..steps {
+        let speed = flight_speed(body.velocity).min(GLIDE_MAX_SPEED);
+        if body.glide_stalled {
+            body.glide_stalled = speed < GLIDE_RECOVERY_SPEED;
+        } else {
+            body.glide_stalled = speed < GLIDE_STALL_SPEED;
+        }
+        let pitch = if speed > 0.01 {
+            (-body.velocity[1]).atan2(body.velocity[0].hypot(body.velocity[2]))
+        } else {
+            0.9
+        };
+        let drag = 0.1
+            + 0.002 * speed * speed
+            + if input.jump {
+                1.8 + 0.006 * speed * speed
+            } else {
+                0.0
+            };
+        // Small trimmed descent sustains an ordinary glide. Fast pull-outs keep
+        // their kinetic energy instead of snapping to a fixed cruise speed.
+        let trim = if aim.is_some() {
+            (drag / 14.0).min(0.10).asin()
+        } else {
+            0.0
+        };
+        let target = if body.glide_stalled {
+            0.9
+        } else {
+            (camera_pitch + trim + if input.sprint { 0.35 } else { 0.0 }
+                - if input.jump { 0.12 } else { 0.0 })
+            .clamp(-0.65, 1.4)
+        };
+        let pitch = pitch + (target - pitch) * (1.0 - (-4.0 * step_dt).exp());
+        let speed = (speed + (14.0 * pitch.sin() - drag) * step_dt).clamp(0.0, GLIDE_MAX_SPEED);
+        body.velocity = [
+            heading[0] * speed * pitch.cos(),
+            -speed * pitch.sin(),
+            heading[1] * speed * pitch.cos(),
+        ];
+        for axis in [0, 2, 1] {
+            let amount = body.velocity[axis] * step_dt;
+            let (terrain, character) =
+                move_axis_with_obstacles(world, &mut body.position, axis, amount, obstacles);
+            if terrain || character {
+                body.velocity[axis] = 0.0;
+                if axis == 1 && amount < 0.0 {
+                    body.on_ground = true;
+                    body.glide_stalled = false;
+                }
+            }
+        }
+        constrain_to_world(world, body);
+    }
 }
 
 /// Uses the same upright body for every embodied player and NPC. The caller
@@ -1588,5 +1697,137 @@ mod tests {
             body.position,
             &[coincident]
         ));
+    }
+}
+
+#[cfg(test)]
+mod glide_tests {
+    use super::*;
+    use crate::world::WorldGeneration;
+
+    fn world() -> World {
+        World::generate(42, WorldGeneration::GeographyV3)
+    }
+    fn advance(world: &World, body: &mut Body, aim: [f32; 3], seconds: f32) {
+        for _ in 0..(seconds / 0.02).round() as usize {
+            move_gliding_body(
+                world,
+                body,
+                MoveInput {
+                    glide_direction: Some(aim),
+                    ..Default::default()
+                },
+                0.02,
+                &[],
+            );
+        }
+    }
+    #[test]
+    fn camera_heading_controls_flight_without_movement_keys_or_sideways_drift() {
+        let world = world();
+        let mut body = Body::new([0.0, 2500.0, 0.0]);
+        body.velocity = [0.0, -2.0, -20.0];
+        move_gliding_body(
+            &world,
+            &mut body,
+            MoveInput {
+                // Opposite movement keys must not override the camera in flight.
+                direction: [-1.0, 0.0],
+                glide_direction: Some([1.0, 0.0, 0.0]),
+                ..Default::default()
+            },
+            0.25,
+            &[],
+        );
+        assert!(body.position[0] > 4.0);
+        assert!(body.position[2].abs() < 0.001);
+        assert!(body.velocity[0] > 19.0);
+    }
+    #[test]
+    fn dive_pullout_and_climb_trade_height_for_speed_without_a_cruise_reset() {
+        let world = world();
+        let mut body = Body::new([0.0, 2500.0, 0.0]);
+        body.velocity = [18.0, -1.0, 0.0];
+        advance(&world, &mut body, [0.5, -0.866, 0.0], 3.0);
+        let dive_speed = flight_speed(body.velocity);
+        let dive_descent = -body.velocity[1];
+        assert!(dive_speed > 35.0);
+        advance(&world, &mut body, [1.0, 0.0, 0.0], 0.8);
+        assert!(flight_speed(body.velocity) > dive_speed * 0.85);
+        assert!(-body.velocity[1] < dive_descent * 0.4);
+        let height = body.position[1];
+        let speed = flight_speed(body.velocity);
+        advance(&world, &mut body, [0.94, 0.342, 0.0], 1.0);
+        assert!(body.position[1] > height);
+        assert!(body.velocity[1] > 0.0);
+        assert!(flight_speed(body.velocity) < speed);
+    }
+    #[test]
+    fn a_slow_climb_stalls_lowers_the_nose_and_recovers_before_control_returns() {
+        let world = world();
+        let mut body = Body::new([0.0, 2500.0, 0.0]);
+        body.velocity = [12.0, 0.0, 0.0];
+        let mut stalled = false;
+        let mut lowered = false;
+        let mut recovered = false;
+        for _ in 0..400 {
+            advance(&world, &mut body, [0.866, 0.5, 0.0], 0.02);
+            stalled |= body.glide_stalled;
+            lowered |= body.glide_stalled && body.velocity[1] < -3.0;
+            if stalled && !body.glide_stalled {
+                assert!(flight_speed(body.velocity) >= GLIDE_RECOVERY_SPEED - 0.1);
+                recovered = true;
+                break;
+            }
+        }
+        assert!(stalled && lowered && recovered);
+    }
+    #[test]
+    fn brake_and_dive_change_pitch_and_energy_and_timestep_does_not_change_the_route() {
+        let world = world();
+        let mut cruise = Body::new([0.0, 2500.0, 0.0]);
+        cruise.velocity = [25.0, -2.0, 0.0];
+        let mut brake = cruise.clone();
+        let mut dive = cruise.clone();
+        let mut fine = cruise.clone();
+        for _ in 0..50 {
+            for (body, jump, sprint) in [
+                (&mut cruise, false, false),
+                (&mut brake, true, false),
+                (&mut dive, false, true),
+            ] {
+                move_gliding_body(
+                    &world,
+                    body,
+                    MoveInput {
+                        glide_direction: Some([1.0, 0.0, 0.0]),
+                        jump,
+                        sprint,
+                        ..Default::default()
+                    },
+                    0.02,
+                    &[],
+                );
+            }
+        }
+        for _ in 0..200 {
+            move_gliding_body(
+                &world,
+                &mut fine,
+                MoveInput {
+                    glide_direction: Some([1.0, 0.0, 0.0]),
+                    ..Default::default()
+                },
+                0.005,
+                &[],
+            );
+        }
+        assert!(flight_speed(brake.velocity) < flight_speed(cruise.velocity) - 3.0);
+        assert!(dive.velocity[1] < cruise.velocity[1] - 5.0);
+        assert!(flight_speed(dive.velocity) > flight_speed(cruise.velocity) + 2.0);
+        for axis in 0..3 {
+            assert!((cruise.velocity[axis] - fine.velocity[axis]).abs() < 0.05);
+            assert!((cruise.position[axis] - fine.position[axis]).abs() < 0.05);
+        }
     }
 }

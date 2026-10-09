@@ -130,6 +130,7 @@ fn check_packet_motion(rising: bool) {
         SessionMode::Player,
     )
     .unwrap();
+    session.airships = AirshipNetwork::new(&world);
     let (ship, start, speed) = flight_segment(&session, rising);
     let ride = AirshipRide {
         ship_id: ship.id,
@@ -146,6 +147,8 @@ fn check_packet_motion(rising: bool) {
     session.players[0].deck_position = Some(local);
     session.players[0].body = session.body.clone();
     session.players.push(PlayerSnapshot {
+        glider_ride: None,
+        gliding: false,
         id: 31,
         name: "Remote passenger".into(),
         body: Body::new(deck_position(&ship, [2.0, 0.0, 2.0])),
@@ -228,6 +231,7 @@ fn check_packet_motion(rising: bool) {
                     serde_json::to_writer(
                         &mut batch,
                         &ServerMessage::State {
+                            gliders: Vec::new(),
                             players,
                             npc: session.npc.clone(),
                             residents: Vec::new(),

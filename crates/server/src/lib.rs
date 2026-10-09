@@ -5,6 +5,7 @@ mod admin_commands;
 mod airships;
 mod ecology;
 mod forage_work;
+mod gliders;
 mod local_work;
 mod navigation;
 mod npc;
@@ -129,8 +130,8 @@ pub fn spawn(config: ServerConfig) -> io::Result<ServerHandle> {
     let addr = listener.local_addr()?;
     let save_lock = persistence::lock_save(&config.save_path)?;
     let mut simulation = Simulation::load(&config.save_path, config.seed, config.generation)?;
-    let airships = AirshipNetwork::try_new(&simulation.world)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let airships = AirshipNetwork::default();
+    simulation.villages.disable_airships();
     simulation
         .villages
         .sync_airship_riders(&airships, simulation.world_time);
@@ -199,6 +200,7 @@ struct Connection {
     mode: Option<SessionMode>,
     player: Option<PlayerSnapshot>,
     profile_id: Option<String>,
+    last_glider_request: Option<Instant>,
     last_market_request: Option<Instant>,
     last_market_view: Option<Instant>,
     last_work_view: Option<Instant>,
@@ -228,6 +230,7 @@ impl Connection {
             mode: None,
             player: None,
             profile_id: None,
+            last_glider_request: None,
             last_market_request: None,
             last_market_view: None,
             last_work_view: None,
@@ -469,6 +472,7 @@ fn run(
         sim.villages.sync_airship_riders(&airships, next_world_time);
         carry_airship_players(&mut connections, &airships, next_world_time);
         sim.world_time = next_world_time;
+        gliders::tick(&mut connections, &mut sim);
         let player_ids: Vec<_> = connections
             .iter()
             .filter(|(_, connection)| connection.player.is_some())
@@ -482,16 +486,16 @@ fn run(
             {
                 // Never extrapolate walking or a held jump. A stalled client
                 // eventually resumes neutral gravity instead of floating.
-                move_character_with_airships(
+                rubblekin_core::gliders::move_with_gliders(
                     &sim.world,
                     &mut player.body,
                     MoveInput::default(),
                     DT,
                     &obstacles,
-                    &airships,
+                    &sim.gliders.flights,
                     sim.world_time,
-                    &mut player.ride,
-                    &mut player.deck_position,
+                    &mut player.glider_ride,
+                    &mut player.gliding,
                 );
                 // Idle simulation spends time too; retain only the bounded
                 // reserve needed to accept a resumed long client frame.
@@ -538,6 +542,7 @@ fn run(
         advance_local_work(&mut connections, &mut sim, config)?;
         checkpoint_players(&connections, &mut sim);
         let state = ServerMessage::State {
+            gliders: sim.gliders.flights.clone(),
             players: players(&connections),
             npc: sim.npc.snapshot.clone(),
             residents: sim.villages.residents(),
@@ -857,6 +862,8 @@ fn handle_message(
                     return Ok(());
                 };
                 Some(PlayerSnapshot {
+                    glider_ride: None,
+                    gliding: false,
                     id,
                     name,
                     body: Body::new(position),
@@ -883,6 +890,7 @@ fn handle_message(
             sim.save(&config.save_path)?;
         }
         let welcome = ServerMessage::Welcome {
+            gliders: sim.gliders.flights.clone(),
             version: PROTOCOL_VERSION,
             session_id: id,
             mode,
@@ -927,6 +935,7 @@ fn handle_message(
             }
             ClientMessage::Input { .. }
             | ClientMessage::Admin { .. }
+            | ClientMessage::Glider { .. }
             | ClientMessage::TalkToPilot { .. }
             | ClientMessage::Market { .. }
             | ClientMessage::Work { .. } => {
@@ -958,6 +967,16 @@ fn handle_message(
         }
     }
     match message {
+        ClientMessage::Glider { action } => {
+            let c = connections.get_mut(&id).unwrap();
+            let now = Instant::now();
+            if c.last_glider_request
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(200))
+            {
+                c.last_glider_request = Some(now);
+                gliders::handle(id, action, connections, sim);
+            }
+        }
         ClientMessage::Work { request_id, action } => {
             handle_work(id, request_id, action, connections, sim);
         }
@@ -1005,6 +1024,9 @@ fn handle_message(
             if !yaw.is_finite()
                 || !input.vertical.is_finite()
                 || !input.direction.iter().all(|n| n.is_finite())
+                || input
+                    .glide_direction
+                    .is_some_and(|aim| !aim.iter().all(|v| v.is_finite()))
                 || !dt.is_finite()
                 || dt <= 0.0
                 || dt > MAX_INPUT_DT
@@ -1033,17 +1055,31 @@ fn handle_message(
             // Ordinary inputs keep the client's exact duration and controller;
             // only exhausted credit requires an authoritative time correction.
             if applied_dt > 0.0 {
-                move_character_with_airships(
-                    &sim.world,
-                    &mut player.body,
-                    input,
-                    applied_dt,
-                    &obstacles,
-                    airships,
-                    sim.world_time,
-                    &mut player.ride,
-                    &mut player.deck_position,
-                );
+                if airships.routes().is_empty() {
+                    rubblekin_core::gliders::move_with_gliders(
+                        &sim.world,
+                        &mut player.body,
+                        input,
+                        applied_dt,
+                        &obstacles,
+                        &sim.gliders.flights,
+                        sim.world_time,
+                        &mut player.glider_ride,
+                        &mut player.gliding,
+                    );
+                } else {
+                    move_character_with_airships(
+                        &sim.world,
+                        &mut player.body,
+                        input,
+                        applied_dt,
+                        &obstacles,
+                        airships,
+                        sim.world_time,
+                        &mut player.ride,
+                        &mut player.deck_position,
+                    );
+                }
             }
             player.last_input_sequence = sequence;
             player.yaw = yaw.rem_euclid(std::f32::consts::TAU);
@@ -1625,6 +1661,8 @@ mod tests {
         let _peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let mut connection = Connection::new(listener.accept().unwrap().0).unwrap();
         let player = PlayerSnapshot {
+            glider_ride: None,
+            gliding: false,
             id: 1,
             name: "Worker".into(),
             body: Body::new([
@@ -1645,6 +1683,7 @@ mod tests {
         connection.profile_id = Some(profile.clone());
         let mut connections = BTreeMap::from([(1, connection)]);
         let mut sim = Simulation {
+            gliders: crate::gliders::GliderService::default(),
             npc: npc::Forager::new(&world),
             villages: villages::VillageLife::new(&world),
             world,

@@ -1,0 +1,11 @@
+# Whip and canopy checks — 2026-10-09
+
+Disposable localhost seed-42 GeographyV3 world, Protocol23, macOS/Apple M5 Pro/Metal, Low graphics. Existing user saves and production were not changed. The native client was an ordinary debug build launched through temporary app wrappers with isolated preferences.
+
+- Desktop 1440×900: station destinations included the active test player and towns. Solo boarding and launch worked. The carriage travelled continuously and landed at Pinevale; the live server reported position `[2172.842,268,3072.78]`, grounded, detached, with its canopy closed.
+- Compact 840×400 desktop touch preview: a long list initially obscured the footer. Explicit panel height and scrolling repaired it. Destination scrolling, solo Fernwood boarding, Launch, Jump into the personal canopy, and the named green explorer marker were inspected. See `whip-station-touch.png`, `whip-canopy-touch.png`, and `whip-explorers-map.png`. These captures precede the camera-flight follow-up.
+- Camera-flight follow-up, desktop: jumping out of a Fernwood carriage, steering with the camera arrows, a visible bank/nose-down attitude, and acceleration from about40 to68m/s during a dive were observed. See `glider-camera-bank-native.png`. The server telemetry peaks at77.4m/s on deployment and confirms roughly38.5m/s before the dive, then68m/s with a45.8m/s descent. Ground collision closed the canopy. The native pull-out attempt occurred too late for an airborne comparison; pull-out retention, climbing and stall recovery have deterministic shared-controller regressions instead.
+- The read-only planner successfully produced all66 reachable directed routes between the ten seed-42 V6 stations. Nearest-station routes and final approaches also have regressions for seeds42/7/99.
+- Shared boarding and exiting replicate over real TCP in the multiplayer suite. Capacity, range, observer gates, stale friends, cleanup and saved airborne recovery have server regressions. Native screenshots do not substitute for those checks.
+
+No shader/pipeline validation error was observed in these native logs. This is a controlled playtest, not a performance benchmark, long-route comfort acceptance, physical multitouch/Android test, or proof for Windows/Linux/other GPUs. Android ARM64 was checked with cargo-ndk; no APK was packaged or published. No public rollout was performed.

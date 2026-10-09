@@ -45,6 +45,8 @@ fn observer_controls_move_only_the_camera_and_never_send_gameplay_messages() {
         // destination if it accidentally escaped the input gate.
         *generation = rubblekin_core::world::WorldGeneration::GeographyV3;
         players.push(PlayerSnapshot {
+            glider_ride: None,
+            gliding: false,
             id: 31,
             name: "Another explorer".into(),
             body: Body::new([1.0, 3.0, 1.0]),
