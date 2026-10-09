@@ -53,6 +53,7 @@ impl Fixture {
         let mut connection = Connection::new(socket).unwrap();
         connection.mode = Some(SessionMode::Player);
         connection.player = Some(PlayerSnapshot {
+            parcel_destination: None,
             glider_ride: None,
             gliding: false,
             id,

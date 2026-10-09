@@ -227,6 +227,7 @@ impl Simulation {
             }
         };
         activities.recover();
+        activities.add_poi_plans(&world);
         Ok(Self {
             activities,
             gliders: crate::gliders::GliderService::new(&world),

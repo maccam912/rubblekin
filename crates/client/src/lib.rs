@@ -23,6 +23,7 @@ mod market;
 mod network;
 mod observer;
 mod palette;
+mod parcels;
 mod pause;
 mod platform;
 mod prediction;
@@ -32,6 +33,7 @@ mod terrain;
 mod terrain_albedo;
 mod terrain_material;
 mod touch;
+mod tutorials;
 mod ui;
 mod village_details;
 mod wildlife;
@@ -79,6 +81,7 @@ pub struct VoxelWorld(pub GameWorld);
 
 #[derive(Resource)]
 pub struct Session {
+    pub(crate) parcel_market: Option<[f32; 3]>,
     pub activities: Vec<rubblekin_core::activities::ActivitySnapshot>,
     pub id: u64,
     pub body: Body,
@@ -402,6 +405,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .init_resource::<market::MarketPanel>()
         .insert_resource(capture::Capture::new(screenshot, options.exit_after))
         .init_resource::<Avatars>()
+        .init_resource::<tutorials::Tutorials>()
         .insert_resource(touch::TouchControls::new(
             cfg!(target_os = "android") || options.touch,
         ))
@@ -424,6 +428,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .add_systems(Startup, join::setup)
         .add_systems(Last, update_crash_context)
         .add_systems(
+            PostUpdate,
+            tutorials::capture_region
+                .after(bevy::ui::UiSystems::Layout)
+                .run_if(resource_exists::<Session>),
+        )
+        .add_systems(
             Update,
             (
                 join::native_input,
@@ -437,14 +447,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     touch::setup,
                     pause::setup,
                     gliders::setup,
+                    parcels::setup,
                     admin_console::setup,
                     world_map::setup,
                     market::setup,
                     inventory::setup,
                     activities::setup,
+                    tutorials::setup,
                 )
                     .chain()
                     .run_if(resource_added::<Session>),
+                tutorials::read.run_if(resource_exists::<Session>),
                 touch::read,
                 (
                     (
@@ -471,7 +484,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         work_animation::animate,
                         work_tools::update,
                         wildlife::update,
-                        (forage::update, activities::update).chain(),
+                        (forage::update, activities::update, activities::update_demo).chain(),
                         (gliders::update_scene, gliders::animate_whips).chain(),
                         crops::update_crops,
                         inspection::update,
@@ -482,8 +495,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         gliders::refresh,
                         admin_console::refresh,
                         world_map::refresh,
-                        market::refresh,
-                        inventory::refresh,
+                        (market::refresh, parcels::update).chain(),
+                        (inventory::refresh, tutorials::update).chain(),
                         join::leave_world,
                     )
                         .chain(),
@@ -596,6 +609,7 @@ fn receive_network(
     mut console: Option<ResMut<admin_console::AdminConsole>>,
     mut market: Option<ResMut<market::MarketPanel>>,
     mut activities_scene: Option<ResMut<activities::Scene>>,
+    mut tutorials: Option<ResMut<tutorials::Tutorials>>,
     mut follows: Query<&mut CameraFollow, With<GameCamera>>,
 ) {
     let mut latest_authoritative = None;
@@ -629,13 +643,21 @@ fn receive_network(
                 request_id,
                 activities,
                 notice,
-                ..
+                accepted,
             } => {
                 session.activities = activities;
-                if let Some(scene) = &mut activities_scene
-                    && scene.pending.is_some_and(|(id, _)| id == request_id)
-                {
-                    scene.pending = None;
+                if let Some(scene) = &mut activities_scene {
+                    if accepted
+                        && let Some((activity_id, action)) = scene.pending_action(request_id)
+                        && let Some(t) = tutorials.as_deref_mut()
+                    {
+                        let complete = session
+                            .activities
+                            .iter()
+                            .any(|a| a.plan.id == activity_id && a.complete);
+                        t.signal(tutorials::Signal::Activity(action, complete));
+                    }
+                    scene.reply(request_id, accepted, &session, time.elapsed_secs_f64());
                 }
                 if !notice.is_empty() {
                     session.status = notice;
@@ -646,7 +668,14 @@ fn receive_network(
                 session.wildlife = animals;
                 session.habitats = habitats;
             }
-            ServerMessage::BlockChanged { edit, .. } => {
+            ServerMessage::BlockChanged {
+                player_id, edit, ..
+            } => {
+                if player_id == session.id
+                    && let Some(t) = tutorials.as_deref_mut()
+                {
+                    t.signal(tutorials::Signal::Edit(edit.block));
+                }
                 if world.0.set_block(edit.position, edit.block).is_ok() {
                     terrain::rebuild_chunks(
                         &mut scene,
@@ -676,6 +705,11 @@ fn receive_network(
             } => {
                 if let Some(panel) = &mut market {
                     panel.reply(request_id, ledger, view, notice.clone(), accepted);
+                    if panel.completed_delivery.is_some()
+                        && let Some(t) = tutorials.as_deref_mut()
+                    {
+                        t.signal(tutorials::Signal::Finished(tutorials::Lesson::Parcel));
+                    }
                 }
                 if !notice.is_empty() {
                     session.status = notice;
@@ -690,6 +724,28 @@ fn receive_network(
                 accepted,
             } => {
                 if let Some(panel) = &mut market {
+                    if accepted
+                        && work.active.is_none()
+                        && panel.active_work().is_some_and(|progress| {
+                            panel.ledger.as_ref().is_some_and(|old| {
+                                use rubblekin_core::economy::{WorkReward, resource_index};
+                                ledger.revision > old.revision
+                                    && match progress.offer.reward {
+                                        WorkReward::Coins(amount) => {
+                                            ledger.coins.checked_sub(old.coins) == Some(amount)
+                                        }
+                                        WorkReward::Cargo { kind, amount } => {
+                                            ledger.cargo[resource_index(kind)]
+                                                .checked_sub(old.cargo[resource_index(kind)])
+                                                == Some(amount)
+                                        }
+                                    }
+                            })
+                        })
+                        && let Some(t) = tutorials.as_deref_mut()
+                    {
+                        t.signal(tutorials::Signal::Finished(tutorials::Lesson::Work));
+                    }
                     panel.work_reply(request_id, work, ledger, notice.clone(), accepted);
                 }
                 if !notice.is_empty() {
@@ -1188,6 +1244,7 @@ fn edit_blocks(
     conversation: Option<Res<airships::PilotConversation>>,
     console: Option<Res<admin_console::AdminConsole>>,
     market: Option<Res<market::MarketPanel>>,
+    mut tutorials: Option<ResMut<tutorials::Tutorials>>,
 ) {
     if session.inventory.input_blocked
         || pause.is_some_and(|menu| menu.open || menu.input_blocked)
@@ -1236,6 +1293,9 @@ fn edit_blocks(
         && session.edit_clock <= 0.0
         && connection.error.is_none()
         && (dig || build);
+    if attempted && let Some(t) = tutorials.as_deref_mut() {
+        t.signal(tutorials::Signal::Open(tutorials::Lesson::Building));
+    }
     if attempted && session.target.is_none() {
         session.status = "Move closer to reach a block · aim down to build nearby".into();
         session.status_until = time.elapsed_secs_f64() + 3.0;

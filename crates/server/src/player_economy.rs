@@ -98,6 +98,7 @@ impl SavedPlayer {
                         world, position, obstacles, network, time,
                     ) {
                         return Some(PlayerSnapshot {
+                            parcel_destination: None,
                             glider_ride: None,
                             gliding: self.gliding || (self.ride.is_some() && ship.is_none()),
                             id,

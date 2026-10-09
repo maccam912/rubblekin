@@ -30,6 +30,22 @@ struct Record {
     faces: [u8; 3],
     complete: bool,
 }
+impl Record {
+    fn new(plan: ActivityPlan) -> Self {
+        let faces = [
+            plan.answer[0],
+            (plan.answer[1] + 1) % 3,
+            (plan.answer[2] + 2) % 3,
+        ];
+        Self {
+            plan,
+            revision: 0,
+            slots: std::array::from_fn(|_| Slot::Home),
+            faces,
+            complete: false,
+        }
+    }
+}
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub(crate) struct Activities {
     records: Vec<Record>,
@@ -37,39 +53,71 @@ pub(crate) struct Activities {
 impl Activities {
     pub fn new(world: &World) -> Self {
         Self {
-            records: review_plans(world)
-                .into_iter()
-                .map(|plan| {
-                    let faces = [
-                        plan.answer[0],
-                        (plan.answer[1] + 1) % 3,
-                        (plan.answer[2] + 2) % 3,
-                    ];
-                    Record {
-                        plan,
-                        revision: 0,
-                        slots: std::array::from_fn(|_| Slot::Home),
-                        faces,
-                        complete: false,
-                    }
-                })
-                .collect(),
+            records: plans(world).into_iter().map(Record::new).collect(),
+        }
+    }
+    /// Add this content to existing Save9 worlds without moving saved scenes,
+    /// losing receipts, or replacing a damaged scene with a new payable copy.
+    pub fn add_poi_plans(&mut self, world: &World) {
+        let Some(settlements) = world.settlements() else {
+            return;
+        };
+        for plan in poi_plans(world) {
+            let arrangement = settlements
+                .composed_sites
+                .iter()
+                .find(|s| Some(s.id) == plan.site_id)
+                .map(|s| s.arrangement);
+            let present = self.records.iter().any(|r| {
+                r.plan.id == plan.id
+                    || r.plan.site_id.and_then(|id| {
+                        settlements
+                            .composed_sites
+                            .iter()
+                            .find(|s| s.id == id)
+                            .map(|s| s.arrangement)
+                    }) == arrangement
+            });
+            if !present && self.records.len() < MAX_PLANS {
+                self.records.push(Record::new(plan));
+            }
         }
     }
     pub fn validate(&self, world: &World, profiles: &Profiles) -> bool {
         let mut ids = BTreeSet::new();
         let mut holders = BTreeSet::new();
-        self.records.len() <= 2
+        let mut sites = BTreeSet::new();
+        self.records.len() <= MAX_PLANS
             && self.records.iter().all(|r| {
                 let p = &r.plan;
                 let radius = world.radius_cells() as f32 * CELL_SIZE;
                 ids.insert(p.id)
-                    && p.id
-                        == if p.kind == ActivityKind::SpilledSupplies {
-                            1
-                        } else {
-                            2
+                    && match p.site_id {
+                        None => {
+                            p.id == if p.kind == ActivityKind::SpilledSupplies {
+                                1
+                            } else {
+                                2
+                            }
                         }
+                        Some(id) => {
+                            sites.insert(id)
+                                && id > 2
+                                && p.id == id
+                                && world.settlements().is_some_and(|s| {
+                                    s.composed_sites.iter().any(|site| {
+                                        site.id == id
+                                            && site_kind(site.arrangement) == Some(p.kind)
+                                            && p.objects.iter().chain(&p.sockets).all(|v| {
+                                                v[0] >= site.bounds[0] as f32 * CELL_SIZE
+                                                    && v[0] < site.bounds[2] as f32 * CELL_SIZE
+                                                    && v[2] >= site.bounds[1] as f32 * CELL_SIZE
+                                                    && v[2] < site.bounds[3] as f32 * CELL_SIZE
+                                            })
+                                    })
+                                })
+                        }
+                    }
                     && p.recipe_version == RECIPE_VERSION
                     && r.revision < u64::MAX
                     && p.objects.iter().chain(p.sockets.iter()).all(|v| {
@@ -394,6 +442,7 @@ mod tests {
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         ] {
             let player = PlayerSnapshot {
+                parcel_destination: None,
                 id: 1,
                 name: "Helper".into(),
                 body: rubblekin_core::physics::Body::new(world.spawn_position()),
@@ -580,6 +629,109 @@ mod tests {
                 _ => bad.records[0].revision = u64::MAX,
             }
             assert!(!bad.validate(&world, &profiles), "variant {variant}");
+        }
+    }
+    #[test]
+    fn poi_progress_is_additive_durable_and_not_replaced_when_ground_changes() {
+        let world = World::generate(42, rubblekin_core::world::WorldGeneration::GeographyV6);
+        let (_, _, profiles) = fixture();
+        let profile = profiles.keys().next().unwrap();
+        let mut activities = Activities {
+            records: review_plans(&world).into_iter().map(Record::new).collect(),
+        };
+        activities.records[1].faces = activities.records[1].plan.answer;
+        activities.records[1].complete = true;
+        let original = serde_json::to_value(&activities.records).unwrap();
+        activities.add_poi_plans(&world);
+        assert_eq!(activities.records.len(), 8);
+        assert_eq!(
+            serde_json::to_value(&activities.records[..2]).unwrap(),
+            original
+        );
+        assert!(activities.validate(&world, &profiles));
+        let index = activities
+            .records
+            .iter()
+            .position(|r| r.plan.site_id.is_some() && r.plan.kind == ActivityKind::SpilledSupplies)
+            .unwrap();
+        let p = activities.records[index].plan.clone();
+        activities
+            .apply(
+                &world,
+                profile,
+                p.objects[0],
+                p.id,
+                0,
+                ActivityAction::Take(0),
+            )
+            .unwrap();
+        assert_eq!(
+            activities
+                .apply(
+                    &world,
+                    profile,
+                    p.sockets[0],
+                    p.id,
+                    1,
+                    ActivityAction::Place(0)
+                )
+                .unwrap(),
+            2
+        );
+        assert!(
+            activities
+                .apply(
+                    &world,
+                    profile,
+                    p.sockets[0],
+                    p.id,
+                    2,
+                    ActivityAction::Place(0)
+                )
+                .is_err()
+        );
+        let mut edited = world.clone();
+        let support = rubblekin_core::world::BlockPos::new(
+            (p.objects[1][0] / CELL_SIZE).floor() as i32,
+            ((p.objects[1][1] - 0.04) / CELL_SIZE).floor() as i32,
+            (p.objects[1][2] / CELL_SIZE).floor() as i32,
+        );
+        edited
+            .set_block(support, rubblekin_core::world::Block::Air)
+            .unwrap();
+        activities.add_poi_plans(&edited);
+        assert_eq!(activities.records.len(), 8);
+        assert!(activities.validate(&edited, &profiles));
+        assert!(
+            activities
+                .apply(
+                    &edited,
+                    profile,
+                    p.objects[1],
+                    p.id,
+                    2,
+                    ActivityAction::Take(1)
+                )
+                .is_err()
+        );
+        let encoded = serde_json::to_vec(&activities).unwrap();
+        let mut restored: Activities = serde_json::from_slice(&encoded).unwrap();
+        restored.recover();
+        restored.add_poi_plans(&edited);
+        assert!(restored.validate(&edited, &profiles));
+        assert_eq!(
+            restored.records[index].slots[0],
+            Slot::Placed(profile.clone())
+        );
+        for variant in 0..4 {
+            let mut bad = restored.clone();
+            match variant {
+                0 => bad.records[index].plan.site_id = Some(999),
+                1 => bad.records[index].plan.id = 999,
+                2 => bad.records[index].plan.kind = ActivityKind::ShapeStones,
+                _ => bad.records[index].plan.objects[0][0] += 1_000.,
+            }
+            assert!(!bad.validate(&edited, &profiles));
         }
     }
 }

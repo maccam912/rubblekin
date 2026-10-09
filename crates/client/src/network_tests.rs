@@ -106,6 +106,7 @@ fn preserves_delta_for_mode(mode: SessionMode) {
             edits: Vec::new(),
             players: if mode == SessionMode::Player {
                 vec![PlayerSnapshot {
+                    parcel_destination: None,
                     glider_ride: None,
                     gliding: false,
                     id: 17,

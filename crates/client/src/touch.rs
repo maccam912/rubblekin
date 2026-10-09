@@ -28,6 +28,7 @@ pub struct TouchControls {
     pub(crate) activity: bool,
     pub(crate) activity_return: bool,
     pub(crate) activity_hint: bool,
+    pub(crate) activity_demo: bool,
     pub(crate) talk: bool,
     pub(crate) market: bool,
     pub(crate) help: bool,
@@ -55,6 +56,7 @@ enum Action {
     Activity,
     ActivityReturn,
     ActivityHint,
+    ActivityDemo,
     Talk,
     Market,
     Menu,
@@ -114,20 +116,48 @@ impl Layout {
                 )
             });
         }
-        if !menu_open && crate::activities::touch_opportunity(session) && !session.gliding {
+        if !menu_open
+            && !session.help
+            && !session.inspector
+            && crate::activities::touch_opportunity(session)
+            && !session.gliding
+        {
             let s = layout.scale;
+            let delivering = session.parcel_market.is_some_and(|market| {
+                rubblekin_core::economy::can_reach_market(session.body.position, market)
+            }) && !session.activities.iter().any(|a| {
+                a.props
+                    .contains(&rubblekin_core::activities::PropState::Held(session.id))
+            });
             for (index, action, label) in [
                 (0., Action::Activity, "Use"),
                 (1., Action::ActivityReturn, "Return"),
                 (2., Action::ActivityHint, "Hint"),
             ] {
+                if delivering && index > 0. {
+                    continue;
+                }
                 layout.regions.push(Region {
                     action,
                     rect: Rect::from_corners(
                         Vec2::new(size.x - (328. - index * 80.) * s, 70. * s),
                         Vec2::new(size.x - (256. - index * 80.) * s, 118. * s),
                     ),
-                    label: label.into(),
+                    label: if delivering {
+                        "Deliver".into()
+                    } else {
+                        label.into()
+                    },
+                });
+            }
+            if !delivering {
+                layout.regions.push(Region {
+                    action: Action::ActivityDemo,
+                    rect: Rect::from_corners(
+                        Vec2::new(size.x - 328. * s, 126. * s),
+                        Vec2::new(size.x - 256. * s, 174. * s),
+                    ),
+                    label: "Show me".into(),
                 });
             }
         }
@@ -339,6 +369,7 @@ impl TouchControls {
         self.activity = false;
         self.activity_return = false;
         self.activity_hint = false;
+        self.activity_demo = false;
         self.talk = false;
         self.market = false;
         self.help = false;
@@ -358,6 +389,7 @@ impl TouchControls {
             Action::Activity => self.activity = true,
             Action::ActivityReturn => self.activity_return = true,
             Action::ActivityHint => self.activity_hint = true,
+            Action::ActivityDemo => self.activity_demo = true,
             Action::Talk => self.talk = true,
             Action::Market => self.market = true,
             Action::Inspect => {
@@ -380,6 +412,7 @@ impl TouchControls {
                 self.activity = false;
                 self.activity_return = false;
                 self.activity_hint = false;
+                self.activity_demo = false;
                 self.flight = false;
             }
             _ => {}
@@ -437,6 +470,7 @@ impl TouchControls {
                         Action::Activity => self.activity = false,
                         Action::ActivityReturn => self.activity_return = false,
                         Action::ActivityHint => self.activity_hint = false,
+                        Action::ActivityDemo => self.activity_demo = false,
                         Action::Jump => self.jump = false,
                         Action::Dig => self.dig = false,
                         Action::Build => self.build = false,
@@ -518,6 +552,7 @@ pub fn read(
     session: Option<Res<Session>>,
     connection: Option<Res<Connection>>,
     mut controls: ResMut<TouchControls>,
+    tutorials: Option<Res<crate::tutorials::Tutorials>>,
 ) {
     controls.clear_frame();
     let (window_entity, window) = *window;
@@ -574,7 +609,11 @@ pub fn read(
         let layout = Layout::for_session(size, &session, controls.menu_open);
         if event.phase == TouchPhase::Started
             && !controls.menu_open
-            && crate::ui::touch_panel_at(event.position, size, &session)
+            && (crate::ui::touch_panel_at(event.position, size, &session)
+                || tutorials
+                    .as_ref()
+                    .and_then(|t| t.world_rect)
+                    .is_some_and(|r| r.contains(event.position)))
         {
             controls.contacts.insert(
                 event.id,
@@ -606,7 +645,11 @@ pub fn read(
                 let layout = Layout::for_session(size, &session, controls.menu_open);
                 if phase == TouchPhase::Started
                     && !controls.menu_open
-                    && crate::ui::touch_panel_at(position, size, &session)
+                    && (crate::ui::touch_panel_at(position, size, &session)
+                        || tutorials
+                            .as_ref()
+                            .and_then(|t| t.world_rect)
+                            .is_some_and(|r| r.contains(position)))
                 {
                     controls.contacts.insert(
                         id,
@@ -692,6 +735,7 @@ pub fn setup(
         Action::Activity,
         Action::ActivityReturn,
         Action::ActivityHint,
+        Action::ActivityDemo,
         Action::Talk,
         Action::Market,
         Action::Menu,
@@ -1559,6 +1603,8 @@ mod activity_touch_tests {
         )
         .unwrap();
         let plan = rubblekin_core::activities::review_plans(&world)[0].clone();
+        session.help = false;
+        session.inspector = false;
         session.body.position = plan.objects[0];
         session.activities = vec![rubblekin_core::activities::ActivitySnapshot {
             plan,
@@ -1569,13 +1615,18 @@ mod activity_touch_tests {
             available: true,
         }];
         let layout = Layout::for_session(Vec2::new(840., 400.), &session, false);
+        for action in [Action::Activity, Action::ActivityDemo] {
+            let region = layout.regions.iter().find(|r| r.action == action).unwrap();
+            assert!(region.rect.width() >= 48. && region.rect.height() >= 48.);
+            assert_eq!(layout.action(region.rect.center(), false), action);
+            assert!(!layout.regions.iter().any(|other| other.action != action
+                && other.rect.intersect(region.rect).size().min_element() > 0.));
+        }
         let region = layout
             .regions
             .iter()
-            .find(|r| r.action == Action::Activity)
+            .find(|r| r.action == Action::ActivityDemo)
             .unwrap();
-        assert!(region.rect.width() >= 48. && region.rect.height() >= 48.);
-        assert_eq!(layout.action(region.rect.center(), false), Action::Activity);
         let mut input = TouchControls::default();
         let event = TouchInput {
             phase: TouchPhase::Started,
@@ -1585,7 +1636,7 @@ mod activity_touch_tests {
             window: Entity::PLACEHOLDER,
         };
         input.route(&event, &layout);
-        assert!(input.activity);
+        assert!(input.activity_demo);
         input.route(
             &TouchInput {
                 phase: TouchPhase::Canceled,
@@ -1593,17 +1644,30 @@ mod activity_touch_tests {
             },
             &layout,
         );
-        assert!(!input.activity);
+        assert!(!input.activity_demo);
         input.press(Action::Activity);
         input.press(Action::ActivityReturn);
         input.press(Action::ActivityHint);
+        input.press(Action::ActivityDemo);
         input.press(Action::Menu);
-        assert!(!input.activity && !input.activity_return && !input.activity_hint);
+        assert!(
+            !input.activity
+                && !input.activity_return
+                && !input.activity_hint
+                && !input.activity_demo
+        );
         assert!(
             !Layout::for_session(Vec2::new(840., 400.), &session, true)
                 .regions
                 .iter()
                 .any(|r| r.action == Action::Activity)
+        );
+        session.help = true;
+        assert!(
+            !Layout::for_session(Vec2::new(840., 400.), &session, false)
+                .regions
+                .iter()
+                .any(|r| r.action == Action::ActivityDemo)
         );
     }
 }

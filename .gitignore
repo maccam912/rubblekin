@@ -5,6 +5,9 @@
 /graphics.json.tmp
 /creative-hotbar.json
 /creative-hotbar.json.tmp
+tutorials.json
+tutorials.json.lock
+tutorials.json.*.tmp
 join-preferences.json
 join-preferences.json.*.tmp
 player-profiles.json
@@ -13,6 +16,22 @@ player-profiles.json
 
 # Keep only the curated screenshots linked from the project documentation.
 /artifacts/*
+!/artifacts/tutorial-inventory-touch.png
+!/artifacts/tutorial-map-touch.png
+!/artifacts/tutorial-carry-touch.png
+!/artifacts/tutorial-travel-touch.png
+!/artifacts/tutorial-show-me-touch.png
+!/artifacts/tutorial-native-checks.md
+!/artifacts/activity-demonstration-carry-touch.png
+!/artifacts/activity-wrong-fit-native.png
+!/artifacts/picture-parcel-market-touch.png
+!/artifacts/picture-parcel-carried-touch.png
+!/artifacts/picture-parcel-map-touch.png
+!/artifacts/poi-activity-quarry-carry-native.png
+!/artifacts/poi-activity-quarry-placed-native.png
+!/artifacts/poi-activity-crossing-touch.png
+!/artifacts/poi-activity-stones-touch.png
+!/artifacts/poi-activity-sites.json
 !/artifacts/poi-compositions.svg
 !/artifacts/poi-compositions-unlabelled.svg
 !/artifacts/poi-compositions.json

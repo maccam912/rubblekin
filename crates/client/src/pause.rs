@@ -155,6 +155,7 @@ pub(super) enum Action {
     ResetDistances,
     Inspect,
     Controls,
+    Tutorials,
     ReturnSpawn,
     NextVillage,
     Leave,
@@ -301,6 +302,9 @@ pub fn setup(
                             row.spawn(button(Action::Inspect, percent(50))).with_child(label("Inspect", &font, 16.));
                             row.spawn(button(Action::Controls, percent(50))).with_child(label("Controls", &font, 16.));
                         });
+                        if session.observer.is_none() {
+                            actions.spawn(button(Action::Tutorials, percent(100))).with_child(label("Teach me again", &font, 16.));
+                        }
                         if session.observer.is_some() {
                             actions.spawn(button(Action::ReturnSpawn, percent(100))).with_child(label("Return to spawn", &font, 16.));
                             actions.spawn(button(Action::NextVillage, percent(100))).with_child(label("Next village", &font, 16.));
@@ -411,6 +415,7 @@ pub fn read(
     windows: Query<&Window, With<PrimaryWindow>>,
     clipping: Query<&CalculatedClip>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
+    mut tutorials: Option<ResMut<crate::tutorials::Tutorials>>,
 ) {
     let (keys, mouse, wheel) = input;
     let (conversation, console, mut map, market) = modals;
@@ -669,6 +674,7 @@ pub fn read(
             Action::ResetDistances,
             Action::Inspect,
             Action::Controls,
+            Action::Tutorials,
             Action::ReturnSpawn,
             Action::NextVillage,
             Action::Leave,
@@ -739,6 +745,11 @@ pub fn read(
         scroll.0.y = (scroll.0.y + scroll_delta).clamp(0., max.max(0.));
     }
     if let Some(action) = chosen {
+        if action == Action::Tutorials
+            && let Some(t) = tutorials.as_deref_mut()
+        {
+            t.reset();
+        }
         pause.distance_drag = None;
         pause.keyboard_distance = None;
         pause.focused = Some(action);

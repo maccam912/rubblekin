@@ -881,6 +881,12 @@ fn market_delivery_is_durable_private_and_resumes_without_teleporting_cargo() {
         on_disk["profiles"][PROFILE]["ledger"]["delivery"]["amount"],
         6
     );
+    let (viewer, public) =
+        Client::connect_mode(server.addr, "Parcel viewer", SessionMode::Observer);
+    assert!(!serde_json::to_string(&public).unwrap().contains(PROFILE));
+    assert!(matches!(public, ServerMessage::Welcome {players,..}
+        if players.iter().any(|p|p.parcel_destination==Some(offer.destination))));
+    drop(viewer);
     let repeat = client.market(
         3,
         Some(origin.id),
@@ -913,6 +919,7 @@ fn market_delivery_is_durable_private_and_resumes_without_teleporting_cargo() {
         .iter()
         .find(|player| player.id == session_id)
         .unwrap();
+    assert_eq!(player.parcel_destination, Some(offer.destination));
     assert!(rubblekin_core::economy::can_reach_market(
         player.body.position,
         origin.market
@@ -936,6 +943,10 @@ fn market_delivery_is_durable_private_and_resumes_without_teleporting_cargo() {
     assert!(
         matches!(delivered, ServerMessage::MarketState {accepted: true, ref ledger, ..} if ledger.coins == 12 && ledger.delivery.is_none())
     );
+    client.until(|message| {
+        matches!(message,ServerMessage::State {players,..}
+        if players.iter().find(|p|p.id==session_id).is_some_and(|p|p.parcel_destination.is_none()))
+    });
     let on_disk: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
     assert_eq!(on_disk["profiles"][PROFILE]["ledger"]["coins"], 12);

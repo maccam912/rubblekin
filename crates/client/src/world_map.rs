@@ -46,6 +46,9 @@ struct MapContact {
 }
 
 impl WorldMap {
+    pub(crate) fn tutorial_view(&self) -> (f32, Vec2) {
+        (self.zoom, self.center)
+    }
     fn view(&self) -> Rect {
         let half = 0.5 / self.zoom;
         let center = self.center.clamp(Vec2::splat(half), Vec2::splat(1. - half));
@@ -175,6 +178,8 @@ pub(super) enum MapAction {
 }
 #[derive(Component)]
 pub(super) struct MapSidebar;
+#[derive(Component)]
+pub(super) struct MapHeading;
 
 fn ink() -> Color {
     Color::srgb(0.91, 0.94, 0.88)
@@ -273,6 +278,7 @@ pub(crate) fn setup(
     scene: Res<crate::terrain::TerrainScene>,
     mut images: ResMut<Assets<Image>>,
     mut fonts: ResMut<Assets<Font>>,
+    pictures: Option<Res<crate::parcels::Pictures>>,
 ) {
     *map = WorldMap::default();
     let image = scene
@@ -319,7 +325,8 @@ pub(crate) fn setup(
                 ..default()
             })
             .with_children(|header| {
-                header.spawn(label("WORLD MAP  /  N at top", &font, 23.));
+                crate::tutorials::panel(header, &font, crate::tutorials::Context::Map);
+                header.spawn((MapHeading, label("WORLD MAP  /  N at top", &font, 23.)));
                 header
                     .spawn((
                         (Button, ActivateOnPress, Hovered::default()),
@@ -414,7 +421,22 @@ pub(crate) fn setup(
                                     BackgroundColor(Color::srgb(0.22, 0.14, 0.07)),
                                     BorderColor::all(Color::srgb(0.98, 0.82, 0.48)),
                                 ))
-                                .with_child(label((index + 1).to_string(), &font, 12.));
+                                .with_children(|marker| {
+                                    if let Some(image) =
+                                        pictures.as_ref().and_then(|p| p.emblem(town.id))
+                                    {
+                                        marker.spawn((
+                                            ImageNode::new(image),
+                                            Node {
+                                                width: px(18),
+                                                height: px(18),
+                                                ..default()
+                                            },
+                                        ));
+                                    } else {
+                                        marker.spawn(label((index + 1).to_string(), &font, 12.));
+                                    }
+                                });
                             canvas.spawn((
                                 MapLabel(index),
                                 ZIndex(1),
@@ -753,6 +775,7 @@ pub(crate) fn refresh(
     world: Res<VoxelWorld>,
     window: Single<&Window, With<PrimaryWindow>>,
     images: Res<Assets<Image>>,
+    tutorials: Option<Res<crate::tutorials::Tutorials>>,
     mut nodes: Query<
         (
             &mut Node,
@@ -761,6 +784,7 @@ pub(crate) fn refresh(
             Option<&MapMarker>,
             Option<&MapLabel>,
             Option<&MapSidebar>,
+            Option<&MapHeading>,
         ),
         Or<(
             With<MapRoot>,
@@ -768,6 +792,7 @@ pub(crate) fn refresh(
             With<MapMarker>,
             With<MapLabel>,
             With<MapSidebar>,
+            With<MapHeading>,
         )>,
     >,
     mut atlas: Query<&mut ImageNode, With<MapCanvas>>,
@@ -790,7 +815,13 @@ pub(crate) fn refresh(
         )>,
     >,
 ) {
-    let (side, compact) = layout(&window);
+    let (mut side, compact) = layout(&window);
+    let teaching = tutorials
+        .as_ref()
+        .is_some_and(|t| t.incomplete(crate::tutorials::Lesson::Map));
+    if teaching {
+        side = (side - 24.).max(64.);
+    }
     let towns = world
         .0
         .settlements()
@@ -822,7 +853,14 @@ pub(crate) fn refresh(
             .map(|point| Rect::from_center_size(point, Vec2::splat(18.)))
     }));
     let labels = town_labels(&points, &names, side, &reserved);
-    for (mut node, root, canvas, marker, label, sidebar) in &mut nodes {
+    for (mut node, root, canvas, marker, label, sidebar, heading) in &mut nodes {
+        if heading.is_some() {
+            node.display = if teaching {
+                Display::None
+            } else {
+                Display::Flex
+            };
+        }
         if root.is_some() {
             node.display = if map.open {
                 Display::Flex
@@ -940,12 +978,13 @@ pub(crate) fn refresh(
         if location.is_some() {
             font.font_size = (if side < 280. { 13. } else { 15. }).into();
             text.0 = format!(
-                "{}\nX {:.0}  Y {:.0}  Z {:.0}",
+                "{}{}X {:.0}  Y {:.0}  Z {:.0}",
                 if session.observer.is_some() {
                     "Your camera"
                 } else {
                     "Your position"
                 },
+                if compact && teaching { " " } else { "\n" },
                 you[0],
                 you[1],
                 you[2]

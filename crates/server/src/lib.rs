@@ -513,7 +513,7 @@ fn run(
                 connection.credit_updated = now;
             }
         }
-        let player_positions: Vec<_> = players(&connections)
+        let player_positions: Vec<_> = players(&connections, &sim)
             .iter()
             .map(|player| player.body.position)
             .collect();
@@ -548,7 +548,7 @@ fn run(
         checkpoint_players(&connections, &mut sim);
         let state = ServerMessage::State {
             gliders: sim.gliders.flights.clone(),
-            players: players(&connections),
+            players: players(&connections, &sim),
             npc: sim.npc.snapshot.clone(),
             residents: sim.villages.residents(),
             villages: sim.villages.villages(),
@@ -634,11 +634,20 @@ fn run(
     sim.save(&config.save_path)
 }
 
-fn players(connections: &BTreeMap<u64, Connection>) -> Vec<PlayerSnapshot> {
+fn players(connections: &BTreeMap<u64, Connection>, sim: &Simulation) -> Vec<PlayerSnapshot> {
     connections
         .values()
         .filter(|c| !c.dead)
-        .filter_map(|c| c.player.clone())
+        .filter_map(|c| {
+            let mut player = c.player.clone()?;
+            player.parcel_destination = c
+                .profile_id
+                .as_ref()
+                .and_then(|id| sim.profiles.get(id))
+                .and_then(|saved| saved.ledger.delivery.as_ref())
+                .map(|job| job.destination);
+            Some(player)
+        })
         .collect()
 }
 
@@ -872,6 +881,7 @@ fn handle_message(
                     return Ok(());
                 };
                 Some(PlayerSnapshot {
+                    parcel_destination: None,
                     glider_ride: None,
                     gliding: false,
                     id,
@@ -907,7 +917,7 @@ fn handle_message(
             seed: sim.world.seed,
             generation: sim.world.generation(),
             edits: sim.world.edits(),
-            players: players(connections),
+            players: players(connections, sim),
             npc: sim.npc.snapshot.clone(),
             residents: sim.villages.residents(),
             villages: sim.villages.villages(),
@@ -1141,7 +1151,7 @@ fn handle_message(
                 &actor,
                 position,
                 block,
-                players(connections)
+                players(connections, sim)
                     .iter()
                     .map(|p| p.body.position)
                     .chain(std::iter::once(sim.npc.snapshot.position))
@@ -1691,6 +1701,7 @@ mod tests {
         let _peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let mut connection = Connection::new(listener.accept().unwrap().0).unwrap();
         let player = PlayerSnapshot {
+            parcel_destination: None,
             glider_ride: None,
             gliding: false,
             id: 1,

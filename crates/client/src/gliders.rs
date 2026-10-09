@@ -229,6 +229,7 @@ pub(crate) fn setup(
             },
             BackgroundColor(Color::srgb(0.08, 0.15, 0.14)),
         )).with_children(|panel| {
+            crate::tutorials::panel(panel, &font, crate::tutorials::Context::Travel);
             panel.spawn((
                 Title,
                 Text::new("Whip station"),
@@ -259,9 +260,9 @@ pub(crate) fn setup(
                 column_gap: px(10),
                 ..default()
             }).with_children(|row| {
-                button(row, &font, "Launch [L]", Action::Launch);
-                button(row, &font, "Leave [Jump]", Action::Leave);
-                button(row, &font, "Close [G]", Action::Close);
+                button(row, &font, "Launch [L]", Action::Launch, None);
+                button(row, &font, "Leave [Jump]", Action::Leave, None);
+                button(row, &font, "Close [G]", Action::Close, None);
             });
         });
     });
@@ -271,24 +272,45 @@ pub(crate) fn setup(
 pub(crate) struct Idle {
     station: u32,
 }
-fn button(parent: &mut ChildSpawnerCommands, font: &Handle<Font>, label: &str, action: Action) {
-    parent.spawn((
-        action,
-        Button,
-        Node {
-            min_height: px(44),
-            padding: UiRect::axes(px(12), px(8)),
-            align_items: AlignItems::Center,
-            flex_shrink: 0.0,
-            ..default()
-        },
-        BackgroundColor(Color::srgb(0.17, 0.29, 0.24)),
-        children![(
-            Text::new(label),
-            TextFont::from_font_size(17.0).with_font(font.clone()),
-            TextColor(Color::srgb(0.97, 0.93, 0.76))
-        )],
-    ));
+fn button(
+    parent: &mut ChildSpawnerCommands,
+    font: &Handle<Font>,
+    label: &str,
+    action: Action,
+    emblem: Option<Handle<Image>>,
+) {
+    parent
+        .spawn((
+            action,
+            Button,
+            Node {
+                min_height: px(44),
+                padding: UiRect::axes(px(12), px(8)),
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+                flex_shrink: 0.0,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.17, 0.29, 0.24)),
+        ))
+        .with_children(|row| {
+            if let Some(image) = emblem {
+                row.spawn((
+                    ImageNode::new(image),
+                    Node {
+                        width: px(36),
+                        height: px(36),
+                        flex_shrink: 0.,
+                        ..default()
+                    },
+                ));
+            }
+            row.spawn((
+                Text::new(label),
+                TextFont::from_font_size(17.0).with_font(font.clone()),
+                TextColor(Color::srgb(0.97, 0.93, 0.76)),
+            ));
+        });
 }
 fn targets(session: &Session, station: &WhipStation) -> Vec<(String, GliderDestination)> {
     if let Some(waiting) = session
@@ -712,6 +734,7 @@ pub(crate) fn refresh(
     mut title: Query<&mut Text, With<Title>>,
     mut hints: Query<(&mut Node, &Children), (With<Hint>, Without<Panel>)>,
     mut texts: Query<&mut Text, Without<Title>>,
+    pictures: Option<Res<crate::parcels::Pictures>>,
 ) {
     if let Ok(mut node) = panel.single_mut() {
         node.display = if dialog.station_id.is_some() {
@@ -769,6 +792,7 @@ pub(crate) fn refresh(
                         } else {
                             Action::Leave
                         },
+                        None,
                     );
                 } else {
                     for (index, (label, destination)) in list.iter().enumerate() {
@@ -781,6 +805,12 @@ pub(crate) fn refresh(
                                 label
                             ),
                             Action::Board(station.village_id, *destination),
+                            match destination {
+                                GliderDestination::Village(id) => {
+                                    pictures.as_ref().and_then(|p| p.emblem(*id))
+                                }
+                                GliderDestination::Player(_) => None,
+                            },
                         );
                     }
                 }

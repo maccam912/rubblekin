@@ -147,6 +147,7 @@ fn check_packet_motion(rising: bool) {
     session.players[0].deck_position = Some(local);
     session.players[0].body = session.body.clone();
     session.players.push(PlayerSnapshot {
+        parcel_destination: None,
         glider_ride: None,
         gliding: false,
         id: 31,

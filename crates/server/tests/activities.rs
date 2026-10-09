@@ -109,6 +109,75 @@ impl Drop for Save {
     }
 }
 #[test]
+fn old_save9_gains_poi_scenes_and_their_identity_and_receipts_survive_restart() {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let save = Save(std::env::temp_dir().join(format!(
+        "rubblekin-poi-activities-{}-{suffix}",
+        std::process::id()
+    )));
+    let config = ServerConfig {
+        bind_addr: "127.0.0.1:0".into(),
+        save_path: save.0.join("world.json"),
+        seed: 42,
+        generation: WorldGeneration::GeographyV6,
+        allow_admin: true,
+    };
+    let server = spawn(config.clone()).unwrap();
+    server.stop().unwrap();
+    // A genuine earlier Save9 record has just the two introduction scenes.
+    let mut old: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    old["activities"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(2);
+    assert_eq!(old["version"], 9);
+    fs::write(&config.save_path, serde_json::to_vec(&old).unwrap()).unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let profile = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let mut client = Client::connect(server.addr, profile);
+    let mut states = client.state();
+    assert_eq!(states.len(), 8);
+    let index = states
+        .iter()
+        .position(|a| a.plan.site_id.is_some() && a.plan.kind == ActivityKind::SpilledSupplies)
+        .unwrap();
+    let plan = states[index].plan.clone();
+    client.tp(plan.objects[0]);
+    let (ok, s) = client.action(&states[index], ActivityAction::Take(0));
+    assert!(ok);
+    states = s;
+    client.tp(plan.sockets[0]);
+    let (ok, s) = client.action(&states[index], ActivityAction::Place(0));
+    assert!(ok);
+    states = s;
+    assert_eq!(states[index].props[0], PropState::Placed);
+    drop(client);
+    server.stop().unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(saved["profiles"][profile]["ledger"]["coins"], 2);
+    let server = spawn(config.clone()).unwrap();
+    let mut client = Client::connect(server.addr, profile);
+    let restored = client.state();
+    assert_eq!(restored[index].plan, plan);
+    assert_eq!(restored[index].props[0], PropState::Placed);
+    client.tp(plan.objects[0]);
+    assert!(!client.action(&restored[index], ActivityAction::Take(0)).0);
+    drop(client);
+    server.stop().unwrap();
+    let mut bad: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    bad["activities"]["records"][index]["plan"]["site_id"] = 999.into();
+    let bytes = serde_json::to_vec(&bad).unwrap();
+    fs::write(&config.save_path, &bytes).unwrap();
+    assert!(spawn(config).is_err());
+    assert_eq!(fs::read(save.0.join("world.json")).unwrap(), bytes);
+}
+#[test]
 fn cooperative_activities_save_pay_once_and_recover_a_disconnected_prop() {
     let save = Save(std::env::temp_dir().join(format!(
             "rubblekin-activities-{}-{}",

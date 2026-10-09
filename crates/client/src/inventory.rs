@@ -150,6 +150,7 @@ pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                 BackgroundColor(Color::srgb(0.055, 0.10, 0.10)),
             ))
             .with_children(|panel| {
+                crate::tutorials::panel(panel, &font, crate::tutorials::Context::Inventory);
                 panel
                     .spawn(Node {
                         justify_content: JustifyContent::SpaceBetween,
@@ -297,6 +298,7 @@ pub fn read(
         Res<crate::market::MarketPanel>,
     ),
     mut touch: ResMut<crate::touch::TouchControls>,
+    mut tutorials: Option<ResMut<crate::tutorials::Tutorials>>,
 ) {
     let (pause, map, console, pilot, market) = modals;
     let other = pause.open
@@ -416,9 +418,16 @@ pub fn read(
         }
     }
     if let Some(action) = chosen {
-        if inv.choose(action, &mut s.hotbar, &mut s.selected, page_size(&window))
-            && let Err(error) = crate::palette::save(&s.hotbar)
-        {
+        let assigned = inv.choose(action, &mut s.hotbar, &mut s.selected, page_size(&window));
+        if let Some(t) = tutorials.as_deref_mut() {
+            if matches!(action, Action::Entry(_)) && inv.pending.is_some() {
+                t.signal(crate::tutorials::Signal::ChooseBlock);
+            }
+            if assigned {
+                t.signal(crate::tutorials::Signal::AssignBlock);
+            }
+        }
+        if assigned && let Err(error) = crate::palette::save(&s.hotbar) {
             warn!("Could not save creative hotbar: {error}");
             s.status = "Hotbar changed; could not save preferences".into();
         }
@@ -430,6 +439,7 @@ pub fn refresh(
     session: Res<Session>,
     window: Single<&Window, With<PrimaryWindow>>,
     icons: Res<BlockIcons>,
+    tutorials: Option<Res<crate::tutorials::Tutorials>>,
     mut root: Query<&mut Node, (With<Root>, Without<Action>)>,
     mut cards: Query<(&Action, &mut Node, &mut BorderColor, &Children), Without<Root>>,
     mut images: Query<&mut ImageNode, With<CardImage>>,
@@ -495,6 +505,18 @@ pub fn refresh(
             }
             Action::Slot(i) => (Some(session.hotbar[i]), session.selected == i),
             Action::Category(c) => (None, inv.category == c),
+            Action::Search => {
+                node.display = if window.height() < 550.
+                    && tutorials
+                        .as_ref()
+                        .is_some_and(|t| t.incomplete(crate::tutorials::Lesson::Hotbar))
+                {
+                    Display::None
+                } else {
+                    Display::Flex
+                };
+                (None, false)
+            }
             _ => (None, false),
         };
         *border = BorderColor::all(if active {

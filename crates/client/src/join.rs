@@ -1214,6 +1214,7 @@ pub(crate) fn session_from_welcome(
     Ok((
         world,
         Session {
+            parcel_market: None,
             activities: Vec::new(),
             id: session_id,
             body,
@@ -1412,6 +1413,7 @@ pub(crate) mod tests {
             edits: Vec::new(),
             players: if mode == SessionMode::Player {
                 vec![PlayerSnapshot {
+                    parcel_destination: None,
                     glider_ride: None,
                     gliding: false,
                     id: 17,

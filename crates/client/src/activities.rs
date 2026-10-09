@@ -148,14 +148,51 @@ pub(crate) struct Scene {
     silhouettes: [Handle<Mesh>; 3],
     symbols: [Handle<Mesh>; 3],
     supply_pictures: [Handle<Image>; 3],
+    tray_pictures: [Handle<Image>; 3],
     symbol_pictures: [Handle<Image>; 3],
     material: Handle<StandardMaterial>,
     ghost: Handle<StandardMaterial>,
     base: [Handle<Mesh>; 2],
     base_material: Handle<StandardMaterial>,
     objects: HashMap<(u64, u8, u8), Entity>,
-    pub pending: Option<(u64, f64)>,
+    pending: Option<(u64, f64, Target)>,
     hint_until: f64,
+    demonstration: Option<Demonstration>,
+}
+impl Scene {
+    pub(crate) fn demonstrating(&self) -> bool {
+        self.demonstration.is_some()
+    }
+    pub(crate) fn pending_action(&self, request_id: u64) -> Option<(u64, ActivityAction)> {
+        self.pending
+            .filter(|(id, _, _)| *id == request_id)
+            .map(|(_, _, target)| (target.id, target.action))
+    }
+    pub(crate) fn reply(&mut self, request_id: u64, accepted: bool, session: &Session, now: f64) {
+        let Some((id, _, target)) = self.pending else {
+            return;
+        };
+        if id != request_id {
+            return;
+        }
+        self.pending = None;
+        // A wrong fit gets the same concrete lesson as Show me. Wait for the
+        // authoritative rejection; unsolicited state and success never trigger it.
+        if !accepted
+            && let ActivityAction::Place(tray) = target.action
+            && let Some(a) = session
+                .activities
+                .iter()
+                .find(|a| a.plan.id == target.id && a.available)
+            && a.props
+                .iter()
+                .enumerate()
+                .any(|(i, p)| *p == PropState::Held(session.id) && i != tray as usize)
+        {
+            self.demonstration = Demonstration::new(a, session.id, now);
+            self.hint_until = now + 8.;
+        }
+    }
 }
 #[derive(Component)]
 pub(crate) struct Card;
@@ -163,6 +200,106 @@ pub(crate) struct Card;
 pub(crate) struct CardTitle;
 #[derive(Component)]
 pub(crate) struct CardPicture(usize);
+#[derive(Component)]
+pub(crate) struct DemoStage;
+#[derive(Component)]
+pub(crate) struct DemoObject;
+#[derive(Component)]
+pub(crate) struct DemoDestination;
+
+/// Presentation only: replaying never sends an action or changes shared progress.
+struct Demonstration {
+    id: u64,
+    revision: u64,
+    kind: ActivityKind,
+    item: usize,
+    face: u8,
+    answer: u8,
+    carrying: bool,
+    started: f64,
+}
+struct DemoFrame {
+    x: f32,
+    y: f32,
+    width: f32,
+    face: usize,
+    settled: bool,
+}
+impl Demonstration {
+    fn new(a: &ActivitySnapshot, session_id: u64, now: f64) -> Option<Self> {
+        let carrying = a
+            .props
+            .iter()
+            .position(|p| *p == PropState::Held(session_id));
+        let item = match a.plan.kind {
+            ActivityKind::SpilledSupplies => carrying
+                .or_else(|| a.props.iter().position(|p| *p == PropState::Home))
+                .or(a.complete.then_some(0))?,
+            ActivityKind::ShapeStones => a
+                .faces
+                .iter()
+                .zip(a.plan.answer)
+                .position(|(face, answer)| *face != answer)
+                .unwrap_or(0),
+        };
+        Some(Self {
+            id: a.plan.id,
+            revision: a.revision,
+            kind: a.plan.kind,
+            item,
+            face: if a.complete {
+                (a.plan.answer[item] + 1) % 3
+            } else {
+                a.faces[item]
+            },
+            answer: a.plan.answer[item],
+            carrying: carrying.is_some(),
+            started: now,
+        })
+    }
+    fn frame(&self, now: f64) -> Option<DemoFrame> {
+        let t = (now - self.started).max(0.) as f32;
+        if t >= 7. {
+            return None;
+        }
+        if self.kind == ActivityKind::SpilledSupplies {
+            let travel = ((t - 1.5) / 2.5).clamp(0., 1.);
+            let lift = ((t - 0.5) / 0.7).clamp(0., 1.);
+            let lower = ((t - 4.) / 0.8).clamp(0., 1.);
+            Some(DemoFrame {
+                x: if self.carrying {
+                    72. + travel * 54.
+                } else {
+                    12. + travel * 114.
+                },
+                y: 32. - (if self.carrying { 1. } else { lift }) * 24. * (1. - lower),
+                width: 52.,
+                face: 0,
+                settled: t >= 4.8,
+            })
+        } else {
+            // Each full turn changes one face, exactly like the real interaction.
+            let turns = (self.answer + 3 - self.face) % 3;
+            let step = ((t / 1.5) as u8).min(turns);
+            let turning = step < turns && t % 1.5 > 0.8;
+            let width = if turning {
+                52. * ((t % 1.5 - 0.8) / 0.7 * std::f32::consts::PI)
+                    .cos()
+                    .abs()
+                    .max(0.1)
+            } else {
+                52.
+            };
+            Some(DemoFrame {
+                x: 28. + (52. - width) / 2.,
+                y: 32.,
+                width,
+                face: ((self.face + step) % 3) as usize,
+                settled: step == turns,
+            })
+        }
+    }
+}
 #[derive(Clone, Copy, Debug)]
 struct Target {
     id: u64,
@@ -211,16 +348,38 @@ fn target(session: &Session, world: &rubblekin_core::world::World) -> Option<Tar
                 .total_cmp(&distance(session.body.position, b.position))
         })
 }
+fn focused<'a>(
+    session: &'a Session,
+    world: &rubblekin_core::world::World,
+) -> Option<&'a ActivitySnapshot> {
+    carried(session)
+        .map(|(a, _)| a)
+        .or_else(|| {
+            target(session, world)
+                .and_then(|t| session.activities.iter().find(|a| a.plan.id == t.id))
+        })
+        .or_else(|| {
+            session
+                .activities
+                .iter()
+                .filter(|a| distance(session.body.position, a.plan.sockets[1]) < 12.)
+                .min_by(|a, b| {
+                    distance(session.body.position, a.plan.sockets[1])
+                        .total_cmp(&distance(session.body.position, b.plan.sockets[1]))
+                })
+        })
+}
 pub(crate) fn touch_opportunity(session: &Session) -> bool {
     session.observer.is_none()
-        && session.activities.iter().any(|a| {
-            !a.complete
-                && a.plan
-                    .objects
-                    .iter()
-                    .chain(a.plan.sockets.iter())
-                    .any(|p| distance(session.body.position, *p) < 12.)
-        })
+        && (session.activities.iter().any(|a| {
+            a.plan
+                .objects
+                .iter()
+                .chain(a.plan.sockets.iter())
+                .any(|p| distance(session.body.position, *p) < 12.)
+        }) || session.parcel_market.is_some_and(|market| {
+            rubblekin_core::economy::can_reach_market(session.body.position, market)
+        }))
 }
 pub(crate) fn setup(
     mut commands: Commands,
@@ -238,6 +397,7 @@ pub(crate) fn setup(
         silhouettes: std::array::from_fn(|i| meshes.add(mesh(&silhouette_parts(i)))),
         symbols: std::array::from_fn(|i| meshes.add(mesh(&symbol_parts(i)))),
         supply_pictures: std::array::from_fn(|i| images.add(picture(&supply_parts(i)))),
+        tray_pictures: std::array::from_fn(|i| images.add(picture(&silhouette_parts(i)))),
         symbol_pictures: std::array::from_fn(|i| images.add(picture(&symbol_parts(i)))),
         material: materials.add(StandardMaterial {
             perceptual_roughness: 1.,
@@ -257,6 +417,7 @@ pub(crate) fn setup(
         objects: HashMap::new(),
         pending: None,
         hint_until: 0.,
+        demonstration: None,
     });
     commands
         .spawn((
@@ -277,10 +438,11 @@ pub(crate) fn setup(
             BackgroundColor(Color::srgba(0.05, 0.10, 0.09, 0.93)),
         ))
         .with_children(|p| {
+            crate::tutorials::panel(p, &font, crate::tutorials::Context::Activity);
             p.spawn((
                 CardTitle,
                 Text::new(""),
-                TextFont::from_font_size(16.).with_font(font),
+                TextFont::from_font_size(16.).with_font(font.clone()),
                 TextColor(Color::srgb(0.94, 0.88, 0.72)),
             ));
             p.spawn(Node {
@@ -301,6 +463,46 @@ pub(crate) fn setup(
                         BorderColor::all(Color::srgb(0.7, 0.58, 0.28)),
                     ));
                 }
+            });
+            p.spawn((
+                DemoStage,
+                Node {
+                    width: px(194.),
+                    height: px(90.),
+                    display: Display::None,
+                    border: UiRect::all(px(2.)),
+                    ..default()
+                },
+                BorderColor::all(Color::srgb(0.7, 0.58, 0.28)),
+                BackgroundColor(Color::srgb(0.09, 0.18, 0.15)),
+            ))
+            .with_children(|stage| {
+                stage.spawn((
+                    DemoDestination,
+                    ImageNode::default(),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(126.),
+                        top: px(32.),
+                        width: px(52.),
+                        height: px(52.),
+                        border: UiRect::all(px(2.)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgb(0.7, 0.58, 0.28)),
+                ));
+                stage.spawn((
+                    DemoObject,
+                    ImageNode::default(),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(12.),
+                        top: px(32.),
+                        width: px(52.),
+                        height: px(52.),
+                        ..default()
+                    },
+                ));
             });
         });
 }
@@ -326,11 +528,15 @@ pub(crate) fn read(
     let use_now = keys.just_pressed(KeyCode::KeyT) || touch.activity;
     let return_now = keys.just_pressed(KeyCode::Backspace) || touch.activity_return;
     let help_now = keys.just_pressed(KeyCode::KeyY) || touch.activity_hint;
+    let demo_now = keys.just_pressed(KeyCode::KeyJ) || touch.activity_demo;
     touch.activity = false;
     touch.activity_return = false;
     touch.activity_hint = false;
+    touch.activity_demo = false;
     let (pause, map, console, market, travel) = modals;
     if session.observer.is_some()
+        || session.help
+        || session.inspector
         || !windows.iter().any(|w| w.focused)
         || touch.suspended
         || connection.error.is_some()
@@ -345,14 +551,23 @@ pub(crate) fn read(
         || travel.open()
         || travel.input_blocked
     {
+        scene.demonstration = None;
         return;
+    }
+    if demo_now {
+        scene.demonstration = focused(&session, &world.0)
+            .filter(|a| a.available)
+            .and_then(|a| Demonstration::new(a, session.id, time.elapsed_secs_f64()));
+    }
+    if use_now || return_now {
+        scene.demonstration = None;
     }
     if help_now {
         scene.hint_until = time.elapsed_secs_f64() + 8.;
     }
     if scene
         .pending
-        .is_some_and(|(_, at)| time.elapsed_secs_f64() - at > 5.)
+        .is_some_and(|(_, at, _)| time.elapsed_secs_f64() - at > 5.)
     {
         scene.pending = None;
     }
@@ -380,7 +595,7 @@ pub(crate) fn read(
             revision: t.revision,
             action: t.action,
         });
-        scene.pending = Some((request_id, time.elapsed_secs_f64()));
+        scene.pending = Some((request_id, time.elapsed_secs_f64(), t));
     }
 }
 fn entity(
@@ -420,6 +635,13 @@ pub(crate) fn update(
     mut title: Query<&mut Text, With<CardTitle>>,
     mut pictures: Query<(&CardPicture, &mut ImageNode, &mut BorderColor)>,
     touch: Res<TouchControls>,
+    modals: (
+        Res<crate::pause::PauseMenu>,
+        Res<crate::world_map::WorldMap>,
+        Res<crate::admin_console::AdminConsole>,
+        Res<crate::market::MarketPanel>,
+        Res<crate::airships::PilotConversation>,
+    ),
 ) {
     let eye = session
         .observer
@@ -539,21 +761,22 @@ pub(crate) fn update(
         }
     });
     let hold = carried(&session);
-    let next_target = target(&session, &world.0);
-    let focused = hold
-        .map(|(a, _)| a)
-        .or_else(|| next_target.and_then(|t| session.activities.iter().find(|a| a.plan.id == t.id)))
-        .or_else(|| {
-            session
-                .activities
-                .iter()
-                .filter(|a| distance(session.body.position, a.plan.sockets[1]) < 12.)
-                .min_by(|a, b| {
-                    distance(session.body.position, a.plan.sockets[1])
-                        .total_cmp(&distance(session.body.position, b.plan.sockets[1]))
-                })
-        });
-    let blocked = session.observer.is_some() || session.inventory.open || touch.menu_open;
+    let focused = focused(&session, &world.0);
+    let (pause, map, console, market, travel) = modals;
+    let blocked = session.observer.is_some()
+        || session.help
+        || session.inspector
+        || session.inventory.open
+        || touch.menu_open
+        || pause.open
+        || pause.input_blocked
+        || map.open
+        || map.input_blocked
+        || console.input_blocked
+        || market.open
+        || market.input_blocked
+        || travel.open()
+        || travel.input_blocked;
     for mut n in &mut card {
         n.display = if focused.is_some() && !blocked {
             Display::Flex
@@ -572,15 +795,15 @@ pub(crate) fn update(
             } else if hold.is_some() && touch.enabled {
                 "Use: place · Return: put back"
             } else if hold.is_some() {
-                "T: place · Backspace: return"
+                "T: place · Backspace: return · J: show me"
             } else if touch.enabled && a.plan.kind == ActivityKind::ShapeStones {
                 "Use: turn · Hint: next piece"
             } else if touch.enabled {
                 "Use: take / place · Hint"
             } else if a.plan.kind == ActivityKind::ShapeStones {
-                "T: turn · Y: hint"
+                "T: turn · Y: hint · J: show me"
             } else {
-                "T: take / place · Y: hint"
+                "T: take / place · Y: hint · J: show me"
             };
             if text.0 != s {
                 text.0 = s.into();
@@ -651,9 +874,247 @@ pub(crate) fn update(
     }
 }
 
+#[allow(clippy::type_complexity)]
+pub(crate) fn update_demo(
+    session: Res<Session>,
+    world: Res<VoxelWorld>,
+    mut scene: ResMut<Scene>,
+    time: Res<Time>,
+    mut stage: Query<
+        &mut Node,
+        (
+            With<DemoStage>,
+            Without<DemoObject>,
+            Without<DemoDestination>,
+        ),
+    >,
+    mut object: Query<
+        (&mut Node, &mut ImageNode),
+        (
+            With<DemoObject>,
+            Without<DemoStage>,
+            Without<DemoDestination>,
+        ),
+    >,
+    mut destination: Query<
+        (&mut ImageNode, &mut BorderColor),
+        (With<DemoDestination>, Without<DemoObject>),
+    >,
+) {
+    let current = focused(&session, &world.0);
+    let valid = scene.demonstration.as_ref().is_some_and(|demo| {
+        current.is_some_and(|a| a.plan.id == demo.id && a.revision == demo.revision && a.available)
+    });
+    if !valid {
+        scene.demonstration = None;
+    }
+    let frame = scene
+        .demonstration
+        .as_ref()
+        .and_then(|demo| demo.frame(time.elapsed_secs_f64()));
+    for mut n in &mut stage {
+        n.display = if frame.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    let Some(frame) = frame else {
+        scene.demonstration = None;
+        return;
+    };
+    let demo = scene.demonstration.as_ref().unwrap();
+    for (mut n, mut img) in &mut object {
+        n.left = px(frame.x);
+        n.top = px(frame.y);
+        n.width = px(frame.width);
+        img.image = if demo.kind == ActivityKind::SpilledSupplies {
+            scene.supply_pictures[demo.item].clone()
+        } else {
+            scene.symbol_pictures[frame.face].clone()
+        };
+    }
+    for (mut img, mut border) in &mut destination {
+        img.image = if demo.kind == ActivityKind::SpilledSupplies {
+            scene.tray_pictures[demo.item].clone()
+        } else {
+            scene.symbol_pictures[demo.answer as usize].clone()
+        };
+        *border = BorderColor::all(if frame.settled {
+            Color::srgb(0.95, 0.80, 0.40)
+        } else {
+            Color::srgb(0.36, 0.42, 0.37)
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn demonstrations_follow_the_current_missing_or_carried_piece_and_finish_visibly() {
+        let plan = review_plans(&rubblekin_core::world::World::new(42))[0].clone();
+        let mut a = ActivitySnapshot {
+            plan,
+            revision: 3,
+            props: [PropState::Placed, PropState::Held(90), PropState::Home],
+            faces: [0; 3],
+            complete: false,
+            available: true,
+        };
+        let demo = Demonstration::new(&a, 7, 10.).unwrap();
+        assert_eq!(
+            demo.item, 2,
+            "Do not demonstrate taking someone else's prop"
+        );
+        let home = demo.frame(10.).unwrap();
+        let airborne = demo.frame(12.5).unwrap();
+        let placed = demo.frame(15.).unwrap();
+        assert!(airborne.x > home.x && airborne.y < home.y);
+        assert_eq!(placed.x, 126.);
+        assert_eq!(placed.y, 32.);
+        assert!(placed.settled);
+        assert!(demo.frame(17.).is_none());
+        a.props[2] = PropState::Held(7);
+        let demo = Demonstration::new(&a, 7, 0.).unwrap();
+        assert!(demo.carrying);
+        assert_eq!(demo.frame(0.).unwrap().y, 8.);
+        // Replays are pure presentation and leave ownership/completion intact.
+        assert_eq!(a.props[2], PropState::Held(7));
+        assert!(!a.complete);
+    }
+    #[test]
+    fn stone_demonstration_uses_forward_turns_and_keeps_the_real_answer() {
+        let mut plan = review_plans(&rubblekin_core::world::World::new(42))[1].clone();
+        plan.answer = [0, 1, 2];
+        let a = ActivitySnapshot {
+            plan,
+            revision: 0,
+            props: [PropState::Home; 3],
+            faces: [0, 2, 2],
+            complete: false,
+            available: true,
+        };
+        let demo = Demonstration::new(&a, 7, 0.).unwrap();
+        assert_eq!(demo.item, 1);
+        assert_eq!(demo.frame(0.).unwrap().face, 2);
+        assert_eq!(demo.frame(1.5).unwrap().face, 0);
+        assert_eq!(demo.frame(3.).unwrap().face, 1);
+        assert!(demo.frame(3.).unwrap().settled);
+        assert_eq!(a.faces, [0, 2, 2]);
+    }
+    #[test]
+    fn replay_panel_closes_when_another_player_changes_progress_or_the_player_leaves() {
+        let (world, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(rubblekin_core::protocol::SessionMode::Player),
+            "demo".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            rubblekin_core::protocol::SessionMode::Player,
+        )
+        .unwrap();
+        let plan = review_plans(&world)[0].clone();
+        session.body.position = plan.objects[0];
+        session.activities = vec![ActivitySnapshot {
+            plan,
+            revision: 0,
+            props: [PropState::Home; 3],
+            faces: [0; 3],
+            complete: false,
+            available: true,
+        }];
+        let mut app = App::new();
+        app.insert_resource(session)
+            .insert_resource(VoxelWorld(world))
+            .init_resource::<Time>()
+            .init_resource::<TouchControls>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<Font>>()
+            .add_systems(Startup, setup)
+            .add_systems(Update, update_demo);
+        app.update();
+        for leave in [false, true] {
+            let s = app.world().resource::<Session>();
+            let demo = Demonstration::new(&s.activities[0], s.id, 0.).unwrap();
+            app.world_mut().resource_mut::<Scene>().demonstration = Some(demo);
+            app.world_mut().run_schedule(Update);
+            let mut stage = app.world_mut().query_filtered::<&Node, With<DemoStage>>();
+            assert_eq!(stage.single(app.world()).unwrap().display, Display::Flex);
+            if leave {
+                app.world_mut().resource_mut::<Session>().body.position = [1000.; 3];
+            } else {
+                app.world_mut().resource_mut::<Session>().activities[0].revision += 1;
+            }
+            app.world_mut().run_schedule(Update);
+            assert!(app.world().resource::<Scene>().demonstration.is_none());
+            assert_eq!(stage.single(app.world()).unwrap().display, Display::None);
+        }
+    }
+    #[test]
+    fn wrong_tray_reply_teaches_the_current_carried_match_without_replaying_success_or_broadcasts()
+    {
+        let (world, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(rubblekin_core::protocol::SessionMode::Player),
+            "feedback".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            rubblekin_core::protocol::SessionMode::Player,
+        )
+        .unwrap();
+        let plan = review_plans(&world)[0].clone();
+        session.body.position = plan.sockets[1];
+        session.activities = vec![ActivitySnapshot {
+            plan: plan.clone(),
+            revision: 7,
+            props: [
+                PropState::Held(session.id),
+                PropState::Home,
+                PropState::Home,
+            ],
+            faces: [0; 3],
+            complete: false,
+            available: true,
+        }];
+        let mut app = App::new();
+        app.insert_resource(session)
+            .insert_resource(VoxelWorld(world))
+            .init_resource::<TouchControls>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<Font>>()
+            .add_systems(Startup, setup);
+        app.update();
+        let session = app.world_mut().remove_resource::<Session>().unwrap();
+        let target = Target {
+            id: plan.id,
+            revision: 6,
+            action: ActivityAction::Place(1),
+            position: plan.sockets[1],
+        };
+        let mut scene = app.world_mut().resource_mut::<Scene>();
+        scene.pending = Some((20, 0., target));
+        scene.reply(0, false, &session, 1.);
+        assert!(scene.pending.is_some());
+        assert!(scene.demonstration.is_none());
+        scene.reply(20, false, &session, 2.);
+        let demo = scene.demonstration.as_ref().unwrap();
+        assert_eq!(demo.item, 0);
+        assert_eq!(demo.revision, 7);
+        assert!(demo.carrying);
+        assert_eq!(scene.hint_until, 10.);
+        assert!(scene.pending.is_none());
+        scene.demonstration = None;
+        scene.reply(20, false, &session, 3.);
+        assert!(scene.demonstration.is_none());
+        scene.pending = Some((21, 3., target));
+        scene.reply(21, true, &session, 4.);
+        assert!(scene.demonstration.is_none());
+        assert!(scene.pending.is_none());
+        assert_eq!(session.activities[0].props[0], PropState::Held(session.id));
+    }
     #[test]
     fn pictures_use_distinct_model_silhouettes_and_have_visible_pixels() {
         let supplies: Vec<_> = (0..3)

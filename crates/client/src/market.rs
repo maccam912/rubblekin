@@ -45,6 +45,7 @@ pub(crate) struct MarketPanel {
     last_refresh: f64,
     gesture: Option<Gesture>,
     focused: Option<Action>,
+    pub(crate) completed_delivery: Option<rubblekin_core::economy::DeliveryContract>,
 }
 
 impl Default for MarketPanel {
@@ -68,11 +69,26 @@ impl Default for MarketPanel {
             last_refresh: f64::NEG_INFINITY,
             gesture: None,
             focused: None,
+            completed_delivery: None,
         }
     }
 }
 
 impl MarketPanel {
+    pub(crate) fn delivery(&self) -> Option<&rubblekin_core::economy::DeliveryContract> {
+        self.ledger.as_ref()?.delivery.as_ref()
+    }
+    pub(crate) fn picture_offer(
+        &self,
+        session: &Session,
+        world: &VoxelWorld,
+    ) -> Option<&rubblekin_core::economy::DeliveryContract> {
+        self.delivery().or_else(|| {
+            self.available_market(nearby_market(session, world))?
+                .delivery_offer
+                .as_ref()
+        })
+    }
     pub fn clear(&mut self) {
         *self = Self::default();
     }
@@ -85,6 +101,18 @@ impl MarketPanel {
         notice: String,
         accepted: bool,
     ) {
+        if accepted
+            && self
+                .pending
+                .is_some_and(|(id, _, mutation)| id == request_id && mutation)
+            && let Some(old) = &self.ledger
+            && let Some(job) = &old.delivery
+            && ledger.delivery.is_none()
+            && ledger.revision > old.revision
+            && ledger.coins.checked_sub(old.coins) == Some(job.reward)
+        {
+            self.completed_delivery = Some(job.clone());
+        }
         let current = self
             .ledger
             .as_ref()
@@ -514,6 +542,7 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                 border_radius: BorderRadius::all(px(9)), ..default() },
                 BackgroundColor(Color::srgb(0.08, 0.15, 0.14))))
                 .with_children(|panel| {
+                    crate::tutorials::panel(panel, &font, crate::tutorials::Context::Market);
                     panel.spawn((Label::Title, Text::new("Cargo & work"), TextFont::from_font_size(24.).with_font(font.clone()),
                         TextColor(Color::srgb(0.95, 0.83, 0.56)), Node { flex_shrink: 0., ..default() }));
                     panel.spawn((Label::Wallet, Text::new("Loading your cargo…"), TextFont::from_font_size(18.).with_font(font.clone()),
@@ -528,6 +557,22 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         flex_direction: FlexDirection::Column, row_gap: px(10),
                         overflow: Overflow::scroll_y(), ..default()
                     })).with_children(|body| {
+                        body.spawn((crate::parcels::MarketPictures, Node {
+                            display: Display::None, column_gap: px(8), align_items: AlignItems::Center,
+                            flex_shrink: 0., ..default()
+                        })).with_children(crate::parcels::picture_row);
+                        body.spawn((Label::Job, Text::new(""), TextFont::from_font_size(17.).with_font(font.clone()),
+                            TextColor(Color::srgb(0.95, 0.85, 0.62)), Node { flex_shrink: 0., ..default() }));
+                        body.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
+                            for action in [Action::Accept, Action::Deliver, Action::Return] {
+                                row.spawn(button(action)).with_children(|b| {
+                                    b.spawn((crate::parcels::ParcelButtonIcon(action==Action::Return),ImageNode::default(),Node {
+                                        width:px(36),height:px(36),margin:UiRect::right(px(8)),flex_shrink:0.,..default()
+                                    }));
+                                    b.spawn(label(action,&font));
+                                });
+                            }
+                        });
                         body.spawn((Label::Work, Text::new(""), TextFont::from_font_size(17.).with_font(font.clone()),
                             TextColor(Color::srgb(0.86, 0.92, 0.70)), Node { flex_shrink: 0., ..default() }));
                         body.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
@@ -550,13 +595,6 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                                     }
                                 });
                         }
-                        body.spawn((Label::Job, Text::new(""), TextFont::from_font_size(17.).with_font(font.clone()),
-                            TextColor(Color::srgb(0.95, 0.85, 0.62)), Node { flex_shrink: 0., ..default() }));
-                        body.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
-                            for action in [Action::Accept, Action::Deliver, Action::Return] {
-                                row.spawn(button(action)).with_child(label(action, &font));
-                            }
-                        });
                     });
                     panel.spawn((Text::new("Scroll / swipe for more · Tab / arrows: select · Enter: use · B / Esc: close"),
                         TextFont::from_font_size(14.).with_font(font), TextColor(Color::srgb(0.66, 0.77, 0.71)),
@@ -690,6 +728,26 @@ pub(crate) fn read(
     }
     let nearby = nearby_market(&session, &world);
     if !was_open {
+        if !session.help
+            && !session.inspector
+            && (keys.just_pressed(KeyCode::KeyT) || touch.activity)
+            && panel
+                .delivery()
+                .is_some_and(|job| Some(job.destination) == nearby)
+            && !session.activities.iter().any(|a| {
+                a.props
+                    .contains(&rubblekin_core::activities::PropState::Held(session.id))
+            })
+        {
+            touch.activity = false;
+            panel.input_blocked = true;
+            if let Some(message) =
+                panel.request(nearby, MarketAction::Deliver, time.elapsed_secs_f64())
+            {
+                connection.send(message);
+            }
+            return;
+        }
         if keys.just_pressed(KeyCode::KeyB) || touch.market {
             panel.open = true;
             panel.input_blocked = true;
@@ -1165,6 +1223,98 @@ pub(crate) fn refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn receiving_animation_requires_a_matching_confirmed_paid_delivery() {
+        let job = offer();
+        for accepted in [false, true] {
+            for paid in [false, true] {
+                let mut panel = MarketPanel {
+                    ledger: Some(PlayerEconomy {
+                        delivery: Some(job.clone()),
+                        coins: 10,
+                        ..default()
+                    }),
+                    ..default()
+                };
+                panel
+                    .request(Some(job.destination), MarketAction::Deliver, 0.)
+                    .unwrap();
+                let ledger = PlayerEconomy {
+                    revision: 1,
+                    coins: 10 + if paid { job.reward } else { 0 },
+                    ..default()
+                };
+                panel.reply(1, ledger, None, String::new(), accepted);
+                assert_eq!(panel.completed_delivery.is_some(), accepted && paid);
+            }
+        }
+    }
+    #[test]
+    fn contextual_keyboard_and_touch_delivery_send_one_existing_transaction_and_block_competing_input()
+     {
+        use std::io::{BufRead, BufReader};
+        let world = rubblekin_core::world::World::generate(
+            42,
+            rubblekin_core::world::WorldGeneration::GeographyV4,
+        );
+        let job = offer();
+        let position = world
+            .settlements()
+            .unwrap()
+            .villages
+            .iter()
+            .find(|v| v.id == job.destination)
+            .unwrap()
+            .market;
+        for touch_use in [false, true] {
+            let (mut app, window, _, peer) = app();
+            *app.world_mut().resource_mut::<VoxelWorld>() = VoxelWorld(world.clone());
+            app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+            {
+                let mut s = app.world_mut().resource_mut::<Session>();
+                s.body.position = position;
+                s.help = false;
+                s.inspector = false;
+            }
+            {
+                let mut p = app.world_mut().resource_mut::<MarketPanel>();
+                p.open = false;
+                p.ledger = Some(PlayerEconomy {
+                    delivery: Some(job.clone()),
+                    ..default()
+                });
+            }
+            peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).unwrap();
+            if touch_use {
+                app.world_mut().resource_mut::<TouchControls>().activity = true;
+            } else {
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::KeyT);
+            }
+            app.world_mut().run_schedule(Update);
+            line.clear();
+            peer.read_line(&mut line).unwrap();
+            assert!(
+                matches!(serde_json::from_str::<ClientMessage>(&line).unwrap(),ClientMessage::Market {
+                village_id:Some(id),action:MarketAction::Deliver,..} if id==job.destination)
+            );
+            assert!(app.world().resource::<MarketPanel>().input_blocked);
+            assert!(!app.world().resource::<MarketPanel>().open);
+            assert!(!app.world().resource::<TouchControls>().activity);
+            // Held/repeated input while awaiting confirmation does not send again.
+            app.world_mut().run_schedule(Update);
+            peer.get_mut()
+                .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+                .unwrap();
+            line.clear();
+            assert!(peer.read_line(&mut line).is_err());
+        }
+    }
     use rubblekin_core::{
         economy::{DeliveryContract, MarketGood, WorkOffer, WorkProgress, WorkSite},
         protocol::SessionMode,

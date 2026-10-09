@@ -4,6 +4,7 @@ use rubblekin_core::world::{Block, BlockPos};
 
 fn snapshot(body: Body, last_input_sequence: u64) -> PlayerSnapshot {
     PlayerSnapshot {
+        parcel_destination: None,
         glider_ride: None,
         gliding: false,
         id: 1,
