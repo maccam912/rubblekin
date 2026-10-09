@@ -17,7 +17,7 @@ use crate::{
     villages::VillageLife,
 };
 
-const SAVE_VERSION: u32 = 8;
+const SAVE_VERSION: u32 = 9;
 pub(crate) const MAX_EDITS: usize = 100_000;
 
 /// The sidecar remains on disk; this guard releases its OS lock on drop.
@@ -63,6 +63,8 @@ pub(crate) fn lock_save(path: &Path) -> io::Result<SaveLock> {
 
 #[derive(Serialize, Deserialize)]
 struct Save {
+    #[serde(default)]
+    activities: Option<crate::activities::Activities>,
     version: u32,
     seed: u32,
     #[serde(default)]
@@ -81,6 +83,7 @@ struct Save {
 }
 
 pub(crate) struct Simulation {
+    pub activities: crate::activities::Activities,
     pub gliders: crate::gliders::GliderService,
     pub world: World,
     pub npc: Forager,
@@ -98,6 +101,7 @@ impl Simulation {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let world = World::generate(seed, generation);
                 return Ok(Self {
+                    activities: crate::activities::Activities::new(&world),
                     gliders: crate::gliders::GliderService::new(&world),
                     ecology: crate::ecology::Ecology::new(&world),
                     npc: Forager::new(&world),
@@ -119,7 +123,7 @@ impl Simulation {
                 path.display()
             ))
         })?;
-        if ![1, 2, 3, 4, 5, 6, 7, SAVE_VERSION].contains(&save.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, 8, SAVE_VERSION].contains(&save.version) {
             return Err(invalid(format!(
                 "Unsupported save version {}",
                 save.version
@@ -213,7 +217,18 @@ impl Simulation {
                 ));
             }
         };
+        let mut activities = match save.activities {
+            Some(activities) if activities.validate(&world, &profiles) => activities,
+            None if save.version < 9 => crate::activities::Activities::new(&world),
+            _ => {
+                return Err(invalid(
+                    "Invalid or missing activity progress; original save left untouched",
+                ));
+            }
+        };
+        activities.recover();
         Ok(Self {
+            activities,
             gliders: crate::gliders::GliderService::new(&world),
             ecology,
             world,
@@ -248,6 +263,7 @@ impl Simulation {
                 .truncate(true)
                 .open(&temporary)?;
             let save = Save {
+                activities: Some(self.activities.clone()),
                 version: SAVE_VERSION,
                 seed: self.world.seed,
                 generation: Some(self.world.generation()),
@@ -561,6 +577,7 @@ mod tests {
         }
         let world = World::new(42);
         let save = Save {
+            activities: Some(crate::activities::Activities::default()),
             version: SAVE_VERSION,
             seed: world.seed,
             generation: Some(world.generation()),
@@ -591,6 +608,7 @@ mod tests {
         let npc = Forager::new(&world);
         let npc_position = npc.snapshot.position;
         let sim = Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
@@ -642,6 +660,7 @@ mod tests {
         world.set_block(cut, Block::Air).unwrap();
         world.set_block(placed, Block::Brick).unwrap();
         let sim = Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
@@ -723,6 +742,7 @@ mod tests {
         let path = TestPath::new();
         let world = World::new(42);
         let sim = Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),

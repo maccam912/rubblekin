@@ -3679,6 +3679,7 @@ mod tests {
             std::process::id()
         ));
         let simulation = crate::persistence::Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
@@ -3835,6 +3836,7 @@ mod tests {
                 std::process::id()
             ));
             let simulation = crate::persistence::Simulation {
+                activities: crate::activities::Activities::default(),
                 gliders: crate::gliders::GliderService::default(),
                 profiles: Default::default(),
                 consumed_resource_cells: Vec::new(),
@@ -3928,6 +3930,7 @@ mod tests {
             std::process::id()
         ));
         let simulation = crate::persistence::Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
@@ -4629,6 +4632,7 @@ mod tests {
                 .as_nanos()
         ));
         let sim = Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),

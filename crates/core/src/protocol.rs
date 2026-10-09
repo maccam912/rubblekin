@@ -7,8 +7,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-// Whip carriages and personal gliding require matching rebuilt peers.
-pub const PROTOCOL_VERSION: u32 = 23;
+// Composed POI geometry and visual activity state require matching rebuilt peers.
+pub const PROTOCOL_VERSION: u32 = 24;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -65,6 +65,12 @@ pub enum ClientMessage {
     },
     Glider {
         action: crate::gliders::GliderAction,
+    },
+    Activity {
+        request_id: u64,
+        activity_id: u64,
+        revision: u64,
+        action: crate::activities::ActivityAction,
     },
 }
 
@@ -134,6 +140,12 @@ pub enum ServerMessage {
     WildlifeState {
         animals: Vec<crate::wildlife::WildlifeSnapshot>,
         habitats: Vec<crate::wildlife::HabitatSnapshot>,
+    },
+    ActivityState {
+        request_id: u64,
+        activities: Vec<crate::activities::ActivitySnapshot>,
+        notice: String,
+        accepted: bool,
     },
 }
 

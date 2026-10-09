@@ -14,6 +14,7 @@ impl Fixture {
         let world = World::new(42);
         let network = AirshipNetwork::new(&world);
         let sim = Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
@@ -545,6 +546,7 @@ fn named_airship_teleports_attach_inside_rotated_deck_and_follow_its_fast_motion
     let world = World::generate(42, WorldGeneration::GeographyV3);
     f.network = AirshipNetwork::new(&world);
     f.sim = Simulation {
+        activities: crate::activities::Activities::default(),
         gliders: crate::gliders::GliderService::default(),
         profiles: Default::default(),
         consumed_resource_cells: Vec::new(),

@@ -20,6 +20,9 @@ const GEOGRAPHY_RADIUS: i32 = 32768;
 const GEOGRAPHY_MIN_Y: i32 = -1024;
 const GEOGRAPHY_MAX_Y: i32 = 8192;
 const COLUMN_CACHE_LIMIT: usize = 131_072;
+#[cfg(test)]
+#[path = "world_poi_tests.rs"]
+mod poi_tests;
 
 /// Saved terrain rules. Missing fields in old saves retain the original valley.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +98,7 @@ struct GeographicColumn {
     leaves: Option<(i32, i32)>,
     construction: Option<ConstructionColumn>,
     deposit: Option<(ResourceKind, i32, i32)>,
+    site: Option<crate::poi::SiteColumn>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +186,7 @@ impl GeneratedTree {
 impl GeographicColumn {
     fn top(self) -> i32 {
         self.height
+            .max(self.site.map_or(self.height, |site| site.top()))
             .max(self.wood.map_or(self.height, |(_, top)| top))
             .max(self.leaves.map_or(self.height, |(_, top)| top))
             .max(
@@ -294,6 +299,7 @@ impl World {
                 if generation == WorldGeneration::GeographyV6 {
                     plan.add_exploration_sites(&world, &transit);
                     plan.add_wilderness_sites(&world, &transit);
+                    plan.add_composed_sites(&world, &transit);
                 }
             }
             // Landing selection sampled columns before its clearings and sites.
@@ -553,6 +559,7 @@ impl World {
             .map_or(self.min_y() as f32 * CELL_SIZE, |column| {
                 (column
                     .height
+                    .max(column.site.map_or(column.height, |s| s.top()))
                     .max(column.construction.map_or(column.height, |c| c.top))
                     + 1) as f32
                     * CELL_SIZE
@@ -737,6 +744,9 @@ impl World {
         }
         if self.geography.is_some() {
             let column = self.geographic_column(position.x, position.z).unwrap();
+            if let Some(block) = column.site.and_then(|site| site.block(position.y)) {
+                return block;
+            }
             if let Some(block) = column
                 .construction
                 .and_then(|asset| asset.block(position.y))
@@ -856,6 +866,7 @@ impl World {
             leaves: None,
             construction: None,
             deposit: None,
+            site: None,
         };
 
         let mut cleared = false;
@@ -865,6 +876,7 @@ impl World {
             column.surface = planned.surface;
             column.construction = planned.construction;
             column.deposit = planned.deposit;
+            column.site = planned.site;
             cleared = planned.clear;
         }
         // Query only the tree owned by this twelve-meter square. Every crown

@@ -1,3 +1,4 @@
+mod activities;
 mod admin_console;
 mod airship_mesh;
 #[cfg(test)]
@@ -78,6 +79,7 @@ pub struct VoxelWorld(pub GameWorld);
 
 #[derive(Resource)]
 pub struct Session {
+    pub activities: Vec<rubblekin_core::activities::ActivitySnapshot>,
     pub id: u64,
     pub body: Body,
     pub yaw: f32,
@@ -439,6 +441,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     world_map::setup,
                     market::setup,
                     inventory::setup,
+                    activities::setup,
                 )
                     .chain()
                     .run_if(resource_added::<Session>),
@@ -454,6 +457,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         world_map::read,
                         airships::advance_clock,
                         gliders::carry,
+                        activities::read,
                         controls,
                         graphics::apply_settings,
                         camera,
@@ -467,7 +471,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         work_animation::animate,
                         work_tools::update,
                         wildlife::update,
-                        forage::update,
+                        (forage::update, activities::update).chain(),
                         (gliders::update_scene, gliders::animate_whips).chain(),
                         crops::update_crops,
                         inspection::update,
@@ -591,6 +595,7 @@ fn receive_network(
     mut conversation: ResMut<airships::PilotConversation>,
     mut console: Option<ResMut<admin_console::AdminConsole>>,
     mut market: Option<ResMut<market::MarketPanel>>,
+    mut activities_scene: Option<ResMut<activities::Scene>>,
     mut follows: Query<&mut CameraFollow, With<GameCamera>>,
 ) {
     let mut latest_authoritative = None;
@@ -619,6 +624,23 @@ fn receive_network(
                 session
                     .airship_clock
                     .observe(world_time, time.elapsed_secs_f64());
+            }
+            ServerMessage::ActivityState {
+                request_id,
+                activities,
+                notice,
+                ..
+            } => {
+                session.activities = activities;
+                if let Some(scene) = &mut activities_scene
+                    && scene.pending.is_some_and(|(id, _)| id == request_id)
+                {
+                    scene.pending = None;
+                }
+                if !notice.is_empty() {
+                    session.status = notice;
+                    session.status_until = time.elapsed_secs_f64() + 4.;
+                }
             }
             ServerMessage::WildlifeState { animals, habitats } => {
                 session.wildlife = animals;

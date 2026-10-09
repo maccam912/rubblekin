@@ -150,6 +150,7 @@ pub(super) struct MapLabel(usize);
 pub(super) enum MapMarker {
     Town(usize),
     Roadside(usize),
+    Composed(usize),
     You,
     Explorer(usize),
     Spawn,
@@ -350,6 +351,28 @@ pub(crate) fn setup(
                         },
                     ))
                     .with_children(|canvas| {
+                        if let Some(plan) = world.0.settlements() {
+                            for (index, site) in plan.composed_sites.iter().enumerate() {
+                                canvas
+                                    .spawn((
+                                        MapMarker::Composed(index),
+                                        ZIndex(1),
+                                        Node {
+                                            position_type: PositionType::Absolute,
+                                            width: px(16),
+                                            height: px(16),
+                                            align_items: AlignItems::Center,
+                                            justify_content: JustifyContent::Center,
+                                            border_radius: BorderRadius::all(px(3)),
+                                            border: UiRect::all(px(1)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgb(0.23, 0.15, 0.28)),
+                                        BorderColor::all(Color::srgb(0.83, 0.65, 0.92)),
+                                    ))
+                                    .with_child(label(site.arrangement.symbol(), &font, 11.));
+                            }
+                        }
                         for (index, site) in roadside.iter().enumerate() {
                             canvas
                                 .spawn((
@@ -825,6 +848,14 @@ pub(crate) fn refresh(
         }
         if let Some(marker) = marker {
             let (point, radius) = match marker {
+                MapMarker::Composed(index) => (
+                    world
+                        .0
+                        .settlements()
+                        .and_then(|p| p.composed_sites.get(*index))
+                        .and_then(|s| map.point(map_uv(&world.0, s.entrance()), side)),
+                    8.,
+                ),
                 MapMarker::Town(index) => (points[*index], 10.),
                 MapMarker::Roadside(index) => (
                     roadside.get(*index).and_then(|site| {
@@ -855,7 +886,7 @@ pub(crate) fn refresh(
                     )
                 }
             };
-            if matches!(marker, MapMarker::Roadside(_)) {
+            if matches!(marker, MapMarker::Roadside(_) | MapMarker::Composed(_)) {
                 node.width = px(radius * 2.0);
                 node.height = px(radius * 2.0);
             }
@@ -920,14 +951,23 @@ pub(crate) fn refresh(
                 you[2]
             );
             if side >= 520.
-                && let Some(site) = roadside.iter().min_by(|a, b| {
-                    let distance = |p: [f32; 3]| (p[0] - you[0]).hypot(p[2] - you[2]);
-                    distance(a.building.entrance()).total_cmp(&distance(b.building.entrance()))
-                })
+                && let Some((name, p)) = roadside
+                    .iter()
+                    .map(|s| (roadside_name(s.building.kind), s.building.entrance()))
+                    .chain(
+                        world
+                            .0
+                            .settlements()
+                            .into_iter()
+                            .flat_map(|p| &p.composed_sites)
+                            .map(|s| (s.arrangement.name(), s.entrance())),
+                    )
+                    .min_by(|a, b| {
+                        let distance = |p: [f32; 3]| (p[0] - you[0]).hypot(p[2] - you[2]);
+                        distance(a.1).total_cmp(&distance(b.1))
+                    })
             {
-                let p = site.building.entrance();
                 let distance = (p[0] - you[0]).hypot(p[2] - you[2]);
-                let name = roadside_name(site.building.kind);
                 text.0
                     .push_str(&format!("\nNearest {name}: {:.1} km", distance / 1000.));
             }
@@ -972,7 +1012,7 @@ pub(crate) fn refresh(
                 )
             } else if discoveries {
                 format!(
-                    "{span} · A arch · S stone · F trunk · T camp · O tower · K kiln · R ruin · P shelter · Q quarry\nC cairn · B bench · W waycart · V survey · D snag · H split rock · E viewing deck | Drag/scroll · C/R: center/world"
+                    "{span} · A arches/landforms · S stone · F trunk · T camp · O tower · K kiln · R ruin · P shelter · Q workings · X crossing\nC cairn · B bench · W waycart · V survey · D snag · H split rock · E viewing deck | Drag/scroll · C/R: center/world"
                 )
             } else if extended && compact {
                 format!(

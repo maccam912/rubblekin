@@ -14,6 +14,7 @@ impl Fixture {
         let world = World::generate(42, WorldGeneration::GeographyV3);
         let network = AirshipNetwork::new(&world);
         let sim = Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),

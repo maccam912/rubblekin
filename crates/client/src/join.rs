@@ -1214,6 +1214,7 @@ pub(crate) fn session_from_welcome(
     Ok((
         world,
         Session {
+            activities: Vec::new(),
             id: session_id,
             body,
             observer,

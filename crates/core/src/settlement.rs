@@ -9,6 +9,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 #[path = "settlement_exploration.rs"]
 mod exploration;
+#[path = "settlement_poi.rs"]
+mod poi;
 #[path = "settlement_scenic.rs"]
 mod scenic;
 #[path = "settlement_wilderness.rs"]
@@ -216,6 +218,7 @@ enum Feature {
     RoadsideBuilding(usize),
     RoadsidePath(usize, usize),
     LandingClearance(usize),
+    ComposedSite(usize),
 }
 /// A generated discovery, independent of village jobs and transit.
 /// The historical name also covers wilderness sites with no connecting path.
@@ -231,6 +234,7 @@ pub struct SettlementPlan {
     pub trails: Vec<Trail>,
     pub resources: Vec<ResourceDeposit>,
     pub roadside_landmarks: Vec<RoadsideLandmark>,
+    pub composed_sites: Vec<crate::poi::SitePlan>,
     landing_clearances: Vec<[f32; 4]>,
     buckets: HashMap<(i32, i32), Vec<Feature>>,
 }
@@ -259,6 +263,7 @@ pub(crate) struct PlannedColumn {
     pub clear: bool,
     pub construction: Option<ConstructionColumn>,
     pub deposit: Option<(ResourceKind, i32, i32)>,
+    pub site: Option<crate::poi::SiteColumn>,
 }
 #[derive(Clone)]
 struct Candidate {
@@ -319,6 +324,7 @@ impl SettlementPlan {
             trails: Vec::new(),
             resources,
             roadside_landmarks: Vec::new(),
+            composed_sites: Vec::new(),
             landing_clearances: Vec::new(),
             buckets: HashMap::new(),
         };
@@ -559,6 +565,16 @@ impl SettlementPlan {
 
     fn build_index(&mut self) {
         let mut bounds = Vec::new();
+        for (index, site) in self.composed_sites.iter().enumerate() {
+            let [x0, z0, x1, z1] = site.bounds;
+            bounds.push((
+                Feature::ComposedSite(index),
+                x0 as f32 * CELL_SIZE,
+                z0 as f32 * CELL_SIZE,
+                x1 as f32 * CELL_SIZE,
+                z1 as f32 * CELL_SIZE,
+            ));
+        }
         for (index, [x0, z0, x1, z1]) in self.landing_clearances.iter().copied().enumerate() {
             bounds.push((
                 Feature::LandingClearance(index),
@@ -645,6 +661,7 @@ impl SettlementPlan {
             return false;
         };
         features.iter().any(|f| match *f {
+            Feature::ComposedSite(index) => self.composed_sites[index].clears_tree(x, z, radius),
             Feature::Building(..) | Feature::RoadsideBuilding(_) => {
                 let b = self.feature_building(*f).unwrap();
                 let [w, _, d] = b.dimensions();
@@ -694,6 +711,7 @@ impl SettlementPlan {
             clear: false,
             construction: None,
             deposit: None,
+            site: None,
         };
         let Some(features) = self
             .buckets
@@ -916,6 +934,17 @@ impl SettlementPlan {
                     }
                 }
                 _ => {}
+            }
+        }
+        for feature in features {
+            if let Feature::ComposedSite(index) = *feature {
+                let (clear, column) =
+                    self.composed_sites[index].column(x, z, &mut out.height, &mut out.surface);
+                out.clear |= clear;
+                out.site = column;
+                if clear {
+                    out.deposit = None;
+                }
             }
         }
         out

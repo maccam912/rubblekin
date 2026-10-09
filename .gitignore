@@ -13,6 +13,11 @@ player-profiles.json
 
 # Keep only the curated screenshots linked from the project documentation.
 /artifacts/*
+!/artifacts/poi-compositions.svg
+!/artifacts/poi-compositions-unlabelled.svg
+!/artifacts/poi-compositions.json
+!/artifacts/poi-crossing-under-native.png
+!/artifacts/poi-quarry-native.png
 !/artifacts/whip-station-touch.png
 !/artifacts/whip-canopy-touch.png
 !/artifacts/whip-explorers-map.png

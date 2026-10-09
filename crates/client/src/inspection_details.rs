@@ -149,6 +149,18 @@ fn block_text(world: &GameWorld, session: &Session, position: BlockPos) -> Strin
         return format!("{details}\n\nThe inspected block was removed.");
     }
     let mut value = details.clone();
+    if let Some(site) = world.settlements().and_then(|plan| {
+        plan.composed_sites
+            .iter()
+            .find(|site| site.owns_block(position))
+    }) {
+        return format!(
+            "{}\nIn the wilderness, away from trails\n\n{}\n\n{}",
+            site.arrangement.name(),
+            site.arrangement.description(),
+            details
+        );
+    }
     if matches!(block, Block::Wood | Block::Leaves)
         && let Some(tree) = world.tree_at(position.x.div_euclid(24), position.z.div_euclid(24))
     {

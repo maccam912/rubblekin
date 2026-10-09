@@ -1,6 +1,7 @@
 //! A direct, authoritative prototype server. Message handling, validation and
 //! simulation are intentionally visible in one place; there is no event bus.
 
+mod activities;
 mod admin_commands;
 mod airships;
 mod ecology;
@@ -200,6 +201,8 @@ struct Connection {
     mode: Option<SessionMode>,
     player: Option<PlayerSnapshot>,
     profile_id: Option<String>,
+    last_activity_request: Option<Instant>,
+    last_activity_id: Option<u64>,
     last_glider_request: Option<Instant>,
     last_market_request: Option<Instant>,
     last_market_view: Option<Instant>,
@@ -230,6 +233,8 @@ impl Connection {
             mode: None,
             player: None,
             profile_id: None,
+            last_activity_request: None,
+            last_activity_id: None,
             last_glider_request: None,
             last_market_request: None,
             last_market_view: None,
@@ -466,7 +471,7 @@ fn run(
         for connection in connections.values_mut() {
             connection.input_credit = connection.input_credit.min(MAX_INPUT_CREDIT);
         }
-        save_disconnected_players(&connections, &mut sim, config)?;
+        save_disconnected_players(&mut connections, &mut sim, config)?;
         connections.retain(|_, client| !client.dead);
         let next_world_time = sim.world_time + DT as f64;
         sim.villages.sync_airship_riders(&airships, next_world_time);
@@ -565,7 +570,7 @@ fn run(
                 connection.dead = true;
             }
         }
-        save_disconnected_players(&connections, &mut sim, config)?;
+        save_disconnected_players(&mut connections, &mut sim, config)?;
         connections.retain(|_, client| !client.dead);
         let elapsed = tick_started.elapsed();
         timing_ticks += 1;
@@ -648,16 +653,21 @@ fn checkpoint_players(connections: &BTreeMap<u64, Connection>, sim: &mut Simulat
 }
 
 fn save_disconnected_players(
-    connections: &BTreeMap<u64, Connection>,
+    connections: &mut BTreeMap<u64, Connection>,
     sim: &mut Simulation,
     config: &ServerConfig,
 ) -> io::Result<()> {
-    if connections
-        .values()
-        .any(|c| c.dead && c.profile_id.is_some() && c.player.is_some())
+    let activity_changed = activities::release_disconnected(connections, sim);
+    if activity_changed
+        || connections
+            .values()
+            .any(|c| c.dead && c.profile_id.is_some() && c.player.is_some())
     {
         checkpoint_players(connections, sim);
         sim.save(&config.save_path)?;
+        if activity_changed {
+            activities::broadcast(connections, sim);
+        }
     }
     Ok(())
 }
@@ -912,6 +922,7 @@ fn handle_message(
                 animals: sim.ecology.snapshots(),
                 habitats: sim.ecology.habitat_snapshots(),
             });
+        activities::send(connections, sim, id, 0, String::new(), true);
         if profile_id.is_some() {
             send_market_state(connections, sim, id, 0, None, String::new(), true);
             send_work_state(connections, sim, id, 0, String::new(), true);
@@ -938,7 +949,8 @@ fn handle_message(
             | ClientMessage::Glider { .. }
             | ClientMessage::TalkToPilot { .. }
             | ClientMessage::Market { .. }
-            | ClientMessage::Work { .. } => {
+            | ClientMessage::Work { .. }
+            | ClientMessage::Activity { .. } => {
                 connections
                     .get_mut(&id)
                     .unwrap()
@@ -967,6 +979,23 @@ fn handle_message(
         }
     }
     match message {
+        ClientMessage::Activity {
+            request_id,
+            activity_id,
+            revision,
+            action,
+        } => {
+            activities::handle(
+                id,
+                request_id,
+                activity_id,
+                revision,
+                action,
+                connections,
+                sim,
+                config,
+            )?;
+        }
         ClientMessage::Glider { action } => {
             let c = connections.get_mut(&id).unwrap();
             let now = Instant::now();
@@ -1147,6 +1176,7 @@ fn handle_message(
                     edit: BlockEdit { position, block },
                 },
             );
+            activities::broadcast(connections, sim);
         }
         ClientMessage::Admin { action } => {
             let result = if !connections[&id].admin_enabled(config) {
@@ -1683,6 +1713,7 @@ mod tests {
         connection.profile_id = Some(profile.clone());
         let mut connections = BTreeMap::from([(1, connection)]);
         let mut sim = Simulation {
+            activities: crate::activities::Activities::default(),
             gliders: crate::gliders::GliderService::default(),
             npc: npc::Forager::new(&world),
             villages: villages::VillageLife::new(&world),

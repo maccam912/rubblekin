@@ -161,7 +161,7 @@ pub fn setup_ui(
             (Text::new(format!("{}{}", if observing {
                 "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect aimed target     •     F2   graphics\nV   visit next village     •     M   world map\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
-                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   hotbar slot     •     I   inventory\nF   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   whip station / travel     •     M   world map\nB   cargo, markets & local work\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
+                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   hotbar slot     •     I   inventory\nF   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   whip station / travel     •     M   world map\nB   cargo, markets & local work\nT   activity: take / place / turn · Y   hint\nBackspace   return carried supply\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
             }, if session.can_admin { "\n` / ~   admin commands (help lists commands)" } else { "" })), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
         ],
     ));

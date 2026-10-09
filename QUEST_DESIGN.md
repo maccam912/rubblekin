@@ -1,10 +1,18 @@
 # Rubblekin visual quests and activities
 
-2026-10-08. **Design proposal.** The user requested varied goals, reasons to explore and travel, challenges and puzzles understandable without reading, and a mixture of chosen quests and incidental encounters. Those are confirmed requirements. The mechanics, rewards, difficulty and implementation order below are recommendations for feedback; this request does not authorize gameplay implementation.
+2026-10-08. **Design proposal.** The user requested varied goals, reasons to explore and travel, challenges and puzzles understandable without reading, and a mixture of chosen quests and incidental encounters. Those are confirmed requirements. The mechanics, rewards, difficulty and implementation order below are recommendations for feedback. The October 8 request authorized design; on October 9 the user explicitly asked to begin implementing this document, with POI additions assigned to another chat.
 
 Build a small vocabulary of actions that players learn once and recognize in many situations. Show an unfinished situation, let the player change it, and make the result visible. A missing cart wheel, a picnic with empty places, and a dry garden communicate more than a paragraph asking for resources.
 
 The proposed set has eleven activity families. Some provide purposeful work, some test observation or reasoning, and some make movement and companionship enjoyable. Larger adventures combine two or three families. The user's follow-up explicitly asks to incorporate the [POI design](POI_DESIGN.md): a place's shape, terrain relationship, history and occupants should determine which activity fits it. Most scenery should still be scenery: a beautiful place need not contain a job or reward marker.
+
+## Implementation checkpoint — 2026-10-09
+
+The first playable slice contains spilled supplies and shape stones in a small review area beside the existing starting village (also supported in legacy valleys). Three distinct non-tradable props can be taken and placed in matching trays. Each actual placement pays two coins once, through the existing ledger. A three-piece tree/fish/mountain puzzle starts with one matching piece; turning the others to their visible references completes it. Models generate the supporting picture icons. T / touch Use acts, Backspace / Return puts a carried supply back, and Y / Hint highlights the relevant piece or matching tray. Touch controls, visible carrying and picture progress are implemented.
+
+This is a prototype of shared finite scenes, using the document's persistent-outcome recommendation provisionally while feedback is pending. Completed contributions and puzzle states are saved, and disconnect/restart returns unfinished carried props to their original site without duplicating them. Edited support or access can pause interaction; returning a prop never restores terrain. No activity prop is traded cargo. The first placements use real controller-checked outward/return routes and are saved explicitly; this chat adds no POI geometry. New POI anchors can be integrated after the separate geometry work settles.
+
+The complete eleven-family design is not implemented. Picture parcels, picture expeditions, keepsakes/journal, replayable demonstrations, expressive helpers, varied compositions and island distribution remain next work. The initial art and shared-state behavior need family feedback, especially text-free and muted Low-graphics play. [DESIGN.md](DESIGN.md) records verification and remaining limits.
 
 ## Understanding the goal without reading
 

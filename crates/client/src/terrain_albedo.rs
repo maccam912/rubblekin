@@ -327,6 +327,27 @@ fn paint_settlements(world: &World, grid: MapGrid, data: &mut [u8]) {
     let Some(plan) = world.settlements() else {
         return;
     };
+    for site in &plan.composed_sites {
+        for g in &site.ground {
+            let [x0, z0, x1, z1] = g.bounds.map(|v| v as f32 * CELL_SIZE);
+            paint_rect(
+                data,
+                grid,
+                [x0, z0],
+                [x1 - x0, z1 - z0],
+                rgba_bytes(g.surface.color()),
+            );
+        }
+        for s in &site.solids {
+            paint_rect(
+                data,
+                grid,
+                [s.min.x as f32 * CELL_SIZE, s.min.z as f32 * CELL_SIZE],
+                [s.size[0] as f32 * CELL_SIZE, s.size[2] as f32 * CELL_SIZE],
+                rgba_bytes(s.block.color()),
+            );
+        }
+    }
     for village in &plan.villages {
         for field in &village.fields {
             paint_rect(

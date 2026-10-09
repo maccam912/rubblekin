@@ -25,6 +25,9 @@ pub struct TouchControls {
     pub(crate) build: bool,
     pub(crate) flight: bool,
     pub(crate) inspect: bool,
+    pub(crate) activity: bool,
+    pub(crate) activity_return: bool,
+    pub(crate) activity_hint: bool,
     pub(crate) talk: bool,
     pub(crate) market: bool,
     pub(crate) help: bool,
@@ -49,6 +52,9 @@ enum Action {
     Build,
     Flight,
     Inspect,
+    Activity,
+    ActivityReturn,
+    ActivityHint,
     Talk,
     Market,
     Menu,
@@ -107,6 +113,23 @@ impl Layout {
                         | Action::ZoomOut
                 )
             });
+        }
+        if !menu_open && crate::activities::touch_opportunity(session) && !session.gliding {
+            let s = layout.scale;
+            for (index, action, label) in [
+                (0., Action::Activity, "Use"),
+                (1., Action::ActivityReturn, "Return"),
+                (2., Action::ActivityHint, "Hint"),
+            ] {
+                layout.regions.push(Region {
+                    action,
+                    rect: Rect::from_corners(
+                        Vec2::new(size.x - (328. - index * 80.) * s, 70. * s),
+                        Vec2::new(size.x - (256. - index * 80.) * s, 118. * s),
+                    ),
+                    label: label.into(),
+                });
+            }
         }
         layout
     }
@@ -313,6 +336,9 @@ impl TouchControls {
         self.build = false;
         self.flight = false;
         self.inspect = false;
+        self.activity = false;
+        self.activity_return = false;
+        self.activity_hint = false;
         self.talk = false;
         self.market = false;
         self.help = false;
@@ -329,6 +355,9 @@ impl TouchControls {
             Action::Dig => self.dig = true,
             Action::Build => self.build = true,
             Action::Flight => self.flight = true,
+            Action::Activity => self.activity = true,
+            Action::ActivityReturn => self.activity_return = true,
+            Action::ActivityHint => self.activity_hint = true,
             Action::Talk => self.talk = true,
             Action::Market => self.market = true,
             Action::Inspect => {
@@ -348,6 +377,9 @@ impl TouchControls {
                 self.build = false;
                 self.selected = None;
                 self.palette_page = false;
+                self.activity = false;
+                self.activity_return = false;
+                self.activity_hint = false;
                 self.flight = false;
             }
             _ => {}
@@ -402,6 +434,9 @@ impl TouchControls {
                         .any(|other| other.action == contact.action)
                 {
                     match contact.action {
+                        Action::Activity => self.activity = false,
+                        Action::ActivityReturn => self.activity_return = false,
+                        Action::ActivityHint => self.activity_hint = false,
                         Action::Jump => self.jump = false,
                         Action::Dig => self.dig = false,
                         Action::Build => self.build = false,
@@ -654,6 +689,9 @@ pub fn setup(
         Action::Build,
         Action::Flight,
         Action::Inspect,
+        Action::Activity,
+        Action::ActivityReturn,
+        Action::ActivityHint,
         Action::Talk,
         Action::Market,
         Action::Menu,
@@ -1504,5 +1542,68 @@ mod tests {
             peer.read_line(&mut line).unwrap();
             serde_json::from_str(&line).unwrap()
         }
+    }
+}
+
+#[cfg(test)]
+mod activity_touch_tests {
+    use super::*;
+    #[test]
+    fn activity_buttons_use_the_shared_layout_and_cancel_with_the_contact_or_menu() {
+        let (world, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(rubblekin_core::protocol::SessionMode::Player),
+            "touch activity".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            rubblekin_core::protocol::SessionMode::Player,
+        )
+        .unwrap();
+        let plan = rubblekin_core::activities::review_plans(&world)[0].clone();
+        session.body.position = plan.objects[0];
+        session.activities = vec![rubblekin_core::activities::ActivitySnapshot {
+            plan,
+            revision: 0,
+            props: [rubblekin_core::activities::PropState::Home; 3],
+            faces: [0; 3],
+            complete: false,
+            available: true,
+        }];
+        let layout = Layout::for_session(Vec2::new(840., 400.), &session, false);
+        let region = layout
+            .regions
+            .iter()
+            .find(|r| r.action == Action::Activity)
+            .unwrap();
+        assert!(region.rect.width() >= 48. && region.rect.height() >= 48.);
+        assert_eq!(layout.action(region.rect.center(), false), Action::Activity);
+        let mut input = TouchControls::default();
+        let event = TouchInput {
+            phase: TouchPhase::Started,
+            position: region.rect.center(),
+            force: None,
+            id: 4,
+            window: Entity::PLACEHOLDER,
+        };
+        input.route(&event, &layout);
+        assert!(input.activity);
+        input.route(
+            &TouchInput {
+                phase: TouchPhase::Canceled,
+                ..event
+            },
+            &layout,
+        );
+        assert!(!input.activity);
+        input.press(Action::Activity);
+        input.press(Action::ActivityReturn);
+        input.press(Action::ActivityHint);
+        input.press(Action::Menu);
+        assert!(!input.activity && !input.activity_return && !input.activity_hint);
+        assert!(
+            !Layout::for_session(Vec2::new(840., 400.), &session, true)
+                .regions
+                .iter()
+                .any(|r| r.action == Action::Activity)
+        );
     }
 }

@@ -155,7 +155,7 @@ impl SettlementPlan {
         self.build_index();
     }
 
-    fn away_from_paths(&self, x: f32, z: f32, clearance: f32) -> bool {
+    pub(super) fn away_from_paths(&self, x: f32, z: f32, clearance: f32) -> bool {
         // Reuse the plan's spatial index instead of scanning every metre of
         // every route for each of the island-wide candidates.
         let key = ((x / BUCKET).floor() as i32, (z / BUCKET).floor() as i32);

@@ -39,6 +39,7 @@ pub const GEOGRAPHIC_VIEW_DISTANCE: f32 = 45_000.0;
 const MAX_LOD_TILE_CHUNKS: i32 = 128;
 // Buildings bridge the local voxel square; tree range is a client preference.
 const LOD_BUILDING_DISTANCE: f32 = 128.0;
+const LOD_SITE_DISTANCE: f32 = 900.0;
 const TREE_GRID_METERS: f32 = 12.0;
 
 type ChunkKey = (i32, i32);
@@ -620,6 +621,7 @@ fn prepare_placeholder(world: &World, key: ChunkKey) -> PreparedChunk {
         [None; 4],
         &mut terrain,
         &mut water,
+        world.settlements(),
     );
     add_chunk_tree_proxies(world, key, &surface, &mut terrain);
     add_village_proxies(
@@ -907,6 +909,7 @@ fn landscape_geometry(
             neighbor_steps,
             &mut land,
             &mut water,
+            world.settlements(),
         );
         surfaces.insert((x, z), surface);
     }
@@ -973,6 +976,20 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
         center.0 as f32 * CHUNK_METERS,
         center.1 as f32 * CHUNK_METERS,
     );
+    for site in &plan.composed_sites {
+        let [x0, z0, x1, z1] = site.bounds.map(|v| v as f32 * CELL_SIZE);
+        match clip {
+            ProxyClip::Outside(_)
+                if Vec2::new((x0 + x1) * 0.5, (z0 + z1) * 0.5).distance_squared(camera)
+                    > LOD_SITE_DISTANCE.powi(2) =>
+            {
+                continue;
+            }
+            ProxyClip::Inside([a, b, c, d]) if x1 <= a || x0 >= c || z1 <= b || z0 >= d => continue,
+            _ => {}
+        }
+        add_site_proxy(site, geometry, clip);
+    }
     for building in plan
         .villages
         .iter()
@@ -1028,6 +1045,43 @@ fn add_village_proxies(world: &World, center: ChunkKey, clip: ProxyClip, geometr
                 Block::Brick.color(),
                 clip,
             );
+        }
+    }
+}
+
+fn add_site_proxy(site: &rubblekin_core::poi::SitePlan, geometry: &mut Geometry, clip: ProxyClip) {
+    // Use resolved solids, preserving portals and the missing bridge span.
+    for solid in &site.solids {
+        let base =
+            Vec3::new(solid.min.x as f32, solid.min.y as f32, solid.min.z as f32) * CELL_SIZE;
+        let size = Vec3::from_array(solid.size.map(|v| v as f32 * CELL_SIZE));
+        proxy_cuboid(geometry, base + size * 0.5, size, solid.block.color(), clip);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn composed_proxies_preserve_parts_and_sampled_ground_matches_the_walkable_cut() {
+    let world = World::generate(42, WorldGeneration::GeographyV6);
+    let plan = world.settlements().unwrap();
+    for site in &plan.composed_sites {
+        let mut geometry = Geometry::default();
+        let bounds = site.bounds.map(|v| v as f32 * CELL_SIZE);
+        add_site_proxy(site, &mut geometry, ProxyClip::Inside(bounds));
+        assert_eq!(geometry.positions.len(), site.solids.len() * 24);
+        for p in &geometry.positions {
+            assert!(site.solids.iter().any(|s| {
+                let min = [s.min.x, s.min.y, s.min.z].map(|v| v as f32 * CELL_SIZE);
+                (0..3).all(|i| {
+                    p[i] >= min[i] - 0.001 && p[i] <= min[i] + s.size[i] as f32 * CELL_SIZE + 0.001
+                })
+            }));
+        }
+        for p in &site.route {
+            let vertex = site_surface_vertex(world.geography().unwrap(), p[0], p[2], Some(plan));
+            let x = (p[0] / CELL_SIZE).floor() as i32;
+            let z = (p[2] / CELL_SIZE).floor() as i32;
+            assert_eq!(vertex.0.y, (world.height_at(x, z) + 1) as f32 * CELL_SIZE);
         }
     }
 }
@@ -1678,7 +1732,30 @@ fn surface_vertex(geography: &Geography, x: f32, z: f32) -> SurfaceVertex {
     )
 }
 
-fn stitch_vertex(geo: &Geography, vertex: &mut SurfaceVertex, step: f32, along_x: bool) {
+fn site_surface_vertex(
+    geography: &Geography,
+    x: f32,
+    z: f32,
+    sites: Option<&rubblekin_core::settlement::SettlementPlan>,
+) -> SurfaceVertex {
+    let mut vertex = surface_vertex(geography, x, z);
+    if let Some(plan) = sites {
+        let cx = (x / CELL_SIZE).floor() as i32;
+        let cz = (z / CELL_SIZE).floor() as i32;
+        let height = (vertex.0.y / CELL_SIZE).round() as i32 - 1;
+        let (h, _) = plan.composed_ground_at(cx, cz, height, Block::Grass);
+        vertex.0.y = (h + 1) as f32 * CELL_SIZE;
+    }
+    vertex
+}
+
+fn stitch_vertex(
+    geo: &Geography,
+    vertex: &mut SurfaceVertex,
+    step: f32,
+    along_x: bool,
+    sites: Option<&rubblekin_core::settlement::SettlementPlan>,
+) {
     let coordinate = if along_x { vertex.0.x } else { vertex.0.z };
     let a = (coordinate / step).floor() * step;
     let t = (coordinate - a) / step;
@@ -1687,13 +1764,13 @@ fn stitch_vertex(geo: &Geography, vertex: &mut SurfaceVertex, step: f32, along_x
     }
     let (low, high) = if along_x {
         (
-            surface_vertex(geo, a, vertex.0.z),
-            surface_vertex(geo, a + step, vertex.0.z),
+            site_surface_vertex(geo, a, vertex.0.z, sites),
+            site_surface_vertex(geo, a + step, vertex.0.z, sites),
         )
     } else {
         (
-            surface_vertex(geo, vertex.0.x, a),
-            surface_vertex(geo, vertex.0.x, a + step),
+            site_surface_vertex(geo, vertex.0.x, a, sites),
+            site_surface_vertex(geo, vertex.0.x, a + step, sites),
         )
     };
     vertex.0.y = low.0.y * (1.0 - t) + high.0.y * t;
@@ -1733,6 +1810,7 @@ fn surface_tile(
     neighbors: [Option<f32>; 4],
     land: &mut Geometry,
     water: &mut Geometry,
+    sites: Option<&rubblekin_core::settlement::SettlementPlan>,
 ) -> SampledSurface {
     let land_start = land.positions.len();
     let water_start = water.positions.len();
@@ -1740,7 +1818,8 @@ fn surface_tile(
     let mut vertices = Vec::with_capacity((steps + 1) * (steps + 1));
     for iz in 0..=steps {
         for ix in 0..=steps {
-            let mut vertex = surface_vertex(geography, x + ix as f32 * step, z + iz as f32 * step);
+            let mut vertex =
+                site_surface_vertex(geography, x + ix as f32 * step, z + iz as f32 * step, sites);
             for (edge, on_edge) in [iz == 0, iz == steps, ix == 0, ix == steps]
                 .into_iter()
                 .enumerate()
@@ -1749,7 +1828,7 @@ fn surface_tile(
                     && let Some(coarse) = neighbors[edge]
                     && coarse > step
                 {
-                    stitch_vertex(geography, &mut vertex, coarse, edge < 2);
+                    stitch_vertex(geography, &mut vertex, coarse, edge < 2, sites);
                 }
             }
             vertices.push(vertex);
@@ -2703,6 +2782,7 @@ mod tests {
             [None; 4],
             &mut land,
             &mut Geometry::default(),
+            None,
         );
         let ground_vertices = land.positions.len();
         assert!(ground_vertices > 0);
@@ -2715,6 +2795,7 @@ mod tests {
             [None; 4],
             &mut Geometry::default(),
             &mut water,
+            None,
         );
         assert!(!water.positions.is_empty());
         assert!(water.uvs.iter().all(|&uv| uv == [1.0, 0.0]));
@@ -3356,6 +3437,7 @@ mod tests {
                 [Some(step); 4],
                 &mut land,
                 &mut water,
+                None,
             );
             assert_eq!(
                 land.indices.len() / 3,
@@ -3849,6 +3931,7 @@ mod tests {
                 [None; 4],
                 &mut land,
                 &mut water,
+                None,
             );
             water
         };
@@ -4045,6 +4128,7 @@ mod tests {
             neighbors,
             &mut land,
             &mut water,
+            None,
         );
         let boundary = match edge {
             0 => tz as f32 * CHUNK_METERS,
