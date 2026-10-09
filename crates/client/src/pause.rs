@@ -5,7 +5,10 @@ use bevy::{
         mouse::AccumulatedMouseScroll,
         touch::{TouchInput, TouchPhase},
     },
+    picking::hover::Hovered,
     prelude::*,
+    ui::Pressed,
+    ui_widgets::{ActivateOnPress, Button},
     window::{PrimaryWindow, WindowFocused},
 };
 
@@ -167,7 +170,7 @@ fn accent() -> Color {
 
 fn button(action: Action, width: Val) -> impl Bundle {
     (
-        Button,
+        (Button, ActivateOnPress, Hovered::default()),
         action,
         Node {
             min_height: px(44),
@@ -281,7 +284,7 @@ pub fn setup(
                                         Action::TreeLess => { row.commands().entity(value).insert(TreeText); }
                                         _ => { row.commands().entity(value).insert(ShadowText); }
                                     }
-                                    row.spawn((distance, Action::Distance(distance), Interaction::None, Node { height: px(44), flex_grow: 1., min_width: px(40), align_items: AlignItems::Center, padding: UiRect::horizontal(px(4)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::NONE), BorderColor::all(Color::NONE))).with_children(|track| {
+                                    row.spawn((distance, Action::Distance(distance), Hovered::default(), Node { height: px(44), flex_grow: 1., min_width: px(40), align_items: AlignItems::Center, padding: UiRect::horizontal(px(4)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::NONE), BorderColor::all(Color::NONE))).with_children(|track| {
                                         track.spawn((Node { width: percent(100), height: px(8), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(Color::srgb(0.16, 0.27, 0.25)))).with_child((DistanceFill(distance), Node { width: percent(0), height: percent(100), border_radius: BorderRadius::all(px(4)), ..default() }, BackgroundColor(accent())));
                                     });
                                     row.spawn(button(more, px(48))).with_child(label("+", &font, 23.));
@@ -388,7 +391,7 @@ pub fn read(
     mut native: MessageReader<MenuKey>,
     mut fingers: MessageReader<TouchInput>,
     mut focus_events: MessageReader<WindowFocused>,
-    actions: Query<(&Action, &Interaction), Changed<Interaction>>,
+    actions: Query<&Action, Changed<crate::ui::Activated>>,
     targets: Query<(
         Entity,
         &Action,
@@ -406,8 +409,7 @@ pub fn read(
         Option<&InheritedVisibility>,
     )>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
-    parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
+    clipping: Query<&CalculatedClip>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
 ) {
     let (keys, mouse, wheel) = input;
@@ -506,7 +508,9 @@ pub fn read(
                         && node.display != Display::None
                         && visibility.is_none_or(|visible| visible.get())
                         && computed.contains_point(**transform, point)
-                        && bevy::ui::clip_check_recursive(point, *entity, &clipping, &parents)
+                        && clipping
+                            .get(*entity)
+                            .map_or(true, |clip| clip.contains_point(point))
                 },
             )
             .map(|(_, distance, computed, transform, _, _)| {
@@ -520,7 +524,7 @@ pub fn read(
             .map(|(_, _, computed, transform, _, _)| track_fraction(point, computed, transform))
     };
     let mut finished_drag = None;
-    // Bevy may synthesize Interaction::Pressed from a touch while preferring
+    // Bevy may synthesize a button activation from a touch while preferring
     // a stale desktop mouse position. Raw touches own their actual targets,
     // including their release frame and frames between movement events.
     let mut native_touch = pause.scroll_finger.is_some()
@@ -556,9 +560,9 @@ pub fn read(
                             node.display != Display::None
                                 && visibility.is_none_or(|visible| visible.get())
                                 && computed.contains_point(**transform, point)
-                                && bevy::ui::clip_check_recursive(
-                                    point, *entity, &clipping, &parents,
-                                )
+                                && clipping
+                                    .get(*entity)
+                                    .map_or(true, |clip| clip.contains_point(point))
                         })
                 {
                     chosen = Some(*action);
@@ -639,10 +643,8 @@ pub fn read(
     if !cfg!(target_os = "android") && !native_touch && chosen.is_none() {
         chosen = actions
             .iter()
-            .find(|(action, interaction)| {
-                !matches!(action, Action::Distance(_)) && **interaction == Interaction::Pressed
-            })
-            .map(|(action, _)| *action);
+            .find(|action| !matches!(action, Action::Distance(_)))
+            .copied();
     }
     let navigating = keys.just_pressed(KeyCode::Tab)
         || keys.just_pressed(KeyCode::ArrowDown)
@@ -781,7 +783,8 @@ pub fn refresh(
     )>,
     mut buttons: Query<(
         &Action,
-        &Interaction,
+        Has<Pressed>,
+        &Hovered,
         &mut BackgroundColor,
         &mut BorderColor,
     )>,
@@ -830,33 +833,33 @@ pub fn refresh(
         }
     }
     for (mut text, near, shadow, tree, note) in &mut texts {
-        if near.is_some() {
-            text.0 = format!("{:.0} m", Distance::Near.displayed_value(&pause, &graphics));
-        }
-        if shadow.is_some() {
-            text.0 = if graphics.quality.shadows() {
+        let value = if near.is_some() {
+            format!("{:.0} m", Distance::Near.displayed_value(&pause, &graphics))
+        } else if shadow.is_some() {
+            if graphics.quality.shadows() {
                 format!(
                     "{:.0} m",
                     Distance::Shadows.displayed_value(&pause, &graphics)
                 )
             } else {
                 "Off in Low".into()
-            };
-        }
-        if tree.is_some() {
-            text.0 = format!(
+            }
+        } else if tree.is_some() {
+            format!(
                 "{:.0} m",
                 Distance::Trees.displayed_value(&pause, &graphics)
-            );
-        }
-        if note.is_some() {
-            text.0 = match graphics.quality {
+            )
+        } else if note.is_some() {
+            match graphics.quality {
                 GraphicsQuality::Low => "Shaded terrain · dynamic shadows off",
                 GraphicsQuality::Balanced => "Nearby sun shadows · no antialiasing",
                 GraphicsQuality::High => "Sharper shadows · 4× antialiasing",
             }
-            .into();
-        }
+            .into()
+        } else {
+            continue;
+        };
+        crate::ui::set_text(&mut text, value);
     }
     for (DistanceFill(distance), mut node, mut background) in &mut fills {
         let (min, max) = distance.bounds();
@@ -870,16 +873,16 @@ pub fn refresh(
             Color::srgb(0.24, 0.30, 0.27)
         };
     }
-    for (action, interaction, mut background, mut border) in &mut buttons {
+    for (action, pressed, hovered, mut background, mut border) in &mut buttons {
         let selected = matches!(action, Action::Quality(quality) if *quality == graphics.quality);
         let enabled = enabled(*action, &graphics);
         background.0 = if matches!(action, Action::Distance(_)) {
             Color::NONE
         } else if !enabled {
             Color::srgb(0.12, 0.20, 0.19)
-        } else if *interaction == Interaction::Pressed {
+        } else if pressed {
             Color::srgb(0.34, 0.44, 0.28)
-        } else if selected || *interaction == Interaction::Hovered {
+        } else if selected || hovered.0 {
             Color::srgb(0.27, 0.43, 0.36)
         } else {
             Color::srgb(0.19, 0.34, 0.31)
@@ -933,7 +936,7 @@ mod tests {
         app.world_mut()
             .spawn((
                 action,
-                Interaction::None,
+                Hovered::default(),
                 Node::default(),
                 InheritedVisibility::VISIBLE,
                 ComputedNode {
@@ -1094,7 +1097,7 @@ mod tests {
         let more = target(&mut app, Action::TreeMore);
         app.world_mut()
             .entity_mut(more)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert_eq!(
             app.world().resource::<GraphicsSettings>().tree_distance,
@@ -1126,7 +1129,7 @@ mod tests {
             .spawn((
                 distance,
                 Action::Distance(distance),
-                Interaction::None,
+                Hovered::default(),
                 BackgroundColor(Color::NONE),
                 BorderColor::all(Color::NONE),
                 Node::default(),
@@ -1492,7 +1495,7 @@ mod tests {
             .set_physical_cursor_position(Some(bevy::math::DVec2::splat(100.)));
         app.world_mut()
             .entity_mut(resume)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         drag_touch(&mut app, window, TouchPhase::Started, 250.);
         assert!(app.world().resource::<PauseMenu>().open);
         assert_eq!(
@@ -1506,12 +1509,12 @@ mod tests {
         // A held contact still owns input on a frame with no raw movement.
         app.world_mut()
             .entity_mut(resume)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert!(app.world().resource::<PauseMenu>().distance_drag.is_some());
         app.world_mut()
             .entity_mut(resume)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.world_mut()
             .get_mut::<Window>(window)
             .unwrap()
@@ -1532,7 +1535,7 @@ mod tests {
         // Even a short blank-space tap must not click the old mouse target.
         app.world_mut()
             .entity_mut(resume)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         for phase in [TouchPhase::Started, TouchPhase::Ended] {
             app.world_mut().write_message(TouchInput {
                 id: 22,
@@ -1548,7 +1551,7 @@ mod tests {
         // A subsequent real mouse press remains usable.
         app.world_mut()
             .entity_mut(resume)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert!(!app.world().resource::<PauseMenu>().open);
     }

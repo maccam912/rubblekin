@@ -26,7 +26,7 @@ impl Plugin for SkyPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<SkyMaterial>::default())
             .init_resource::<SkyAssets>();
-        load_internal_asset!(app, SKY_SHADER, "sky.wgsl", Shader::from_wgsl);
+        load_internal_asset!(app, SKY_SHADER, "sky.wesl", Shader::from_wesl);
     }
 }
 

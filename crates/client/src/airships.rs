@@ -8,7 +8,9 @@ use bevy::{
         mouse::AccumulatedMouseScroll,
         touch::{TouchInput, TouchPhase},
     },
+    picking::hover::Hovered,
     prelude::*,
+    ui_widgets::{ActivateOnPress, Button},
     window::PrimaryWindow,
 };
 use rubblekin_core::{
@@ -343,7 +345,7 @@ pub(super) fn setup(
                             (Action::Close, "Thanks [Enter / Esc]"),
                         ] {
                             row.spawn((
-                                Button,
+                                (Button, ActivateOnPress, Hovered::default()),
                                 action,
                                 Node {
                                     min_height: px(44),
@@ -428,7 +430,7 @@ pub(super) fn read(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut native: MessageReader<MenuKey>,
     touch_input: (MessageReader<TouchInput>, Option<Res<Touches>>),
-    actions: Query<(&Action, &Interaction), Changed<Interaction>>,
+    actions: Query<&Action, Changed<crate::ui::Activated>>,
     targets: Query<(
         Entity,
         &Action,
@@ -437,8 +439,7 @@ pub(super) fn read(
         &Node,
         Option<&InheritedVisibility>,
     )>,
-    clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
-    parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
+    clipping: Query<&CalculatedClip>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<DialogRoot>>,
 ) {
     let (mut fingers, touches) = touch_input;
@@ -508,9 +509,9 @@ pub(super) fn read(
                                 node.display != Display::None
                                     && visibility.is_none_or(|v| v.get())
                                     && computed.contains_point(**transform, point)
-                                    && bevy::ui::clip_check_recursive(
-                                        point, *entity, &clipping, &parents,
-                                    )
+                                    && clipping
+                                        .get(*entity)
+                                        .map_or(true, |clip| clip.contains_point(point))
                             })
                     {
                         chosen = Some(*action);
@@ -542,10 +543,7 @@ pub(super) fn read(
         scroll.0.y = (scroll.0.y + scroll_delta).clamp(0.0, max.max(0.0));
     }
     if !cfg!(target_os = "android") && !native_touch && chosen.is_none() {
-        chosen = actions
-            .iter()
-            .find(|(_, i)| **i == Interaction::Pressed)
-            .map(|(a, _)| *a);
+        chosen = actions.iter().next().copied();
     }
     if let Some(action) = chosen {
         match action {
@@ -1076,7 +1074,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Action::Close,
-                Interaction::None,
+                Hovered::default(),
                 Node::default(),
                 ComputedNode {
                     size: Vec2::splat(80.),
@@ -1098,7 +1096,7 @@ mod tests {
         };
         app.world_mut()
             .entity_mut(close)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         send(&mut app, TouchPhase::Started);
         app.update();
         assert!(app.world().resource::<PilotConversation>().open());
@@ -1110,12 +1108,12 @@ mod tests {
         );
         app.world_mut()
             .entity_mut(close)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert!(app.world().resource::<PilotConversation>().open());
         app.world_mut()
             .entity_mut(close)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         send(&mut app, TouchPhase::Ended);
         app.update();
         assert!(app.world().resource::<PilotConversation>().open());
@@ -1127,7 +1125,7 @@ mod tests {
         );
         app.world_mut()
             .entity_mut(close)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert!(
             !app.world().resource::<PilotConversation>().open(),

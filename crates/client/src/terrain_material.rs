@@ -15,7 +15,7 @@ pub struct TerrainMaterialPlugin;
 impl Plugin for TerrainMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<TerrainMaterial>::default());
-        load_internal_asset!(app, TERRAIN_SHADER, "terrain.wgsl", Shader::from_wgsl);
+        load_internal_asset!(app, TERRAIN_SHADER, "terrain.wesl", Shader::from_wesl);
     }
 }
 

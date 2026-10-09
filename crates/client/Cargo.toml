@@ -16,15 +16,15 @@ rubblekin_core.workspace = true
 rubblekin_server.workspace = true
 serde_json.workspace = true
 getrandom = "=0.3.4"
-bevy = { version = "=0.19.1", default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_pbr", "bevy_gizmos", "bevy_gizmos_render", "bevy_light", "bevy_mesh", "bevy_camera", "bevy_color", "bevy_image", "bevy_material", "bevy_shader", "bevy_text", "bevy_ui", "bevy_ui_render", "bevy_input_focus", "default_font", "png", "keyboard", "mouse", "touch", "tonemapping_luts", "zstd_rust"] }
+bevy = { version = "=0.20.0", default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_pbr", "bevy_gizmos", "bevy_gizmos_render", "bevy_light", "bevy_mesh", "bevy_camera", "bevy_color", "bevy_image", "bevy_material", "bevy_shader", "bevy_text", "bevy_ui", "bevy_ui_render", "bevy_ui_widgets", "ui_picking", "bevy_input_focus", "default_font", "png", "keyboard", "mouse", "touch", "tonemapping_luts", "zstd_rust"] }
 
 # Matches Bevy's window backend; native modifier flags support macOS text shortcuts.
 winit = { version = "=0.30.13", default-features = false }
 
 [target.'cfg(target_os = "android")'.dependencies]
-bevy = { version = "=0.19.1", default-features = false, features = ["android-game-activity"] }
+bevy = { version = "=0.20.0", default-features = false, features = ["android-game-activity"] }
 jni = "=0.22.4"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-bevy = { version = "=0.19.1", default-features = false, features = ["system_clipboard", "x11", "wayland"] }
+bevy = { version = "=0.20.0", default-features = false, features = ["system_clipboard", "x11", "wayland"] }
 sentry = { version = "=0.49.3", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "ureq", "rustls", "minidump"] }

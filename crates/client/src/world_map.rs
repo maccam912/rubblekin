@@ -7,7 +7,9 @@ use bevy::{
         mouse::AccumulatedMouseScroll,
         touch::{TouchInput, TouchPhase},
     },
+    picking::hover::Hovered,
     prelude::*,
+    ui_widgets::{ActivateOnPress, Button},
     window::PrimaryWindow,
 };
 use rubblekin_core::{settlement::Village, village_assets::BuildingKind};
@@ -316,7 +318,7 @@ pub(crate) fn setup(
                 header.spawn(label("WORLD MAP  /  N at top", &font, 23.));
                 header
                     .spawn((
-                        Button,
+                        (Button, ActivateOnPress, Hovered::default()),
                         MapAction::Close,
                         Node {
                             padding: UiRect::axes(px(14), px(8)),
@@ -493,7 +495,7 @@ pub(crate) fn setup(
                 ] {
                     controls
                         .spawn((
-                            Button,
+                            (Button, ActivateOnPress, Hovered::default()),
                             action,
                             Node {
                                 padding: UiRect::axes(px(12), px(6)),
@@ -527,7 +529,7 @@ pub(crate) fn read(
     ),
     mut native: MessageReader<MenuKey>,
     mut fingers: MessageReader<TouchInput>,
-    buttons: Query<(&MapAction, &Interaction), Changed<Interaction>>,
+    buttons: Query<&MapAction, Changed<crate::ui::Activated>>,
     targets: Query<(&MapAction, &ComputedNode, &UiGlobalTransform)>,
     canvas: Query<(&ComputedNode, &UiGlobalTransform), With<MapCanvas>>,
 ) {
@@ -563,9 +565,7 @@ pub(crate) fn read(
         if !events.is_empty() || map.contacts.iter().any(Option::is_some) {
             return None;
         }
-        buttons.iter().find_map(|(action, interaction)| {
-            (*interaction == Interaction::Pressed).then_some(*action)
-        })
+        buttons.iter().next().copied()
     });
     let requested = std::mem::take(&mut map.requested);
     let other_modal = session.inventory.input_blocked
@@ -1122,7 +1122,7 @@ mod tests {
             .world_mut()
             .spawn((
                 MapAction::Close,
-                Interaction::None,
+                Hovered::default(),
                 Node::default(),
                 ComputedNode {
                     size: Vec2::new(120., 60.),
@@ -1280,7 +1280,7 @@ mod tests {
                     .app
                     .world_mut()
                     .entity_mut(fixture.close)
-                    .insert(Interaction::Pressed);
+                    .insert(crate::ui::Activated);
                 fixture.app.update();
             }
             let map = fixture.app.world().resource::<WorldMap>();
@@ -1643,7 +1643,7 @@ mod tests {
             .world_mut()
             .spawn((
                 MapAction::ZoomIn,
-                Interaction::Pressed,
+                crate::ui::Activated,
                 ComputedNode {
                     size: Vec2::new(100., 40.),
                     ..default()
@@ -1666,7 +1666,7 @@ mod tests {
             .app
             .world_mut()
             .entity_mut(button)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         fixture.app.update();
         assert_eq!(fixture.app.world().resource::<WorldMap>().zoom, 2.);
         finger(&mut fixture, 1, TouchPhase::Ended, Vec2::new(340., 320.));
@@ -1757,7 +1757,7 @@ mod tests {
             .world_mut()
             .spawn((
                 MapAction::ZoomIn,
-                Interaction::Pressed,
+                crate::ui::Activated,
                 ComputedNode {
                     size: Vec2::new(100., 40.),
                     ..default()
@@ -1772,7 +1772,7 @@ mod tests {
             .app
             .world_mut()
             .entity_mut(button)
-            .insert(Interaction::None);
+            .remove::<crate::ui::Activated>();
         fixture.app.update();
         for (action, zoom) in [
             (MapAction::ZoomIn, 2.25),

@@ -251,7 +251,7 @@ These were checked for relevance only. A source change should reproduce its chos
 
 | Area | Start here |
 | --- | --- |
-| Far trees, appearance bursts, terrain joins | [terrain.rs](crates/client/src/terrain.rs): `stream_terrain`, `move_local_square`, `add_village_proxies`, `add_landscape_trees`; [terrain_albedo.rs](crates/client/src/terrain_albedo.rs): `paint_trees`, `paint_tree`, `append_mips`; [terrain.wgsl](crates/client/src/terrain.wgsl) |
+| Far trees, appearance bursts, terrain joins | [terrain.rs](crates/client/src/terrain.rs): `stream_terrain`, `move_local_square`, `add_village_proxies`, `add_landscape_trees`; [terrain_albedo.rs](crates/client/src/terrain_albedo.rs): `paint_trees`, `paint_tree`, `append_mips`; [terrain.wesl](crates/client/src/terrain.wesl) |
 | Berths and road overlaps | [airship_landings.rs](crates/core/src/airship_landings.rs): `landings`, `fit_ramp`, `exit_bridge`; its explicit zero-offset road fallback deserves visual review |
 | Ship shape, camera, timetable UI | [airship_mesh.rs](crates/client/src/airship_mesh.rs), [airships.rs](crates/client/src/airships.rs), [follow_camera.rs](crates/client/src/follow_camera.rs) |
 | Trader/player passage | [navigation.rs](crates/server/src/navigation.rs), [server airships.rs](crates/server/src/airships.rs), [server villages.rs](crates/server/src/villages.rs) |

@@ -74,6 +74,8 @@ player-profiles.json
 !/artifacts/creative-inventory-touch.png
 !/artifacts/creative-blocks-native.png
 !/artifacts/sky-shadow-comparison.png
+!/artifacts/bevy020-world-native.png
+!/artifacts/bevy020-pause-touch.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

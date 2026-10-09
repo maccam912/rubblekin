@@ -1,9 +1,8 @@
 // Stylized sky in one twelve-triangle background draw. No textures, volumetric
 // passes, cloud entities, or additional shadow maps.
-#import bevy_pbr::mesh_view_bindings::view
-#ifdef TONEMAP_IN_SHADER
-#import bevy_core_pipeline::tonemapping::{tone_mapping, screen_space_dither}
-#endif
+import bevy_pbr::render::mesh_view_bindings::view;
+@if(TONEMAP_IN_SHADER)
+import bevy_core_pipeline::tonemapping::{tone_mapping, screen_space_dither};
 
 struct SkyColors {
     zenith: vec4<f32>,
@@ -13,7 +12,7 @@ struct SkyColors {
     clouds: vec4<f32>,
     phase: vec4<f32>,
 }
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> sky: SkyColors;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> sky: SkyColors;
 
 struct SkyVertex {
     @location(0) position: vec3<f32>,
@@ -100,13 +99,13 @@ fn fragment(in: SkyFragment) -> @location(0) vec4<f32> {
     let cloud_color = sky.clouds.rgb * mix(0.64, 1.0, smoothstep(0.46, 0.76, shape));
     result = mix(result, cloud_color, cloud);
     var output = vec4<f32>(result, 1.0);
-#ifdef TONEMAP_IN_SHADER
+@if(TONEMAP_IN_SHADER) {
     output = tone_mapping(output, view.color_grading);
-#ifdef DEBAND_DITHER
+@if(DEBAND_DITHER) {
     let dithered = pow(max(output.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2))
         + screen_space_dither(in.position.xy);
     output = vec4<f32>(pow(max(dithered, vec3<f32>(0.0)), vec3<f32>(2.2)), 1.0);
-#endif
-#endif
+}
+}
     return output;
 }

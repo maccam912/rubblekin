@@ -13,9 +13,11 @@ use bevy::{
         keyboard::{Key, KeyboardInput},
         touch::{TouchInput, TouchPhase},
     },
-    input_focus::{FocusCause, InputFocus},
+    input_focus::{FocusCause, InputFocus, tab_navigation::TabIndex},
+    picking::hover::Hovered,
     prelude::*,
     text::{EditableText, EditableTextFilter, TextCursorStyle, TextEdit},
+    ui_widgets::{ActivateOnPress, Button},
     window::{CursorGrabMode, CursorOptions, Ime, PrimaryWindow},
     winit::{RawWinitWindowEvent, converters::convert_keyboard_input},
 };
@@ -376,7 +378,7 @@ pub fn setup(
         )).with_children(|panel| {
             panel.spawn((Node { align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, column_gap: px(8), ..default() },)).with_children(|header| {
                 header.spawn((Text::new("R U B B L E K I N"), TextFont::from_font_size(if touch { 24. } else { 32. }).with_font(font.clone()), TextColor(ink())));
-                header.spawn((Button, Action::DismissKeyboard, KeyboardDone, Node { display: Display::None, min_height: px(44), padding: UiRect::axes(px(14), px(8)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                header.spawn(((Button, ActivateOnPress, Hovered::default()), Action::DismissKeyboard, KeyboardDone, Node { display: Display::None, min_height: px(44), padding: UiRect::axes(px(14), px(8)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
                     .with_child((Text::new("Done typing"), TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink())));
             });
             panel.spawn((Text::new("A LIVING WORLD  /  EARLY PROTOTYPE"), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
@@ -386,8 +388,11 @@ pub fn setup(
                     for (field, label, value, max) in [(Field::Address, "SERVER ADDRESS", menu.address.as_str(), 260), (Field::Name, "CHARACTER NAME", menu.name.as_str(), 24)] {
                         fields.spawn((Text::new(label), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
                         fields.spawn((
-                            field, Interaction::default(),
+                            field, Hovered::default(), TabIndex(0),
                             Node { width: percent(100), min_height: px(48), padding: UiRect::all(px(10)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(5)), overflow: Overflow::clip_x(), ..default() },
+                            // Native input below owns edits (including macOS modifier flags
+                            // and Android GameTextInput). Use the separate editor state;
+                            // TextInput would also consume the same keys and duplicate them.
                             EditableText { max_characters: Some(max), ..EditableText::new(value) },
                             EditableTextFilter::new(|ch| !ch.is_control()), TextLayout::no_wrap(),
                             TextCursorStyle { color: ink(), selection_color: Color::srgb(0.23, 0.43, 0.42), unfocused_selection_color: Color::NONE, ..default() },
@@ -399,17 +404,17 @@ pub fn setup(
                 content.spawn((MenuColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(if touch { 8 } else { 12 }), min_width: px(0), ..default() },)).with_children(|actions| {
                     actions.spawn((Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() },)).with_children(|row| {
                         for (mode, label) in [(SessionMode::Player, "Play as explorer"), (SessionMode::Observer, "Observe as admin")] {
-                            row.spawn((Button, Action::Mode(mode), Node { min_height: px(48), padding: UiRect::axes(px(12), px(10)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                            row.spawn(((Button, ActivateOnPress, Hovered::default()), Action::Mode(mode), Node { min_height: px(48), padding: UiRect::axes(px(12), px(10)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
                                 .with_child((Text::new(label), TextFont::from_font_size(if touch { 16. } else { 18. }).with_font(font.clone()), TextColor(ink())));
                         }
                     });
                     actions.spawn((Text::new("Observer camera is read-only; the server must allow observers."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
-                    actions.spawn((Button, Action::MinimumGraphics, Node { min_height: px(48), padding: UiRect::axes(px(16), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                    actions.spawn(((Button, ActivateOnPress, Hovered::default()), Action::MinimumGraphics, Node { min_height: px(48), padding: UiRect::axes(px(16), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
                         .with_child((Text::new("Use minimum graphics"), TextFont::from_font_size(19.).with_font(font.clone()), TextColor(ink())));
                     actions.spawn((Text::new("Low quality · 24 m detail · 128 m trees\nShadows and antialiasing off · applies before joining"), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
                     actions.spawn((Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() },)).with_children(|row| {
                         for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world"), (Action::Cancel, "Cancel")] {
-                            row.spawn((Button, action, Node { display: if matches!(action, Action::Cancel) { Display::None } else { Display::Flex }, min_height: px(48), padding: UiRect::axes(px(20), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                            row.spawn(((Button, ActivateOnPress, Hovered::default()), action, Node { display: if matches!(action, Action::Cancel) { Display::None } else { Display::Flex }, min_height: px(48), padding: UiRect::axes(px(20), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
                                 .with_child((Text::new(label), TextFont::from_font_size(19.).with_font(font.clone()), TextColor(ink())));
                         }
                     });
@@ -468,8 +473,8 @@ pub fn interact(
     mut composing: Local<bool>,
     touch: Option<Res<crate::touch::TouchControls>>,
     mut focus: ResMut<InputFocus>,
-    mut fields: Query<(Entity, &Field, &Interaction, &mut EditableText)>,
-    actions: Query<(&Action, &Interaction), Changed<Interaction>>,
+    mut fields: Query<(Entity, &Field, &mut EditableText)>,
+    actions: Query<&Action, Changed<crate::ui::Activated>>,
     touch_input: (MessageReader<TouchInput>, Option<Res<Touches>>),
     targets: Query<(
         Entity,
@@ -481,8 +486,7 @@ pub fn interact(
         Option<&Action>,
     )>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
-    parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
+    clipping: Query<&CalculatedClip>,
 ) {
     let (mut fingers, touches) = touch_input;
     if session.is_some() {
@@ -497,7 +501,7 @@ pub fn interact(
     let mut touched_action = None;
     let mut native_touch = touches.is_some_and(|touches| touches.iter().next().is_some());
     // Resolve original Started events directly: brief Android taps must work
-    // independently of the UI cursor/Interaction timing at low frame rates.
+    // independently of the UI picking timing at low frame rates.
     // Rendered node geometry and inherited clipping remain the hit boundaries.
     for finger in fingers.read() {
         let Ok(window) = windows.get(finger.window) else {
@@ -515,7 +519,9 @@ pub fn interact(
             if node.display == Display::None
                 || visibility.is_some_and(|visible| !visible.get())
                 || !computed.contains_point(*transform, point)
-                || !bevy::ui::clip_check_recursive(point, entity, &clipping, &parents)
+                || !clipping
+                    .get(entity)
+                    .map_or(true, |clip| clip.contains_point(point))
             {
                 continue;
             }
@@ -546,25 +552,18 @@ pub fn interact(
             || matches!(touched_action, Some(Action::Cancel))
             || (!cfg!(target_os = "android")
                 && !native_touch
-                && actions.iter().any(|(action, interaction)| {
-                    matches!(action, Action::Cancel) && *interaction == Interaction::Pressed
-                }))
+                && actions
+                    .iter()
+                    .any(|action| matches!(action, Action::Cancel)))
         {
             menu.cancel();
         }
         return;
     }
-    for (entity, _, interaction, _) in &fields {
-        if !cfg!(target_os = "android") && !native_touch && *interaction == Interaction::Pressed {
-            focus.set(entity, FocusCause::Navigated);
-        }
-    }
     let touch = touch.is_some_and(|touch| touch.enabled);
     if (!touch && focus.get().is_none()) || keys.just_pressed(KeyCode::Tab) {
         let old = focus.get();
-        if let Some((entity, _, _, _)) =
-            fields.iter().find(|(entity, _, _, _)| Some(*entity) != old)
-        {
+        if let Some((entity, _, _)) = fields.iter().find(|(entity, _, _)| Some(*entity) != old) {
             focus.set(entity, FocusCause::Navigated);
         }
     }
@@ -595,7 +594,7 @@ pub fn interact(
         };
         if let Some(edit) = edit
             && let Some(entity) = focus.get()
-            && let Ok((_, _, _, mut input)) = fields.get_mut(entity)
+            && let Ok((_, _, mut input)) = fields.get_mut(entity)
         {
             input.queue_edit(edit);
         }
@@ -629,12 +628,12 @@ pub fn interact(
             continue;
         }
         if let Some(entity) = focus.get()
-            && let Ok((_, _, _, mut input)) = fields.get_mut(entity)
+            && let Ok((_, _, mut input)) = fields.get_mut(entity)
         {
             input.queue_edit(edit);
         }
     }
-    for (_, field, _, input) in &fields {
+    for (_, field, input) in &fields {
         match field {
             Field::Address => menu.address = input.value().to_string(),
             Field::Name => menu.name = input.value().to_string(),
@@ -645,12 +644,7 @@ pub fn interact(
             // Raw touch owns its position through release. Bevy can synthesize
             // a press at a stale desktop mouse cursor instead of that position.
             (!cfg!(target_os = "android") && !native_touch)
-                .then(|| {
-                    actions
-                        .iter()
-                        .find(|(_, interaction)| **interaction == Interaction::Pressed)
-                        .map(|(action, _)| *action)
-                })
+                .then(|| actions.iter().next().copied())
                 .flatten()
         })
         .or_else(|| {
@@ -899,7 +893,7 @@ pub fn android_text_input(
     menu: Res<JoinScreen>,
     session: Option<Res<Session>>,
     focus: Res<InputFocus>,
-    mut fields: Query<(&Interaction, &mut EditableText), With<Field>>,
+    mut fields: Query<&mut EditableText, With<Field>>,
     mut state: Local<AndroidEditor>,
     mut font: ResMut<bevy::text::FontCx>,
     mut layout: ResMut<bevy::text::LayoutCx>,
@@ -918,7 +912,7 @@ pub fn android_text_input(
         return;
     }
     let entity = focused.unwrap();
-    let Ok((interaction, mut input)) = fields.get_mut(entity) else {
+    let Ok(mut input) = fields.get_mut(entity) else {
         return;
     };
     let value = input.value().to_string();
@@ -942,9 +936,6 @@ pub fn android_text_input(
         push_android_text(app, &mut state, value, 0, end);
         app.show_soft_input(false);
         return;
-    }
-    if *interaction == Interaction::Pressed {
-        app.show_soft_input(false);
     }
     let incoming = app.text_input_state();
     let selection = (incoming.selection.start, incoming.selection.end);
@@ -1342,7 +1333,16 @@ pub fn refresh(
     mut camera: Single<&mut Camera, With<MenuCamera>>,
     mut status: Single<&mut Text, With<MenuStatus>>,
     mut fields: Query<(Entity, &mut BorderColor), With<Field>>,
-    mut buttons: Query<(&Action, &Interaction, &mut BackgroundColor, &mut Node), Without<MenuRoot>>,
+    mut buttons: Query<
+        (
+            &Action,
+            Has<bevy::ui::Pressed>,
+            &Hovered,
+            &mut BackgroundColor,
+            &mut Node,
+        ),
+        Without<MenuRoot>,
+    >,
 ) {
     root.display = if session.is_some() {
         Display::None
@@ -1360,7 +1360,7 @@ pub fn refresh(
             Color::srgb(0.20, 0.32, 0.30)
         });
     }
-    for (action, interaction, mut background, mut node) in &mut buttons {
+    for (action, pressed, hovered, mut background, mut node) in &mut buttons {
         let cancel = matches!(action, Action::Cancel);
         if cancel {
             node.display = if menu
@@ -1375,9 +1375,11 @@ pub fn refresh(
         }
         background.0 = if menu.pending.is_some() && !cancel {
             Color::srgb(0.12, 0.22, 0.20)
+        } else if pressed {
+            Color::srgb(0.34, 0.44, 0.28)
         } else if matches!(action, Action::Mode(mode) if *mode == menu.mode) {
             Color::srgb(0.39, 0.43, 0.24)
-        } else if *interaction == Interaction::Hovered {
+        } else if hovered.0 {
             Color::srgb(0.27, 0.45, 0.39)
         } else {
             Color::srgb(0.19, 0.34, 0.31)
@@ -1892,7 +1894,7 @@ pub(crate) mod tests {
                 .world_mut()
                 .spawn((
                     Action::MinimumGraphics,
-                    Interaction::None,
+                    Hovered::default(),
                     Node::default(),
                     ComputedNode {
                         size: Vec2::new(240., 48.),
@@ -1914,7 +1916,9 @@ pub(crate) mod tests {
                     });
                 }
             } else {
-                *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Pressed;
+                app.world_mut()
+                    .entity_mut(button)
+                    .insert(crate::ui::Activated);
             }
             app.update();
             app.update(); // All join-menu actions wait for committed text edits.
@@ -1974,7 +1978,7 @@ pub(crate) mod tests {
             .world_mut()
             .spawn((
                 Field::Address,
-                Interaction::None,
+                Hovered::default(),
                 EditableText::new("127.0.0.1:7878"),
                 Node::default(),
                 ComputedNode {
@@ -1988,7 +1992,7 @@ pub(crate) mod tests {
             .id();
         app.world_mut().spawn((
             Action::Mode(SessionMode::Observer),
-            Interaction::None,
+            Hovered::default(),
             Node::default(),
             ComputedNode {
                 size: Vec2::new(160., 96.),
@@ -2069,7 +2073,7 @@ pub(crate) mod tests {
             app.world_mut()
                 .spawn((
                     kind,
-                    Interaction::None,
+                    Hovered::default(),
                     EditableText::new(text),
                     Node::default(),
                     ComputedNode {
@@ -2087,7 +2091,7 @@ pub(crate) mod tests {
             .world_mut()
             .spawn((
                 Action::Mode(SessionMode::Observer),
-                Interaction::None,
+                Hovered::default(),
                 Node::default(),
                 ComputedNode {
                     size: Vec2::new(160., 44.),
@@ -2108,11 +2112,11 @@ pub(crate) mod tests {
             });
         };
         app.world_mut()
-            .entity_mut(address)
-            .insert(Interaction::Pressed);
+            .resource_mut::<InputFocus>()
+            .set(address, FocusCause::Pressed);
         app.world_mut()
             .entity_mut(button)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         send(&mut app, TouchPhase::Started, Vec2::new(300., 100.));
         app.update();
         assert_eq!(app.world().resource::<InputFocus>().get(), Some(name));
@@ -2120,10 +2124,10 @@ pub(crate) mod tests {
             app.world().resource::<JoinScreen>().mode,
             SessionMode::Player
         );
-        // The field Interaction can stay Pressed throughout a held touch.
+        // A stale synthesized button activation must not steal the held touch.
         app.world_mut()
             .entity_mut(button)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert_eq!(app.world().resource::<InputFocus>().get(), Some(name));
         assert_eq!(
@@ -2133,7 +2137,7 @@ pub(crate) mod tests {
         send(&mut app, TouchPhase::Ended, Vec2::new(300., 100.));
         app.world_mut()
             .entity_mut(button)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert_eq!(app.world().resource::<InputFocus>().get(), Some(name));
         assert_eq!(
@@ -2142,7 +2146,7 @@ pub(crate) mod tests {
         );
         app.world_mut()
             .entity_mut(button)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert_eq!(
             app.world().resource::<JoinScreen>().mode,
@@ -2159,7 +2163,7 @@ pub(crate) mod tests {
         });
         app.world_mut()
             .entity_mut(button)
-            .insert((Action::Cancel, Interaction::Pressed));
+            .insert((Action::Cancel, crate::ui::Activated));
         for phase in [TouchPhase::Started, TouchPhase::Ended] {
             send(&mut app, phase, Vec2::new(500., 300.));
         }
@@ -2259,17 +2263,19 @@ pub(crate) mod tests {
         fonts.set_sans_serif_family(&family_name).unwrap();
         let field = app
             .world_mut()
-            .spawn((Field::Name, Interaction::None, EditableText::new("")))
+            .spawn((Field::Name, Hovered::default(), EditableText::new("")))
             .id();
         app.update();
         assert!(
             app.world().resource::<InputFocus>().get().is_none(),
             "touch join must not raise the keyboard before a tap"
         );
-        *app.world_mut().get_mut::<Interaction>(field).unwrap() = Interaction::Pressed;
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(field, FocusCause::Pressed);
         app.update();
         assert_eq!(app.world().resource::<InputFocus>().get(), Some(field));
-        *app.world_mut().get_mut::<Interaction>(field).unwrap() = Interaction::None;
+
         app.world_mut().write_message(Ime::Preedit {
             window: Entity::PLACEHOLDER,
             value: "雪".into(),
@@ -2356,7 +2362,7 @@ pub(crate) mod tests {
         let editable = EditableText::new("127.0.0.1:7878");
         let field = app
             .world_mut()
-            .spawn((Field::Address, Interaction::None, editable))
+            .spawn((Field::Address, Hovered::default(), editable))
             .id();
         app.world_mut()
             .resource_mut::<InputFocus>()
@@ -2521,17 +2527,17 @@ pub(crate) mod tests {
                 matches!(action, Action::Mode(SessionMode::Player)).then_some(entity)
             })
             .unwrap();
-        *app.world_mut()
-            .get_mut::<Interaction>(player_mode_button)
-            .unwrap() = Interaction::Pressed;
+        app.world_mut()
+            .entity_mut(player_mode_button)
+            .insert(crate::ui::Activated);
         app.update();
         assert_eq!(
             app.world().resource::<JoinScreen>().mode,
             SessionMode::Player
         );
-        *app.world_mut()
-            .get_mut::<Interaction>(player_mode_button)
-            .unwrap() = Interaction::None;
+        app.world_mut()
+            .entity_mut(player_mode_button)
+            .remove::<crate::ui::Activated>();
         app.world_mut().resource_mut::<JoinScreen>().start(true);
         wait_for_join(&mut app);
         let session = app.world().resource::<Session>();

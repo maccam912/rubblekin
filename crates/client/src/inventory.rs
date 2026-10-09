@@ -5,7 +5,9 @@ use bevy::{
         keyboard::Key,
         touch::{TouchInput, TouchPhase},
     },
+    picking::hover::Hovered,
     prelude::*,
+    ui_widgets::{ActivateOnPress, Button},
     window::PrimaryWindow,
 };
 use rubblekin_core::{blocks::BlockCategory, world::Block};
@@ -99,7 +101,7 @@ fn label(value: impl Into<String>, font: &Handle<Font>, size: f32) -> impl Bundl
 }
 fn button(action: Action) -> impl Bundle {
     (
-        Button,
+        (Button, ActivateOnPress, Hovered::default()),
         action,
         Node {
             padding: UiRect::axes(px(10), px(6)),
@@ -285,7 +287,7 @@ pub fn read(
     window: Single<&Window, With<PrimaryWindow>>,
     mut native: MessageReader<MenuKey>,
     mut fingers: MessageReader<TouchInput>,
-    actions: Query<(&Action, &Interaction), Changed<Interaction>>,
+    actions: Query<&Action, Changed<crate::ui::Activated>>,
     targets: Query<(&Action, &ComputedNode, &UiGlobalTransform, &Node)>,
     modals: (
         Res<crate::pause::PauseMenu>,
@@ -394,10 +396,7 @@ pub fn read(
         }
     }
     if !native_touch {
-        chosen = actions
-            .iter()
-            .find(|(_, i)| **i == Interaction::Pressed)
-            .map(|(a, _)| *a);
+        chosen = actions.iter().next().copied();
     }
     if !inv.searching {
         for (i, key) in [

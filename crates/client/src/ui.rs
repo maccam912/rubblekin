@@ -1,5 +1,30 @@
 use crate::Session;
-use bevy::prelude::*;
+use bevy::{prelude::*, ui_widgets::Activate};
+
+/// One-frame activation shared by menu action handlers and native touch routing.
+/// Record Activate rather than held Pressed state so a complete click between
+/// render frames, or keyboard activation, cannot disappear before Update.
+#[derive(Component)]
+pub(crate) struct Activated;
+
+pub(crate) struct ButtonActivationPlugin;
+
+impl Plugin for ButtonActivationPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(First, clear_activations)
+            .add_observer(record_activation);
+    }
+}
+
+fn clear_activations(mut commands: Commands, buttons: Query<Entity, With<Activated>>) {
+    for entity in &buttons {
+        commands.entity(entity).remove::<Activated>();
+    }
+}
+
+fn record_activation(event: On<Activate>, mut commands: Commands) {
+    commands.entity(event.entity).insert(Activated);
+}
 
 #[derive(Component)]
 pub struct StatusText;
@@ -572,26 +597,22 @@ pub fn update_ui(
         set_text(&mut text, value);
     }
     for (mut node, help, npc, notice_panel) in &mut panels {
-        if notice_panel.is_some() {
-            node.display = if !notice.is_empty() && !menu_open {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-        if help.is_some() {
-            node.display = if session.help && !menu_open {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-        if npc.is_some() {
-            node.display = if session.inspector && !menu_open && (!touch_enabled || !session.help) {
-                Display::Flex
-            } else {
-                Display::None
-            };
+        let visible = if notice_panel.is_some() {
+            !notice.is_empty() && !menu_open
+        } else if help.is_some() {
+            session.help && !menu_open
+        } else if npc.is_some() {
+            session.inspector && !menu_open && (!touch_enabled || !session.help)
+        } else {
+            continue;
+        };
+        let display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
         }
     }
     for (label, mut text) in &mut texts.p4() {
@@ -602,25 +623,32 @@ pub fn update_ui(
     }
     for (swatch, mut background, mut image) in &mut swatches {
         let [r, g, b, _] = session.hotbar[swatch.0].color();
-        *background = BackgroundColor(Color::srgb(r, g, b));
-        if let Some(icons) = &icons {
-            image.image = icons.0[session.hotbar[swatch.0].catalog_index().unwrap()].clone();
-            *background = BackgroundColor(Color::NONE);
-        }
+        let color = if let Some(icons) = &icons {
+            let icon = &icons.0[session.hotbar[swatch.0].catalog_index().unwrap()];
+            if image.image != *icon {
+                image.image = icon.clone();
+            }
+            Color::NONE
+        } else {
+            Color::srgb(r, g, b)
+        };
+        background.set_if_neq(BackgroundColor(color));
     }
     for (slot, mut node, mut border, mut background) in &mut slots {
-        node.display = Display::Flex;
+        if node.display != Display::Flex {
+            node.display = Display::Flex;
+        }
         let active = slot.0 == session.selected;
-        *border = BorderColor::all(if active {
+        border.set_if_neq(BorderColor::all(if active {
             Color::srgb(0.95, 0.75, 0.35)
         } else {
             Color::srgba(0.6, 0.7, 0.6, 0.2)
-        });
-        *background = BackgroundColor(if active {
+        }));
+        background.set_if_neq(BackgroundColor(if active {
             Color::srgba(0.16, 0.21, 0.16, 0.96)
         } else {
             panel()
-        });
+        }));
     }
 }
 
@@ -671,7 +699,9 @@ fn notice_text(session: &Session, world: &crate::VoxelWorld, now: f64, touch: bo
     }
 }
 
-fn set_text(text: &mut Text, value: String) {
+// Accept Mut itself: coercing it to &mut Text before the comparison would
+// mark unchanged text dirty and defeat Bevy's retained UI rendering.
+pub(crate) fn set_text(text: &mut Mut<Text>, value: String) {
     if text.0 != value {
         text.0 = value;
     }
@@ -686,6 +716,95 @@ mod tests {
         protocol::{ServerMessage, SessionMode},
         world::{BlockPos, WorldGeneration},
     };
+
+    #[test]
+    fn fast_pointer_click_and_keyboard_activation_reach_menu_handlers_once() {
+        use bevy::{
+            camera::RenderTarget,
+            input::{
+                ButtonState,
+                keyboard::{Key, KeyboardInput},
+            },
+            input_focus::FocusedInput,
+            picking::{
+                backend::HitData,
+                events::{Pointer, PointerPress, PointerRelease},
+                pointer::{Location, PointerButton, PointerId},
+            },
+            ui::Pressed,
+            ui_widgets::{ActivateOnPress, Button, ButtonPlugin},
+            window::WindowRef,
+        };
+        #[derive(Resource, Default)]
+        struct Count(usize);
+        let mut app = App::new();
+        app.add_plugins((ButtonPlugin, ButtonActivationPlugin))
+            .init_resource::<Count>()
+            .add_systems(
+                Update,
+                |buttons: Query<(), Changed<Activated>>, mut count: ResMut<Count>| {
+                    count.0 += buttons.iter().count();
+                },
+            );
+        let window = app.world_mut().spawn_empty().id();
+        let button = app.world_mut().spawn((Button, ActivateOnPress)).id();
+        app.update();
+        let pointer = Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: RenderTarget::Window(WindowRef::Entity(window))
+                    .normalize(Some(window))
+                    .unwrap(),
+                position: Vec2::ZERO,
+            },
+        );
+        // Both pointer edges occur in one PreUpdate, as with a brief real tap.
+        app.add_systems(
+            PreUpdate,
+            move |mut commands: Commands, mut frame: Local<u8>| {
+                *frame += 1;
+                if *frame == 3 {
+                    commands.trigger(FocusedInput::new(
+                        button,
+                        KeyboardInput {
+                            key_code: KeyCode::Space,
+                            logical_key: Key::Space,
+                            state: ButtonState::Pressed,
+                            text: Some(" ".into()),
+                            repeat: false,
+                            window,
+                        },
+                        window,
+                    ));
+                }
+                if *frame != 1 {
+                    return;
+                }
+                commands.trigger(PointerPress {
+                    entity: button,
+                    pointer: pointer.clone(),
+                    button: PointerButton::Primary,
+                    hit: HitData::new(window, 0., None, None),
+                    count: 1,
+                });
+                commands.trigger(PointerRelease {
+                    entity: button,
+                    pointer: pointer.clone(),
+                    button: PointerButton::Primary,
+                    hit: HitData::new(window, 0., None, None),
+                });
+            },
+        );
+        app.update();
+        assert!(!app.world().entity(button).contains::<Pressed>());
+        assert_eq!(app.world().resource::<Count>().0, 1);
+        app.update();
+        assert_eq!(app.world().resource::<Count>().0, 1);
+        app.update();
+        assert_eq!(app.world().resource::<Count>().0, 2);
+        app.update();
+        assert_eq!(app.world().resource::<Count>().0, 2);
+    }
 
     fn fixture(generation: WorldGeneration) -> (VoxelWorld, Session) {
         let mut welcome = crate::join::tests::welcome(SessionMode::Player);

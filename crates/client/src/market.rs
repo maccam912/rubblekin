@@ -5,7 +5,9 @@ use bevy::{
         mouse::AccumulatedMouseScroll,
         touch::{TouchInput, TouchPhase},
     },
+    picking::hover::Hovered,
     prelude::*,
+    ui_widgets::{ActivateOnPress, Button},
     window::PrimaryWindow,
 };
 use rubblekin_core::{
@@ -565,7 +567,7 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
 
 fn button(action: Action) -> impl Bundle {
     (
-        Button,
+        (Button, ActivateOnPress, Hovered::default()),
         action,
         Node {
             min_height: px(44),
@@ -639,7 +641,7 @@ pub(crate) fn read(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut native: MessageReader<MenuKey>,
     touch_input: (MessageReader<TouchInput>, Option<Res<Touches>>),
-    actions: Query<(&Action, &Interaction), Changed<Interaction>>,
+    actions: Query<&Action, Changed<crate::ui::Activated>>,
     targets: Query<(
         Entity,
         &Action,
@@ -648,8 +650,7 @@ pub(crate) fn read(
         &Node,
         Option<&InheritedVisibility>,
     )>,
-    clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
-    parents: Query<&ChildOf, Without<bevy::ui::OverrideClip>>,
+    clipping: Query<&CalculatedClip>,
     mut roots: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<MarketScroll>>,
 ) {
     let (keys, wheel, time) = input;
@@ -731,7 +732,9 @@ pub(crate) fn read(
                             && enabled(&panel, *action, nearby)
                             && visibility.is_none_or(|v| v.get())
                             && node.contains_point(*transform, point)
-                            && bevy::ui::clip_check_recursive(point, entity, &clipping, &parents))
+                            && clipping
+                                .get(entity)
+                                .map_or(true, |clip| clip.contains_point(point)))
                         .then_some(*action)
                     });
             let (action, delta) = touch_gesture(&mut panel.gesture, event, hit);
@@ -739,9 +742,7 @@ pub(crate) fn read(
             scroll_delta += delta;
         }
         if !native_touch && !cfg!(target_os = "android") && chosen.is_none() {
-            chosen = actions.iter().find_map(|(action, interaction)| {
-                (*interaction == Interaction::Pressed).then_some(*action)
-            });
+            chosen = actions.iter().next().copied();
         }
         let step = if keys.just_pressed(KeyCode::ArrowUp)
             || (keys.just_pressed(KeyCode::Tab)
@@ -1765,7 +1766,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Action::Close,
-                Interaction::None,
+                Hovered::default(),
                 Node::default(),
                 ComputedNode {
                     size: Vec2::splat(80.),
@@ -1782,9 +1783,11 @@ mod tests {
             app.add_plugins((
                 MinimalPlugins,
                 bevy::asset::AssetPlugin::default(),
+                bevy::picking::DefaultPickingPlugins,
                 bevy::text::TextPlugin,
                 bevy::ui::UiPlugin,
             ))
+            .add_message::<bevy::window::WindowEvent>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<TextureAtlasLayout>>();
             app.world_mut().spawn((
@@ -2178,24 +2181,24 @@ mod tests {
         };
         app.world_mut()
             .entity_mut(close)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         send(&mut app, TouchPhase::Started);
         app.update();
         assert!(app.world().resource::<MarketPanel>().open);
         app.world_mut()
             .entity_mut(close)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         assert!(app.world().resource::<MarketPanel>().open);
         app.world_mut()
             .entity_mut(close)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         send(&mut app, TouchPhase::Ended);
         app.update();
         assert!(app.world().resource::<MarketPanel>().open);
         app.world_mut()
             .entity_mut(close)
-            .insert(Interaction::Pressed);
+            .insert(crate::ui::Activated);
         app.update();
         let panel = app.world().resource::<MarketPanel>();
         assert!(!panel.open && panel.input_blocked && panel.just_closed);
@@ -2226,7 +2229,14 @@ mod tests {
                 UiGlobalTransform::from_xy(100., 100.),
             ))
             .id();
-        app.world_mut().entity_mut(close).insert(ChildOf(clip));
+        // Bevy 0.20 stores all inherited clipping regions on the target.
+        app.world_mut().entity_mut(close).insert((
+            ChildOf(clip),
+            CalculatedClip::default().with_rect(
+                Rect::from_center_size(Vec2::ZERO, Vec2::splat(40.)),
+                &UiGlobalTransform::from_xy(100., 100.),
+            ),
+        ));
         for (point, remains_open) in [(Vec2::new(66., 50.), true), (Vec2::splat(50.), false)] {
             for phase in [TouchPhase::Started, TouchPhase::Ended] {
                 let mut event = touch(4, phase, point);

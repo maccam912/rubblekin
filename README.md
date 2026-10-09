@@ -126,7 +126,7 @@ Run tooling tests with Python 3.11+ using `python3 -m unittest discover -s scrip
 
 ## Run from source
 
-Use Rust/Cargo compatible with the workspace's Rust 1.95 minimum, then run from the repository root:
+Use Rust/Cargo compatible with the workspace's Rust 1.97.1 minimum, then run from the repository root:
 
 ```sh
 cargo run --locked -p rubblekin_client
@@ -409,7 +409,7 @@ Install Git LFS before cloning, or run `git lfs install` followed by `git lfs pu
 | --- | --- |
 | [core](crates/core/src/lib.rs) | Seeded terrain, edited cells, shared character physics, and explicit wire types. |
 | [server](crates/server/src/lib.rs) | Authoritative 20 Hz loop, validation, connections, NPC decisions, and saves. |
-| [client](crates/client/src/lib.rs) | Bevy 0.19.1 rendering, input, prediction, camera, and inspection UI. |
+| [client](crates/client/src/lib.rs) | Bevy 0.20.0 rendering, input, prediction, camera, and inspection UI. |
 
 For a block edit, read these in order:
 

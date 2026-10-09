@@ -405,6 +405,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .insert_resource(bevy::render::error_handler::RenderErrorHandler(
             crash_reporting::renderer_error,
         ))
+        .add_plugins(ui::ButtonActivationPlugin)
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(terrain_material::TerrainMaterialPlugin)
         .add_plugins(sky::SkyPlugin)
