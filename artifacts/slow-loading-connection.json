@@ -1,0 +1,49 @@
+{
+  "purpose": "Pause socket reads after Welcome to reproduce terrain/scene preparation on a slow client.",
+  "baseline_source": "88209bab1b1c66bac872a0660fd4e67bacf9a7d6",
+  "fix_base": "88209bab1b1c66bac872a0660fd4e67bacf9a7d6",
+  "protocol": 21,
+  "public_baseline": {
+    "address": "rubblekin.oci.koski.co:7878",
+    "unread_seconds": 75.0,
+    "started_at": 1791503995.915741,
+    "welcome": {
+      "version": 21,
+      "generation": "GeographyV6",
+      "seed": 1147444858,
+      "world_time": 240.65000358596444
+    },
+    "welcome_bytes": 21106,
+    "read_bytes": 2616144,
+    "states": 113,
+    "wildlife_states": 29,
+    "pong": false,
+    "last_world_time": 246.300003670156,
+    "closed": true,
+    "finished_at": 1791504071.2180061
+  },
+  "patched_local_same_seed": {
+    "address": "127.0.0.1:17878",
+    "unread_seconds": 75.0,
+    "started_at": 1791504172.4972181,
+    "welcome": {
+      "version": 21,
+      "generation": "GeographyV6",
+      "seed": 1147444858,
+      "world_time": 2.8000000417232513
+    },
+    "welcome_bytes": 20510,
+    "read_bytes": 790222,
+    "states": 36,
+    "wildlife_states": 10,
+    "pong": true,
+    "last_world_time": 77.90000116080046,
+    "finished_at": 1791504247.575715
+  },
+  "limits": "Baseline is public Linux/ARM64 behind ingress; patched run is isolated native macOS. Same seed and 75-second unread interval, separate simulation starts and socket buffering. This tests connection recovery, not low-end rendering or a controlled performance benchmark.",
+  "regressions": {
+    "burst": "1500 world snapshots and 375 wildlife snapshots with a real unread TCP peer; old code disconnected at tick 270, patched code preserves one terrain edit and the newest snapshots and answers Ping.",
+    "partial_write": "A partly transmitted JSON snapshot completes before newer snapshots; ordered events survive replacement and byte accounting returns to zero.",
+    "event_limit": "Reliable event backlogs still disconnect at the existing 8 MiB limit."
+  }
+}

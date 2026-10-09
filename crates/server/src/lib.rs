@@ -178,10 +178,21 @@ pub fn spawn(config: ServerConfig) -> io::Result<ServerHandle> {
     })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SnapshotKind {
+    World,
+    Wildlife,
+}
+
+struct OutgoingMessage {
+    bytes: Vec<u8>,
+    snapshot: Option<SnapshotKind>,
+}
+
 struct Connection {
     socket: TcpStream,
     incoming: Vec<u8>,
-    outgoing: VecDeque<Vec<u8>>,
+    outgoing: VecDeque<OutgoingMessage>,
     write_offset: usize,
     queued_bytes: usize,
     mode: Option<SessionMode>,
@@ -281,15 +292,40 @@ impl Connection {
     }
 
     fn send(&mut self, message: &ServerMessage) {
+        if self.dead {
+            return;
+        }
         match serde_json::to_vec(message) {
             Ok(mut bytes) => {
                 bytes.push(b'\n');
+                let snapshot = match message {
+                    ServerMessage::State { .. } => Some(SnapshotKind::World),
+                    ServerMessage::WildlifeState { .. } => Some(SnapshotKind::Wildlife),
+                    _ => None,
+                };
+                // Loading or a slow render frame can stop a client reading for
+                // a while. Full snapshots supersede earlier unsent snapshots;
+                // terrain edits and every other event remain ordered/lossless.
+                // A frame already partly sent must finish to preserve its JSON.
+                if let Some(kind) = snapshot
+                    && let Some(index) =
+                        self.outgoing.iter().enumerate().position(|(index, old)| {
+                            old.snapshot == Some(kind) && (index != 0 || self.write_offset == 0)
+                        })
+                {
+                    self.queued_bytes -= self.outgoing.remove(index).unwrap().bytes.len();
+                }
                 if self.queued_bytes + bytes.len() > MAX_OUTBOUND_BYTES {
+                    eprintln!(
+                        "Client disconnected: outgoing event backlog exceeded {MAX_OUTBOUND_BYTES} bytes (queued {}, new {})",
+                        self.queued_bytes,
+                        bytes.len()
+                    );
                     self.dead = true;
                     return;
                 }
                 self.queued_bytes += bytes.len();
-                self.outgoing.push_back(bytes);
+                self.outgoing.push_back(OutgoingMessage { bytes, snapshot });
             }
             Err(error) => {
                 eprintln!("Failed to encode server message: {error}");
@@ -301,9 +337,10 @@ impl Connection {
     fn flush(&mut self) -> io::Result<()> {
         let mut budget = 256 * 1024;
         while budget > 0 {
-            let Some(bytes) = self.outgoing.front() else {
+            let Some(message) = self.outgoing.front() else {
                 break;
             };
+            let bytes = &message.bytes;
             let end = bytes.len().min(self.write_offset + budget);
             match self.socket.write(&bytes[self.write_offset..end]) {
                 Ok(0) => {
@@ -1558,6 +1595,9 @@ fn validate_edit(
 }
 
 #[cfg(test)]
+mod connection_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1630,7 +1670,7 @@ mod tests {
         connections.get_mut(&1).unwrap().last_market_view = Some(blocked_until);
         handle_work(1, 102, WorkAction::View, &mut connections, &sim);
         let reply: ServerMessage =
-            serde_json::from_slice(connections[&1].outgoing.back().unwrap()).unwrap();
+            serde_json::from_slice(&connections[&1].outgoing.back().unwrap().bytes).unwrap();
         assert!(matches!(
             reply,
             ServerMessage::WorkState {
@@ -1651,7 +1691,8 @@ mod tests {
         )
         .unwrap();
         let replies = &connections[&1].outgoing;
-        let reply: ServerMessage = serde_json::from_slice(&replies[replies.len() - 2]).unwrap();
+        let reply: ServerMessage =
+            serde_json::from_slice(&replies[replies.len() - 2].bytes).unwrap();
         assert!(matches!(
             reply,
             ServerMessage::MarketState {
@@ -1667,7 +1708,7 @@ mod tests {
         assert!(connections[&1].active_work.is_none());
         handle_work(1, 3, WorkAction::Start { site }, &mut connections, &sim);
         let reply: ServerMessage =
-            serde_json::from_slice(connections[&1].outgoing.back().unwrap()).unwrap();
+            serde_json::from_slice(&connections[&1].outgoing.back().unwrap().bytes).unwrap();
         assert!(
             matches!(reply, ServerMessage::WorkState { accepted: false, notice, .. }
             if notice.contains("wait a moment"))

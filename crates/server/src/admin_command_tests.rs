@@ -92,7 +92,7 @@ impl Fixture {
 
     fn result(&self, id: u64) -> String {
         match serde_json::from_slice::<ServerMessage>(
-            self.connections[&id].outgoing.back().unwrap(),
+            &self.connections[&id].outgoing.back().unwrap().bytes,
         )
         .unwrap()
         {
@@ -113,7 +113,7 @@ impl Fixture {
             },
         );
         match serde_json::from_slice::<ServerMessage>(
-            self.connections[&id].outgoing.back().unwrap(),
+            &self.connections[&id].outgoing.back().unwrap().bytes,
         )
         .unwrap()
         {

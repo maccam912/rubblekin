@@ -74,7 +74,7 @@ impl Fixture {
 
     pub(super) fn notice(&self, id: u64) -> String {
         match serde_json::from_slice::<ServerMessage>(
-            self.connections[&id].outgoing.back().unwrap(),
+            &self.connections[&id].outgoing.back().unwrap().bytes,
         )
         .unwrap()
         {
@@ -92,7 +92,7 @@ fn optional_pilot_conversation_answers_without_boarding_or_changing_the_body() {
     position[0] += 1.0;
     f.add_player(1, position);
     f.send(1, ClientMessage::TalkToPilot { ship_id: ship.id });
-    match serde_json::from_slice::<ServerMessage>(f.connections[&1].outgoing.back().unwrap())
+    match serde_json::from_slice::<ServerMessage>(&f.connections[&1].outgoing.back().unwrap().bytes)
         .unwrap()
     {
         ServerMessage::PilotDialog { ship_id, text } => {
@@ -126,7 +126,7 @@ fn pilot_introduction_remains_the_same_after_departure() {
             .position = pilot_position(&ship);
         f.send(1, ClientMessage::TalkToPilot { ship_id: ship.id });
         let ServerMessage::PilotDialog { text, .. } =
-            serde_json::from_slice(f.connections[&1].outgoing.back().unwrap()).unwrap()
+            serde_json::from_slice(&f.connections[&1].outgoing.back().unwrap().bytes).unwrap()
         else {
             panic!("Expected a pilot answer");
         };
