@@ -169,11 +169,54 @@ fn queued_movement_can_spend_a_busy_servers_elapsed_time_but_not_more() {
             yaw: 0.0,
         },
     );
-    assert!(
-        f.connections[&1].dead,
-        "elapsed time is still a strict budget"
+    assert!(!f.connections[&1].dead, "late input must recover");
+    assert_eq!(f.snapshot(1).last_input_sequence, 5);
+}
+
+#[test]
+fn exhausted_movement_credit_corrects_time_but_keeps_sequence_validation() {
+    let mut f = Fixture::new();
+    f.player(1, "Delayed", [10.0, 60.0, 10.0]);
+    let started = Instant::now();
+    let initial = f.snapshot(1).body.clone();
+    let connection = f.connections.get_mut(&1).unwrap();
+    connection.input_credit = 0.0;
+    connection.credit_updated = started;
+    for sequence in 1..=64 {
+        f.send(
+            1,
+            ClientMessage::Input {
+                movement_epoch: 0,
+                sequence,
+                dt: MAX_INPUT_DT,
+                input: MoveInput {
+                    direction: [1.0, 0.0],
+                    fly: true,
+                    ..Default::default()
+                },
+                yaw: 0.0,
+            },
+        );
+    }
+    assert!(!f.connections[&1].dead);
+    assert_eq!(f.snapshot(1).last_input_sequence, 64);
+    let elapsed = started.elapsed().as_secs_f32();
+    // The fastest flight is 12m/s; sixteen requested seconds get only actual
+    // elapsed credit. A small positional tolerance covers f32 accumulation.
+    assert!(f.snapshot(1).body.position[0] - initial.position[0] <= elapsed * 12.0 + 0.001);
+    // Accepting a time correction does not forgive replayed sequence numbers.
+    f.send(
+        1,
+        ClientMessage::Input {
+            movement_epoch: 0,
+            sequence: 64,
+            dt: MAX_INPUT_DT,
+            input: MoveInput::default(),
+            yaw: 0.0,
+        },
     );
-    assert_eq!(f.snapshot(1).last_input_sequence, 4);
+    assert!(f.connections[&1].dead);
+    assert_eq!(f.snapshot(1).last_input_sequence, 64);
 }
 
 #[test]

@@ -1024,28 +1024,27 @@ fn handle_message(
             let now = Instant::now();
             connection.input_credit += now.duration_since(connection.credit_updated).as_secs_f64();
             connection.credit_updated = now;
-            if dt as f64 > connection.input_credit + 0.000_001 {
-                eprintln!(
-                    "Session {id} disconnected: movement time {dt} exceeded available credit {} at sequence {sequence}",
-                    connection.input_credit
+            // Packets can resume after neutral gravity has already spent the
+            // missing time. Apply only remaining server-owned time and still
+            // acknowledge the sequence, so prediction corrects and recovers.
+            // Extra commands never create movement credit or bypass validation.
+            let applied_dt = (dt as f64).min(connection.input_credit) as f32;
+            connection.input_credit = (connection.input_credit - applied_dt as f64).max(0.0);
+            // Ordinary inputs keep the client's exact duration and controller;
+            // only exhausted credit requires an authoritative time correction.
+            if applied_dt > 0.0 {
+                move_character_with_airships(
+                    &sim.world,
+                    &mut player.body,
+                    input,
+                    applied_dt,
+                    &obstacles,
+                    airships,
+                    sim.world_time,
+                    &mut player.ride,
+                    &mut player.deck_position,
                 );
-                connection.dead = true;
-                return Ok(());
             }
-            connection.input_credit = (connection.input_credit - dt as f64).max(0.0);
-            // Use exactly the client's command boundaries and shared controller:
-            // even a second direction normalization can change collision results.
-            move_character_with_airships(
-                &sim.world,
-                &mut player.body,
-                input,
-                dt,
-                &obstacles,
-                airships,
-                sim.world_time,
-                &mut player.ride,
-                &mut player.deck_position,
-            );
             player.last_input_sequence = sequence;
             player.yaw = yaw.rem_euclid(std::f32::consts::TAU);
             connection.last_input = now;

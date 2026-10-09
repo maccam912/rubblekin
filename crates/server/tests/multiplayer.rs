@@ -2313,9 +2313,26 @@ fn movement_commands_execute_exactly_once_with_their_original_durations() {
 fn movement_cannot_spend_more_than_the_servers_real_time_budget() {
     let save = TestSave::new();
     let server = spawn(save.config(false)).unwrap();
-    let (mut client, _) = Client::connect(server.addr, "Too fast");
-    // Half a second is the burst allowance. More in the same receive batch
-    // must disconnect before it can be acknowledged.
+    let started = Instant::now();
+    let (mut client, welcome) = Client::connect(server.addr, "Delayed burst");
+    let (id, initial_x) = match welcome {
+        ServerMessage::Welcome {
+            session_id,
+            players,
+            ..
+        } => (
+            session_id,
+            players
+                .iter()
+                .find(|p| p.id == session_id)
+                .unwrap()
+                .body
+                .position[0],
+        ),
+        _ => unreachable!(),
+    };
+    // Sixteen requested seconds get only the half-second burst allowance plus
+    // elapsed server time. Excess time is corrected while sequences are acked.
     let mut batch = Vec::new();
     for sequence in 1..=64 {
         serde_json::to_writer(
@@ -2336,7 +2353,32 @@ fn movement_cannot_spend_more_than_the_servers_real_time_budget() {
         batch.push(b'\n');
     }
     client.writer.write_all(&batch).unwrap();
-    client.until_disconnected(2);
+    let corrected = client.until(|message| {
+        matches!(message, ServerMessage::State { players, .. }
+            if players.iter().any(|p| p.id == id && p.last_input_sequence == 64))
+    });
+    if let ServerMessage::State { players, .. } = corrected {
+        let x = players.iter().find(|p| p.id == id).unwrap().body.position[0];
+        assert!(x - initial_x <= (0.5 + started.elapsed().as_secs_f32()) * 7.0 + 0.01);
+    }
+    // The same session remains usable after correcting the delayed batch.
+    thread::sleep(Duration::from_millis(50));
+    client.send(ClientMessage::Input {
+        movement_epoch: 0,
+        sequence: 65,
+        dt: 0.01,
+        input: MoveInput {
+            fly: true,
+            ..Default::default()
+        },
+        yaw: 0.0,
+    });
+    client.until(|message| {
+        matches!(message, ServerMessage::State { players, .. }
+            if players.iter().any(|p| p.id == id && p.last_input_sequence == 65))
+    });
+    client.send(ClientMessage::Ping);
+    client.until(|message| matches!(message, ServerMessage::Pong));
     let (mut good, _) = Client::connect(server.addr, "Still healthy");
     good.send(ClientMessage::Ping);
     good.until(|message| matches!(message, ServerMessage::Pong));

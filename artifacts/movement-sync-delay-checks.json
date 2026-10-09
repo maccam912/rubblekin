@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-08",
+  "purpose": "Reproduce sync-related kicks by holding four seconds of TCP traffic after the first movement input, then release it. Each native client exits at its configured 20-second app deadline.",
+  "conditions": {
+    "os": "macOS 26.6.2",
+    "cpu": "Apple M5 Pro",
+    "client": "native shared Bevy client with --low --touch, 840x400",
+    "server": "isolated seed 42 GeographyV3 world per run",
+    "protocol": 22,
+    "traffic": "ordinary neutral movement commands; keyboard movement and release are covered by the client TCP regression"
+  },
+  "runs": {
+    "original_client_downlink": {
+      "delay_seconds": 4,
+      "closed_by": "client",
+      "closed_after_first_input_seconds": 1.9127134160371497,
+      "input_count": 214,
+      "last_sequence": 214,
+      "inputs_after_release": 0,
+      "client_exit_code": 0,
+      "screenshot_saved": false,
+      "server_disconnects": [],
+      "client_source": "4c35bdd",
+      "server_source": "4c35bdd",
+      "direction": "downlink"
+    },
+    "client_fix_only_uplink": {
+      "delay_seconds": 4,
+      "direction": "uplink",
+      "released_after_seconds": 4.014141499996185,
+      "last_sequence_before_release": 203,
+      "relay_error": "[Errno 54] Connection reset by peer",
+      "closed_after_first_input_seconds": 4.036668209009804,
+      "input_count": 203,
+      "last_sequence": 203,
+      "inputs_after_release": 0,
+      "client_exit_code": 0,
+      "screenshot_saved": false,
+      "server_disconnects": [
+        "Session 1 disconnected: movement time 0.023085168 exceeded available credit 0.0065670521222694405 at sequence 23"
+      ],
+      "client_source": "client portion of current patch",
+      "server_source": "4c35bdd"
+    },
+    "complete_fix_downlink": {
+      "delay_seconds": 4,
+      "released_after_seconds": 4.0094786250265315,
+      "last_sequence_before_release": 217,
+      "relay_error": "[Errno 54] Connection reset by peer",
+      "closed_after_first_input_seconds": 6.81185599998571,
+      "input_count": 550,
+      "last_sequence": 550,
+      "inputs_after_release": 333,
+      "client_exit_code": 0,
+      "screenshot_saved": false,
+      "server_disconnects": [],
+      "client_source": "current patch",
+      "server_source": "current patch",
+      "direction": "downlink",
+      "exit_note": "TCP reset at successful scheduled native app shutdown; no server movement rejection. Input sequences continued after the four-second delay.",
+      "capture_note": "World loading left only 6.81 seconds before the fixed app deadline, shorter than the eight-second automatic screenshot settling interval."
+    },
+    "complete_fix_uplink": {
+      "delay_seconds": 4,
+      "direction": "uplink",
+      "released_after_seconds": 4.00047154200729,
+      "last_sequence_before_release": 213,
+      "relay_error": "[Errno 54] Connection reset by peer",
+      "closed_after_first_input_seconds": 9.600063542020507,
+      "input_count": 876,
+      "last_sequence": 876,
+      "inputs_after_release": 663,
+      "client_exit_code": 0,
+      "screenshot_saved": true,
+      "server_disconnects": [],
+      "client_source": "current patch",
+      "server_source": "current patch",
+      "exit_note": "TCP reset at successful scheduled native app shutdown; no server movement rejection. Input sequences continued after the four-second delay."
+    }
+  },
+  "limits": "Native macOS shared-client evidence, not a physical Android, integrated-GPU, Linux/Windows runtime or published APK check. No production state was modified. Final uplink screenshot shows the recovered joined world."
+}

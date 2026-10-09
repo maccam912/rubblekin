@@ -1,7 +1,10 @@
 //! Reconcile at the server's acknowledged input, then replay newer movement.
 //! Each side runs the same controller with the same input and duration.
 
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 #[cfg(test)]
 use rubblekin_core::physics::move_character_with_obstacles;
@@ -14,6 +17,7 @@ use rubblekin_core::{
 
 const MAX_PENDING_INPUTS: usize = 512;
 const MAX_PENDING_SECONDS: f32 = 2.0;
+const SYNC_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct PendingInput {
     sequence: u64,
@@ -29,6 +33,7 @@ pub struct Prediction {
     sequence: u64,
     acknowledged: u64,
     movement_epoch: u64,
+    waiting_since: Option<Instant>,
 }
 
 impl Prediction {
@@ -43,6 +48,34 @@ impl Prediction {
 
     pub fn movement_epoch(&self) -> u64 {
         self.movement_epoch
+    }
+
+    pub fn waiting(&self) -> bool {
+        self.waiting_since.is_some()
+    }
+
+    /// Keep bounded history without turning a temporary network/loading delay
+    /// into a disconnect. Waiting frames neither move nor spend a sequence;
+    /// when acknowledgments arrive, the next frame samples current controls.
+    pub fn ready_to_advance(
+        &mut self,
+        dt: f32,
+        transport_ready: bool,
+        now: Instant,
+    ) -> Result<bool, &'static str> {
+        if transport_ready && self.has_capacity(dt) {
+            self.waiting_since = None;
+            return Ok(true);
+        }
+        let since = *self.waiting_since.get_or_insert(now);
+        if now.saturating_duration_since(since) >= SYNC_WAIT_TIMEOUT {
+            return Err("Movement sync timed out after waiting 10 seconds; reconnect to continue");
+        }
+        Ok(false)
+    }
+
+    fn has_capacity(&self, dt: f32) -> bool {
+        self.pending.len() < MAX_PENDING_INPUTS && self.pending_seconds + dt <= MAX_PENDING_SECONDS
     }
 
     #[cfg(test)]
@@ -93,9 +126,7 @@ impl Prediction {
         if !dt.is_finite() || dt <= 0.0 || dt > MAX_INPUT_DT {
             return Err("Invalid movement duration");
         }
-        if self.pending.len() >= MAX_PENDING_INPUTS
-            || self.pending_seconds + dt > MAX_PENDING_SECONDS
-        {
+        if !self.has_capacity(dt) {
             return Err("Server stopped acknowledging movement; reconnect to resynchronize");
         }
         self.sequence = self
@@ -184,10 +215,14 @@ impl Prediction {
             self.sequence = acknowledged;
             self.acknowledged = acknowledged;
             self.movement_epoch = authoritative.movement_epoch;
+            self.waiting_since = None;
             return Ok(());
         }
         if acknowledged < self.acknowledged || acknowledged > self.sequence {
             return Err("Server sent an invalid movement acknowledgment");
+        }
+        if acknowledged > self.acknowledged {
+            self.waiting_since = None;
         }
         self.acknowledged = acknowledged;
         while self

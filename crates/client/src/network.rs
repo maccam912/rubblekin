@@ -111,8 +111,17 @@ impl Connection {
     }
 
     pub fn fail(&mut self, message: String) {
+        bevy::log::warn!(
+            "Connection ended: {message} (queued messages: {}, buffered bytes: {})",
+            self.outgoing.len(),
+            self.incoming.len()
+        );
         self.error = Some(message);
         let _ = self.stream.shutdown(Shutdown::Both);
+    }
+
+    pub fn can_send(&self) -> bool {
+        self.error.is_none() && self.outgoing.len() < MAX_OUTBOX
     }
 
     pub fn send(&mut self, message: ClientMessage) {

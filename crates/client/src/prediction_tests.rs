@@ -815,3 +815,82 @@ fn prediction_backlog_and_invalid_acknowledgments_are_bounded() {
             .is_err()
     );
 }
+
+#[test]
+fn full_movement_history_waits_for_progress_and_times_out_on_wall_time() {
+    let world = World::new(1);
+    let mut body = Body::new(world.spawn_position());
+    let mut prediction = Prediction::default();
+    for _ in 0..8 {
+        prediction
+            .advance(&world, &mut body, MoveInput::default(), 0.0, 0.25, &[])
+            .unwrap();
+    }
+    let now = Instant::now();
+    assert!(!prediction.ready_to_advance(0.25, true, now).unwrap());
+    assert!(prediction.waiting());
+    // Receiving snapshots without a newer acknowledgment is not progress.
+    prediction.acknowledge(&snapshot(body.clone(), 0)).unwrap();
+    assert!(prediction.waiting());
+    assert!(
+        !prediction
+            .ready_to_advance(0.25, true, now + Duration::from_secs(9))
+            .unwrap()
+    );
+    assert_eq!(prediction.pending.len(), 8);
+    assert_eq!(prediction.pending_seconds, 2.0);
+    assert_eq!(prediction.sequence, 8);
+    assert!(
+        prediction
+            .ready_to_advance(0.25, true, now + SYNC_WAIT_TIMEOUT)
+            .unwrap_err()
+            .contains("timed out")
+    );
+    // A real acknowledgment releases capacity and clears the timeout/notice.
+    prediction.acknowledge(&snapshot(body, 4)).unwrap();
+    assert!(!prediction.waiting());
+    assert!(
+        prediction
+            .ready_to_advance(0.25, true, now + SYNC_WAIT_TIMEOUT)
+            .unwrap()
+    );
+    assert_eq!(prediction.pending.len(), 4);
+}
+
+#[test]
+fn input_count_and_transport_pressure_pause_without_spending_sequences() {
+    let now = Instant::now();
+    let mut prediction = Prediction::default();
+    // Pause before predicting a command that a full socket outbox cannot hold.
+    assert!(!prediction.ready_to_advance(0.01, false, now).unwrap());
+    assert!(prediction.pending.is_empty());
+    assert_eq!(prediction.sequence, 0);
+    assert!(
+        prediction
+            .ready_to_advance(0.01, true, now + Duration::from_secs(4))
+            .unwrap()
+    );
+    assert!(!prediction.waiting());
+    for _ in 0..MAX_PENDING_INPUTS {
+        prediction
+            .record(MoveInput::default(), 0.0, 0.001, None)
+            .unwrap();
+    }
+    assert!(!prediction.ready_to_advance(0.001, true, now).unwrap());
+    let mut authoritative = snapshot(Body::new([0.25, 20.0, 0.25]), 0);
+    authoritative.movement_epoch = 1;
+    prediction.acknowledge(&authoritative).unwrap();
+    assert!(!prediction.waiting());
+    assert!(prediction.pending.is_empty());
+    assert!(prediction.ready_to_advance(0.25, true, now).unwrap());
+    assert!(matches!(
+        prediction
+            .record(MoveInput::default(), 0.0, 0.25, None)
+            .unwrap(),
+        ClientMessage::Input {
+            sequence: 1,
+            movement_epoch: 1,
+            ..
+        }
+    ));
+}

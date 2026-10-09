@@ -43,6 +43,8 @@ mod admin_integration_tests;
 mod avatar_tests;
 #[cfg(test)]
 mod inspection_tests;
+#[cfg(test)]
+mod movement_sync_tests;
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -992,7 +994,17 @@ fn controls(
         let session = &mut *session;
         if let Some(observer) = &mut session.observer {
             observer.advance(observer_input, session.yaw, session.pitch, input.sprint, dt);
-        } else {
+        } else if match session.prediction.ready_to_advance(
+            dt,
+            connection.can_send(),
+            std::time::Instant::now(),
+        ) {
+            Ok(ready) => ready,
+            Err(error) => {
+                connection.fail(error.into());
+                false
+            }
+        } {
             let obstacles = character_obstacles(
                 session.id,
                 &session.players,

@@ -625,6 +625,9 @@ pub fn update_ui(
 }
 
 fn notice_text(session: &Session, world: &crate::VoxelWorld, now: f64, touch: bool) -> String {
+    if session.prediction.waiting() {
+        return "Waiting for server… movement will resume automatically.".into();
+    }
     if now < session.status_until {
         return session.status.clone();
     }
@@ -703,6 +706,25 @@ mod tests {
         session.status_until = 0.;
         session.captured = true;
         (VoxelWorld(world), session)
+    }
+
+    #[test]
+    fn movement_sync_notice_is_visible_during_wait_and_clears_on_recovery() {
+        let (world, mut session) = fixture(WorldGeneration::ValleyV1);
+        session.status = "existing notice".into();
+        session.status_until = 12.0;
+        let now = std::time::Instant::now();
+        assert!(
+            !session
+                .prediction
+                .ready_to_advance(0.1, false, now)
+                .unwrap()
+        );
+        for touch in [false, true] {
+            assert!(notice_text(&session, &world, 1.0, touch).contains("Waiting for server"));
+        }
+        assert!(session.prediction.ready_to_advance(0.1, true, now).unwrap());
+        assert_eq!(notice_text(&session, &world, 1.0, true), "existing notice");
     }
 
     #[test]
