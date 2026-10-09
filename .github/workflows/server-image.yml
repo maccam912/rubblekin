@@ -21,7 +21,9 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # Native simulation tests can exceed 20 minutes on AMD64; leave room for
+    # cold dependency builds, the release binary, and image/cache export too.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
