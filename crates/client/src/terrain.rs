@@ -212,7 +212,9 @@ pub(crate) fn install_terrain(
     images: &mut Assets<Image>,
     prepared: PreparedTerrain,
 ) -> TerrainScene {
-    let opaque_material = terrain_materials.add(terrain_material(None));
+    let opaque_material = terrain_materials.add(crate::terrain_material::block_material(
+        images.add(crate::block_textures::atlas()),
+    ));
     let glass_material = materials.add(StandardMaterial {
         base_color: Color::srgba(0.77, 0.94, 0.95, 0.36),
         alpha_mode: AlphaMode::Blend,
@@ -1989,6 +1991,13 @@ fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
                         ]
                     });
                     geometry.quad(points, normal.map(|n| n as f32), colors);
+                    if block != Block::Glass {
+                        let start = geometry.uvs.len() - 4;
+                        for (index, corner) in corners.iter().enumerate() {
+                            geometry.uvs[start + index] =
+                                crate::block_textures::face_uv(block, normal, *corner);
+                        }
+                    }
                 }
             }
             add_meadow_details(&mut opaque, world, &cache, x, z, geographic_biome);

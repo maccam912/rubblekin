@@ -3,6 +3,10 @@
 /saves/
 /graphics.json
 /graphics.json.tmp
+/creative-hotbar.json
+/creative-hotbar.json.tmp
+join-preferences.json
+join-preferences.json.*.tmp
 player-profiles.json
 .player-profiles.json.lock
 .player-profiles.json.*.tmp
@@ -61,6 +65,15 @@ player-profiles.json
 !/artifacts/wilderness-map-native.png
 !/artifacts/wilderness-arch-native.png
 !/artifacts/wilderness-inspection-native.png
+!/artifacts/sky-day.png
+!/artifacts/sky-sunset.png
+!/artifacts/sky-night.png
+!/artifacts/sky-native-checks.md
+!/artifacts/creative-inventory-desktop.png
+!/artifacts/creative-inventory-colors.png
+!/artifacts/creative-inventory-touch.png
+!/artifacts/creative-blocks-native.png
+!/artifacts/sky-shadow-comparison.png
 
 # Machine-local configuration, credentials, and editor/OS debris.
 .env

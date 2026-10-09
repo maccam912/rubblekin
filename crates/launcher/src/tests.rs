@@ -438,6 +438,9 @@ fn keeps_current_and_previous_versions_and_never_cleans_game_data() {
     fs::create_dir_all(&other_target).unwrap();
     fs::write(other_target.join("client"), b"other architecture").unwrap();
     fs::write(launcher.data_dir.join("game/world.json"), b"saved world").unwrap();
+    let preferences_path = launcher.data_dir.join("game/join-preferences.json");
+    let preferences = br#"{"version":1,"name":"Violet"}"#;
+    fs::write(&preferences_path, preferences).unwrap();
     for (commit, executable) in [
         (FIRST, b"first".as_slice()),
         (SECOND, b"second"),
@@ -445,7 +448,15 @@ fn keeps_current_and_previous_versions_and_never_cleans_game_data() {
     ] {
         let fixture = Fixture::release(commit, executable);
         fixture.use_for(&mut launcher);
-        launcher.update(|_| {}).unwrap();
+        let client = launcher.update(|_| {}).unwrap();
+        assert_eq!(
+            client.game_dir.join("join-preferences.json"),
+            preferences_path
+        );
+        let data_dir = launcher.data_dir.clone();
+        drop(launcher);
+        launcher = Launcher::open(Some(data_dir)).unwrap();
+        assert_eq!(fs::read(&preferences_path).unwrap(), preferences);
     }
     assert!(!launcher.clients_dir().join(FIRST).exists());
     assert!(launcher.clients_dir().join(SECOND).exists());

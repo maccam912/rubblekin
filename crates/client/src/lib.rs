@@ -3,6 +3,7 @@ mod airship_mesh;
 #[cfg(test)]
 mod airship_motion_tests;
 mod airships;
+mod block_textures;
 mod capture;
 mod crash_reporting;
 mod crops;
@@ -12,7 +13,9 @@ mod graphics;
 mod ground_details;
 mod inspection;
 mod inspection_details;
+mod inventory;
 mod join;
+mod join_preferences;
 mod market;
 mod network;
 mod observer;
@@ -21,6 +24,7 @@ mod pause;
 mod platform;
 mod prediction;
 mod profile;
+mod sky;
 mod terrain;
 mod terrain_albedo;
 mod terrain_material;
@@ -76,6 +80,8 @@ pub struct Session {
     pub pitch: f32,
     pub camera_distance: f32,
     pub selected: usize,
+    pub hotbar: [Block; palette::QUICK_SLOTS],
+    pub inventory: inventory::Inventory,
     pub flying: bool,
     pub captured: bool,
     pub can_admin: bool,
@@ -271,7 +277,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 visible material | C more blocks | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 hotbar slot | I inventory | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G talk to airship pilot | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -336,7 +342,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .connect
             .clone()
             .unwrap_or_else(|| "rubblekin.oci.koski.co:7878".into()),
-        options.name.unwrap_or_else(|| "Wayfarer".into()),
+        options.name.unwrap_or_else(|| {
+            join_preferences::load(std::path::Path::new(join_preferences::FILE))
+        }),
         ServerConfig {
             bind_addr: options.bind.unwrap_or_else(|| "127.0.0.1:7878".into()),
             save_path: options
@@ -397,6 +405,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(terrain_material::TerrainMaterialPlugin)
+        .add_plugins(sky::SkyPlugin)
+        .init_resource::<block_textures::BlockIcons>()
         .add_systems(First, platform::frame_time.before(bevy::time::TimeSystems))
         .add_systems(First, platform::activity_exit)
         .add_message::<join::MenuKey>()
@@ -411,6 +421,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 join::poll_connection,
                 (
                     setup,
+                    sky::setup,
                     ui::setup_ui,
                     touch::setup,
                     pause::setup,
@@ -418,6 +429,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     admin_console::setup,
                     world_map::setup,
                     market::setup,
+                    inventory::setup,
                 )
                     .chain()
                     .run_if(resource_added::<Session>),
@@ -425,6 +437,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 (
                     (
                         receive_network,
+                        inventory::read,
                         admin_console::read,
                         market::read,
                         airships::read,
@@ -434,6 +447,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         controls,
                         graphics::apply_settings,
                         camera,
+                        sky::update,
                     )
                         .chain(),
                     (
@@ -455,6 +469,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         admin_console::refresh,
                         world_map::refresh,
                         market::refresh,
+                        inventory::refresh,
                         join::leave_world,
                     )
                         .chain(),
@@ -511,17 +526,6 @@ fn setup(
         "Terrain assets installed in {:.3}s",
         start.elapsed().as_secs_f32()
     );
-    commands.spawn((
-        GameEntity,
-        DirectionalLight {
-            illuminance: 10500.0,
-            color: Color::srgb(1.0, 0.94, 0.85),
-            shadow_maps_enabled: graphics.quality.shadows(),
-            ..default()
-        },
-        graphics.cascades(),
-        Transform::from_xyz(-40.0, 65.0, 25.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
     commands.spawn((
         GameEntity,
         Camera3d::default(),
@@ -745,6 +749,7 @@ fn controls(
             .as_ref()
             .is_some_and(|dialog| dialog.open() || dialog.input_blocked);
     let blocked = blocked
+        || session.inventory.input_blocked
         || console
             .as_ref()
             .is_some_and(|console| console.input_blocked)
@@ -759,6 +764,7 @@ fn controls(
             .as_ref()
             .is_some_and(|dialog| dialog.just_closed);
     let resumed = resumed
+        || session.inventory.just_closed
         || console.as_ref().is_some_and(|console| console.just_closed)
         || map.as_ref().is_some_and(|map| map.just_closed)
         || market.as_ref().is_some_and(|panel| panel.just_closed);
@@ -903,9 +909,6 @@ fn controls(
     }
     session.graphics = graphics.quality;
     if !blocked && window.focused && !observing {
-        if keys.just_pressed(KeyCode::KeyC) || touch.palette_page {
-            session.selected = palette::next_page(session.selected);
-        }
         for (slot, key) in [
             KeyCode::Digit1,
             KeyCode::Digit2,
@@ -917,13 +920,11 @@ fn controls(
         .iter()
         .enumerate()
         {
-            if keys.just_pressed(*key)
-                && let Some(index) = palette::index_for_slot(session.selected, slot)
-            {
-                session.selected = index;
+            if keys.just_pressed(*key) {
+                session.selected = slot;
             }
         }
-        if let Some(selected) = touch.selected.filter(|index| *index < PALETTE.len()) {
+        if let Some(selected) = touch.selected.filter(|index| *index < palette::QUICK_SLOTS) {
             session.selected = selected;
         }
     }
@@ -1080,7 +1081,8 @@ fn edit_blocks(
     console: Option<Res<admin_console::AdminConsole>>,
     market: Option<Res<market::MarketPanel>>,
 ) {
-    if pause.is_some_and(|menu| menu.open || menu.input_blocked)
+    if session.inventory.input_blocked
+        || pause.is_some_and(|menu| menu.open || menu.input_blocked)
         || map.is_some_and(|map| map.open || map.input_blocked)
         || conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
@@ -1145,7 +1147,7 @@ fn edit_blocks(
             let block = if dig {
                 Block::Air
             } else {
-                PALETTE[session.selected]
+                session.hotbar[session.selected]
             };
             let target = if dig { position } else { previous };
             let request_id = session.next_request;

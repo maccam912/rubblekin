@@ -452,7 +452,8 @@ pub(super) fn read(
             && !key.input.repeat
             && key.input.logical_key == Key::BrowserBack;
     }
-    if pause.is_some_and(|menu| menu.open || menu.input_blocked)
+    if session.inventory.input_blocked
+        || pause.is_some_and(|menu| menu.open || menu.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
         || map.is_some_and(|map| map.open || map.input_blocked)
         || market.is_some_and(|market| market.open || market.input_blocked)

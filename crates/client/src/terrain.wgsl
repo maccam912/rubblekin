@@ -11,6 +11,9 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var distant_albedo: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var distant_sampler: sampler;
 
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var block_albedo: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var block_sampler: sampler;
+
 fn grain(position: vec3<f32>, size: f32) -> f32 {
     let cell = vec3<i32>(floor(position / size));
     var value = bitcast<u32>(cell.x) * 0x9e3779b9u
@@ -32,7 +35,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // map visibility depends on distance, not on screen resolution or slope.
     let map_color = textureSample(distant_albedo, distant_sampler,
         (in.world_position.xz + vec2<f32>(16384.0)) / 32768.0).rgb;
-    let map_surface = distant * in.uv.x;
+    let map_surface = distant * max(in.uv.x, 0.0);
+    let block_color = textureSample(block_albedo, block_sampler, vec2<f32>(-in.uv.x - 1.0, in.uv.y)).rgb;
+    pbr.material.base_color = vec4<f32>(pbr.material.base_color.rgb * select(vec3<f32>(1.0), mix(block_color, vec3<f32>(0.88), smoothstep(0.03, 0.18, footprint)), in.uv.x < -0.5), pbr.material.base_color.a);
     let map_weight = map_surface * smoothstep(48.0, 144.0,
         distance(in.world_position.xyz, view.world_position));
     pbr.material.base_color = vec4<f32>(

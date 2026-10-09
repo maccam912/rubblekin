@@ -447,7 +447,8 @@ pub fn read(
         return;
     }
     let was_open = pause.open;
-    if console.is_some_and(|console| console.input_blocked)
+    if session.as_ref().is_some_and(|s| s.inventory.input_blocked)
+        || console.is_some_and(|console| console.input_blocked)
         || market.is_some_and(|market| market.open || market.input_blocked)
         || map
             .as_ref()

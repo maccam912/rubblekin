@@ -1,101 +1,59 @@
-//! Two fixed pages of unlimited building blocks, separate from traded cargo.
+//! Unlimited creative building slots, separate from the player's traded cargo.
 use rubblekin_core::world::Block;
-
 pub const QUICK_SLOTS: usize = 6;
-// Keep the original six indices stable for existing quick-key behavior.
-pub const MATERIALS: [Block; 11] = [
+pub const MATERIALS: &[Block] = Block::ALL;
+pub const DEFAULT_HOTBAR: [Block; QUICK_SLOTS] = [
     Block::Grass,
     Block::Dirt,
     Block::Stone,
     Block::Wood,
     Block::Brick,
     Block::Glass,
-    Block::Sand,
-    Block::Leaves,
-    Block::Snow,
-    Block::Clay,
-    Block::IronOre,
 ];
-pub const PAGE_COUNT: usize = MATERIALS.len().div_ceil(QUICK_SLOTS);
-
-pub fn page(selected: usize) -> usize {
-    selected.min(MATERIALS.len() - 1) / QUICK_SLOTS
+const FILE: &str = "creative-hotbar.json";
+pub fn load() -> [Block; QUICK_SLOTS] {
+    load_from(std::path::Path::new(FILE))
 }
-
-/// Changing pages also selects its first block, keeping the build material
-/// visible and highlighted in the six quick slots.
-pub fn next_page(selected: usize) -> usize {
-    ((page(selected) + 1) % PAGE_COUNT) * QUICK_SLOTS
+fn load_from(path: &std::path::Path) -> [Block; QUICK_SLOTS] {
+    std::fs::read(path)
+        .ok()
+        .filter(|bytes| bytes.len() < 4096)
+        .and_then(|bytes| serde_json::from_slice::<[Block; QUICK_SLOTS]>(&bytes).ok())
+        .filter(|slots| slots.iter().all(|b| b.is_solid()))
+        .unwrap_or(DEFAULT_HOTBAR)
 }
-
-pub fn index_for_slot(selected: usize, slot: usize) -> Option<usize> {
-    if slot >= QUICK_SLOTS {
-        return None;
-    }
-    let index = page(selected) * QUICK_SLOTS + slot;
-    (index < MATERIALS.len()).then_some(index)
+pub fn save(slots: &[Block; QUICK_SLOTS]) -> std::io::Result<()> {
+    save_to(std::path::Path::new(FILE), slots)
 }
-
+fn save_to(path: &std::path::Path, slots: &[Block; QUICK_SLOTS]) -> std::io::Result<()> {
+    use std::io::Write;
+    let bytes = serde_json::to_vec(slots)?;
+    let temporary = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&temporary)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    std::fs::rename(temporary, path)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
-
     #[test]
-    fn both_pages_cover_every_existing_solid_and_preserve_the_original_quick_keys() {
-        assert_eq!(
-            &MATERIALS[..QUICK_SLOTS],
-            &[
-                Block::Grass,
-                Block::Dirt,
-                Block::Stone,
-                Block::Wood,
-                Block::Brick,
-                Block::Glass,
-            ]
-        );
-        let mut reachable = HashSet::new();
-        let mut selected = 0;
-        for _ in 0..PAGE_COUNT {
-            for slot in 0..QUICK_SLOTS {
-                if let Some(index) = index_for_slot(selected, slot) {
-                    assert!(MATERIALS[index].is_solid());
-                    assert!(reachable.insert(MATERIALS[index]));
-                }
-            }
-            selected = next_page(selected);
-        }
-        assert_eq!(selected, 0);
-        assert_eq!(
-            reachable,
-            HashSet::from([
-                Block::Grass,
-                Block::Dirt,
-                Block::Stone,
-                Block::Sand,
-                Block::Wood,
-                Block::Leaves,
-                Block::Brick,
-                Block::Glass,
-                Block::Snow,
-                Block::Clay,
-                Block::IronOre,
-            ])
-        );
-        assert!(!reachable.contains(&Block::Air));
-    }
-
-    #[test]
-    fn short_second_page_has_no_sixth_selection_and_never_indexes_past_the_catalog() {
-        let second = next_page(5);
-        assert_eq!(MATERIALS[second], Block::Sand);
-        assert_eq!(
-            index_for_slot(second, 4).map(|index| MATERIALS[index]),
-            Some(Block::IronOre)
-        );
-        assert_eq!(index_for_slot(second, 5), None);
-        assert_eq!(index_for_slot(second, usize::MAX), None);
-        assert_eq!(next_page(10), 0);
-        assert!(next_page(usize::MAX) < MATERIALS.len());
+    fn edited_slots_survive_restart_and_invalid_slots_fall_back() {
+        let directory =
+            std::env::temp_dir().join(format!("rubblekin-hotbar-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(FILE);
+        assert_eq!(load_from(&path), DEFAULT_HOTBAR);
+        let mut slots = DEFAULT_HOTBAR;
+        slots[2] = Block::PurpleWool;
+        slots[5] = Block::OakPlanks;
+        save_to(&path, &slots).unwrap();
+        assert_eq!(load_from(&path), slots);
+        slots[0] = Block::Air;
+        save_to(&path, &slots).unwrap();
+        assert_eq!(load_from(&path), DEFAULT_HOTBAR);
+        std::fs::write(&path, b"broken").unwrap();
+        assert_eq!(load_from(&path), DEFAULT_HOTBAR);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -26,6 +26,9 @@ pub struct TerrainTexture {
     #[texture(101)]
     #[sampler(102)]
     albedo: Option<Handle<Image>>,
+    #[texture(103)]
+    #[sampler(104)]
+    blocks: Option<Handle<Image>>,
 }
 
 impl MaterialExtension for TerrainTexture {
@@ -45,6 +48,13 @@ pub fn terrain_material(albedo: Option<Handle<Image>>) -> TerrainMaterial {
         extension: TerrainTexture {
             distant: f32::from(albedo.is_some()),
             albedo,
+            blocks: None,
         },
     }
+}
+
+pub fn block_material(atlas: Handle<Image>) -> TerrainMaterial {
+    let mut material = terrain_material(None);
+    material.extension.blocks = Some(atlas);
+    material
 }

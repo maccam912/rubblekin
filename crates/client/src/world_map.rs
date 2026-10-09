@@ -568,7 +568,8 @@ pub(crate) fn read(
         })
     });
     let requested = std::mem::take(&mut map.requested);
-    let other_modal = console.input_blocked
+    let other_modal = session.inventory.input_blocked
+        || console.input_blocked
         || dialog.open()
         || dialog.input_blocked
         || pause.open

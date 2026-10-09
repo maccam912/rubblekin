@@ -2,6 +2,7 @@
 use crate::{
     Avatars, GameEntity, Session, VoxelWorld,
     graphics::{GraphicsQuality, GraphicsSettings},
+    join_preferences::validate_name,
     network::{Connection, ConnectionStage},
     observer::ObserverCamera,
     prediction::Prediction,
@@ -207,6 +208,13 @@ impl JoinScreen {
                 JoinStage::Network(ConnectionStage::ResolvingAddress)
             })
             .map_err(|error| error.to_string())?;
+            // Save on submission, even if the network is unavailable. The launcher
+            // always starts clients in its stable game directory; Android uses its
+            // private data directory. Preference failures must not prevent play.
+            let preferences_path = profile_path.with_file_name(crate::join_preferences::FILE);
+            if let Err(error) = crate::join_preferences::save(&preferences_path, &name) {
+                eprintln!("Could not remember character name: {error}");
+            }
             let profile_id = if mode == SessionMode::Player {
                 let scope = if local {
                     crate::profile::local_scope(&config.save_path)
@@ -274,14 +282,6 @@ impl JoinScreen {
             self.next_action = None;
         }
     }
-}
-
-fn validate_name(name: &str) -> Result<String, &'static str> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 24 || name.chars().any(char::is_control) {
-        return Err("Enter a character name of 1–24 characters.");
-    }
-    Ok(name.into())
 }
 
 fn validate_address(address: &str) -> Result<String, &'static str> {
@@ -1226,6 +1226,8 @@ pub(crate) fn session_from_welcome(
             pitch: 0.12,
             camera_distance: 6.5,
             selected: 3,
+            hotbar: crate::palette::load(),
+            inventory: default(),
             flying: false,
             captured: false,
             can_admin,
@@ -1561,6 +1563,12 @@ pub(crate) mod tests {
         menu.start(false);
         assert!(menu.pending.is_none());
         assert!(menu.status.contains("character name"));
+        assert!(
+            !menu
+                .profile_path
+                .with_file_name(crate::join_preferences::FILE)
+                .exists()
+        );
     }
 
     #[test]
@@ -2415,6 +2423,9 @@ pub(crate) mod tests {
             GraphicsQuality::default(),
             SessionMode::Observer,
         );
+        let preferences_path = menu
+            .profile_path
+            .with_file_name(crate::join_preferences::FILE);
         menu.start(true);
         let mut app = App::new();
         app.insert_resource(menu)
@@ -2457,6 +2468,7 @@ pub(crate) mod tests {
             );
         };
         wait_for_join(&mut app);
+        assert_eq!(crate::join_preferences::load(&preferences_path), "Tester");
         let session = app.world().resource::<Session>();
         assert!(session.observer.is_some());
         assert!(!session.can_admin);
@@ -2549,6 +2561,29 @@ pub(crate) mod tests {
                 .is_active
         );
         drop(app);
+        // A new menu in a fresh app receives the persisted name, rather than
+        // relying on the JoinScreen resource retained when leaving a world.
+        let fresh_menu = JoinScreen::new(
+            "remote.example:7878".into(),
+            crate::join_preferences::load(&preferences_path),
+            ServerConfig::default(),
+            GraphicsQuality::default(),
+            SessionMode::Player,
+        );
+        let mut fresh_app = App::new();
+        fresh_app
+            .insert_resource(fresh_menu)
+            .init_resource::<Assets<Font>>()
+            .add_systems(Startup, setup);
+        fresh_app.update();
+        assert!(
+            fresh_app
+                .world_mut()
+                .query::<(&Field, &EditableText)>()
+                .iter(fresh_app.world())
+                .any(|(field, input)| *field == Field::Name && input.value() == "Tester")
+        );
+        std::fs::remove_dir_all(preferences_path.parent().unwrap()).unwrap();
         let _ = std::fs::remove_file(path.with_extension("lock"));
         std::fs::remove_file(path).unwrap();
     }

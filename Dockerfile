@@ -30,7 +30,7 @@ COPY crates/client/Cargo.toml ./crates/client/Cargo.toml
 COPY crates/launcher/Cargo.toml ./crates/launcher/Cargo.toml
 COPY crates/core ./crates/core
 COPY crates/server ./crates/server
-RUN cargo test --locked -p rubblekin_core -p rubblekin_server \
+RUN RUST_BACKTRACE=1 cargo test --locked -p rubblekin_core -p rubblekin_server \
     && cargo build --locked --release -p rubblekin_server
 
 FROM debian:bookworm-slim

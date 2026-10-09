@@ -1,4 +1,4 @@
-use crate::{PALETTE, Session};
+use crate::Session;
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -33,6 +33,7 @@ pub fn setup_ui(
     mut commands: Commands,
     mut fonts: ResMut<Assets<Font>>,
     session: Res<Session>,
+    icons: Option<Res<crate::block_textures::BlockIcons>>,
     touch: Option<Res<crate::touch::TouchControls>>,
 ) {
     let observing = session.observer.is_some();
@@ -135,18 +136,19 @@ pub fn setup_ui(
             (Text::new(format!("{}{}", if observing {
                 "W A S D   fly     •     mouse / arrows   look\nQ / E   descend / ascend     •     Shift   5× speed\nScroll   adjust speed     •     R / Home   return to spawn\nTab   inspect aimed target     •     F2   graphics\nV   visit next village     •     M   world map\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server\nRead-only camera · no avatar or editing"
             } else {
-                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   select materials     •     C   more blocks\nF   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot     •     M   world map\nB   cargo, markets & local work\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
+                "W A S D   move     •     mouse / arrows   look\nSpace   jump     •     Shift   sprint\nLeft click   dig     •     Right click   build\n1–6   hotbar slot     •     I   inventory\nF   creative flight\nQ / E   descend / ascend     •     scroll   zoom\nTab   inspect aimed target\nG   talk to airship pilot     •     M   world map\nB   cargo, markets & local work\nEsc   pause menu     •     H   hide controls\nF10   leave world / choose another server"
             }, if session.can_admin { "\n` / ~   admin commands (help lists commands)" } else { "" })), TextFont::from_font_size(16.0).with_font(font.clone()), TextColor(ink())),
         ],
     ));
     let palette_font = font.clone();
+    let icon_handles = icons.as_ref().map(|icons| icons.0.clone());
     commands.spawn((
         crate::GameEntity,
         Node {
             position_type: PositionType::Absolute,
             bottom: px(28),
-            left: percent(35),
-            right: percent(22),
+            left: percent(32),
+            right: px(22),
             align_items: AlignItems::Center,
             flex_direction: FlexDirection::Column,
             row_gap: px(9),
@@ -175,7 +177,7 @@ pub fn setup_ui(
                     ..default()
                 },
                 Children::spawn(SpawnIter(
-                    PALETTE
+                    crate::palette::DEFAULT_HOTBAR
                         .into_iter()
                         .take(crate::palette::QUICK_SLOTS)
                         .enumerate()
@@ -199,12 +201,19 @@ pub fn setup_ui(
                                 children![
                                     (
                                         Node {
-                                            width: px(24),
-                                            height: px(20),
+                                            width: px(32),
+                                            height: px(28),
                                             border_radius: BorderRadius::all(px(3)),
                                             ..default()
                                         },
                                         BackgroundColor(Color::srgb(r, g, b)),
+                                        ImageNode::new(
+                                            icon_handles
+                                                .as_ref()
+                                                .map(|icons| icons[block.catalog_index().unwrap()]
+                                                    .clone())
+                                                .unwrap_or_default()
+                                        ),
                                         PaletteSwatch(index)
                                     ),
                                     (
@@ -328,7 +337,7 @@ fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) 
                     Text::new(if observing {
                         "Left stick: fly · swipe the world: look\nRise / Fall: vertical flight · Sprint: boost\n+ / −: camera speed\nMenu: graphics, return to spawn, next village, servers\nInspect: aimed character, block, or plot · swipe panel to scroll\nRead-only observer: no avatar or editing"
                     } else {
-                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a material tile to choose · Blocks switches pages\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nCargo / Work: coins, goods, deliveries and local jobs · trade at market entrances\nMenu: graphics, controls, and leave world"
+                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a hotbar tile to choose · Inventory changes its blocks\nInspect: aimed character, block, or plot · swipe panel to scroll\nWalk or jump onto a landed airship to ride\nMove / jump normally aboard · Pilot asks the route\nCargo / Work: coins, goods, deliveries and local jobs · trade at market entrances\nMenu: graphics, controls, and leave world"
                     }),
                     TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink()),
                     Node { flex_shrink: 0., ..default() },
@@ -437,6 +446,7 @@ pub fn update_ui(
     map: Option<Res<crate::world_map::WorldMap>>,
     conversation: Option<Res<crate::airships::PilotConversation>>,
     market: Option<Res<crate::market::MarketPanel>>,
+    icons: Option<Res<crate::block_textures::BlockIcons>>,
     mut refresh: Local<f32>,
     mut texts: ParamSet<(
         Query<&mut Text, With<StatusText>>,
@@ -463,7 +473,10 @@ pub fn update_ui(
         ),
         Without<PaletteSwatch>,
     >,
-    mut swatches: Query<(&PaletteSwatch, &mut BackgroundColor), Without<PaletteSlot>>,
+    mut swatches: Query<
+        (&PaletteSwatch, &mut BackgroundColor, &mut ImageNode),
+        Without<PaletteSlot>,
+    >,
 ) {
     *refresh += time.delta_secs();
     if *refresh < 0.1 {
@@ -471,9 +484,10 @@ pub fn update_ui(
     }
     *refresh = 0.0;
     let touch_enabled = touch.as_ref().is_some_and(|touch| touch.enabled);
-    let menu_open = pause
-        .as_ref()
-        .is_some_and(|pause| pause.open || pause.input_blocked)
+    let menu_open = session.inventory.input_blocked
+        || pause
+            .as_ref()
+            .is_some_and(|pause| pause.open || pause.input_blocked)
         || console
             .as_ref()
             .is_some_and(|console| console.open || console.input_blocked)
@@ -546,15 +560,13 @@ pub fn update_ui(
             )
         } else {
             format!(
-                "CREATIVE  /  {}\n{} · Blocks {}/{} · C more blocks",
+                "CREATIVE  /  {}\n{} · I inventory",
                 if session.flying {
                     "FLIGHT ENABLED"
                 } else {
                     "UNLIMITED MATERIALS"
                 },
-                PALETTE[session.selected].name(),
-                crate::palette::page(session.selected) + 1,
-                crate::palette::PAGE_COUNT
+                session.hotbar[session.selected].name()
             )
         };
         set_text(&mut text, value);
@@ -583,27 +595,22 @@ pub fn update_ui(
         }
     }
     for (label, mut text) in &mut texts.p4() {
-        if let Some(index) = crate::palette::index_for_slot(session.selected, label.0) {
-            set_text(
-                &mut text,
-                format!("{} {}", label.0 + 1, PALETTE[index].name()),
-            );
-        }
+        set_text(
+            &mut text,
+            format!("{} {}", label.0 + 1, session.hotbar[label.0].name()),
+        );
     }
-    for (swatch, mut background) in &mut swatches {
-        if let Some(index) = crate::palette::index_for_slot(session.selected, swatch.0) {
-            let [r, g, b, _] = PALETTE[index].color();
-            *background = BackgroundColor(Color::srgb(r, g, b));
+    for (swatch, mut background, mut image) in &mut swatches {
+        let [r, g, b, _] = session.hotbar[swatch.0].color();
+        *background = BackgroundColor(Color::srgb(r, g, b));
+        if let Some(icons) = &icons {
+            image.image = icons.0[session.hotbar[swatch.0].catalog_index().unwrap()].clone();
+            *background = BackgroundColor(Color::NONE);
         }
     }
     for (slot, mut node, mut border, mut background) in &mut slots {
-        let index = crate::palette::index_for_slot(session.selected, slot.0);
-        node.display = if index.is_some() {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        let active = index == Some(session.selected);
+        node.display = Display::Flex;
+        let active = slot.0 == session.selected;
         *border = BorderColor::all(if active {
             Color::srgb(0.95, 0.75, 0.35)
         } else {
@@ -632,7 +639,7 @@ fn notice_text(session: &Session, world: &crate::VoxelWorld, now: f64, touch: bo
         } else {
             format!(
                 "{} · {}",
-                PALETTE[session.selected].name(),
+                session.hotbar[session.selected].name(),
                 if session.flying {
                     "creative flight"
                 } else {
@@ -656,7 +663,7 @@ fn notice_text(session: &Session, world: &crate::VoxelWorld, now: f64, touch: bo
     } else {
         format!(
             "{}  ·  0.5 m blocks  ·  hold Ctrl + click to repeat",
-            PALETTE[session.selected].name()
+            session.hotbar[session.selected].name()
         )
     }
 }
@@ -701,7 +708,8 @@ mod tests {
     #[test]
     fn palette_refresh_updates_visible_names_colors_and_selection_together() {
         let (world, mut session) = fixture(WorldGeneration::ValleyV1);
-        session.selected = 9; // Clay on page two.
+        session.selected = 3;
+        session.hotbar[3] = rubblekin_core::world::Block::Clay;
         let mut time = Time::<()>::default();
         time.advance_by(std::time::Duration::from_millis(150));
         let mut app = App::new();
@@ -717,14 +725,7 @@ mod tests {
             .query::<(&PaletteSlot, &Node, &BorderColor)>()
             .iter(app.world())
         {
-            assert_eq!(
-                node.display,
-                if slot.0 == 5 {
-                    Display::None
-                } else {
-                    Display::Flex
-                }
-            );
+            assert_eq!(node.display, Display::Flex);
             if slot.0 == 3 {
                 assert_eq!(*border, BorderColor::all(Color::srgb(0.95, 0.75, 0.35)));
             }
@@ -738,7 +739,7 @@ mod tests {
                 assert_eq!(text.0, "4 Clay");
             }
         }
-        let [r, g, b, _] = PALETTE[9].color();
+        let [r, g, b, _] = rubblekin_core::world::Block::Clay.color();
         for (swatch, background) in app
             .world_mut()
             .query::<(&PaletteSwatch, &BackgroundColor)>()
@@ -753,8 +754,8 @@ mod tests {
             .query_filtered::<&Text, With<ModeText>>()
             .single(app.world())
             .unwrap();
-        assert!(mode.0.contains("Clay · Blocks 2/2 · C more blocks"));
-        app.world_mut().resource_mut::<Session>().selected = 3;
+        assert!(mode.0.contains("Clay · I inventory"));
+        app.world_mut().resource_mut::<Session>().hotbar[3] = rubblekin_core::world::Block::Wood;
         app.update();
         assert!(
             app.world_mut()
@@ -777,7 +778,7 @@ mod tests {
             assert!(notice_text(&session, &world, 10., touch).is_empty());
             session.target = Some((BlockPos::new(0, 10, 0), BlockPos::new(0, 11, 0)));
             let text = notice_text(&session, &world, 10., touch);
-            assert!(text.contains(PALETTE[session.selected].name()));
+            assert!(text.contains(session.hotbar[session.selected].name()));
             assert!(text.contains(if touch { "Dig / Build" } else { "Ctrl + click" }));
             session.target = None;
         }

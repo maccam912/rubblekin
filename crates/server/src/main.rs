@@ -47,7 +47,7 @@ fn main() -> io::Result<()> {
             "--allow-admin" => config.allow_admin = true,
             "--help" | "-h" => {
                 println!(
-                    "rubblekin-server [--bind 0.0.0.0:7878] [--save saves/world.json] [--seed 42] [--generation v3|v4|v5|v6] [--allow-admin]\n\n--allow-admin grants developer controls to EVERY connected player and allows read-only observer sessions. Use only on a trusted development server.\nExisting saves retain their seed and generation. New save paths default to v6 villages; --generation v3 reproduces the earlier terrain. The world keeps simulating without players; server downtime is not replayed."
+                    "rubblekin-server [--bind 0.0.0.0:7878] [--save saves/world.json] [--seed 42] [--generation v3|v4|v5|v6] [--allow-admin]\n\n--allow-admin grants developer controls to EVERY connected player and allows read-only observer sessions. Use only on a trusted development server.\nThe player named exactly maccam912 always gets developer controls, even without --allow-admin. Names are not authenticated.\nExisting saves retain their seed and generation. New save paths default to v6 villages; --generation v3 reproduces the earlier terrain. The world keeps simulating without players; server downtime is not replayed."
                 );
                 return Ok(());
             }

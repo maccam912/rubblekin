@@ -36,6 +36,8 @@ cargo run --locked -p rubblekin_launcher
 
 Client arguments go after `--`; relative client paths resolve inside `game`. Headless mode fails visibly when an update cannot complete; `--offline` explicitly chooses the installed client. The launcher updates the client, not itself; manifest format 1 must remain compatible with previously downloaded launchers. Client ZIPs are also available for direct use without automatic updates.
 
+Your character name is remembered when you choose Join or local play and is filled in on the next start. You can change it in the join form; `--name` overrides the remembered value. The name is stored in `game/join-preferences.json`, alongside your persistent game data, so closing the launcher or updating the client keeps it. Direct client runs store this file in their working directory; Android uses app-private storage.
+
 ## Android client
 
 Android builds produce `rubblekin-client-aarch64-linux-android.apk` for ARM64 devices. The package declares Android 8.0+ and Vulkan 1.0 as requirements; these are build requirements, not a guarantee of performance on every device. Install the APK from an Android-capable client release, allowing installation from your download app when Android requests it. The updater is built into the game APK, so there is one Rubblekin app icon.
@@ -237,7 +239,8 @@ Geographic islands now have persistent rabbits and wolves. Rabbits hop and lower
 | Mouse wheel | Adjust third-person camera distance. |
 | Left click / right click | Remove / place the targeted block. |
 | Ctrl + hold mouse button | Repeat digging or building. |
-| 1–6; C | Select a visible quick slot; switch block pages. Page 1: Grass, Earth, Stone, Wood, Brick, Glass. Page 2: Sand, Leaves, Snow, Clay, Iron ore. |
+| 1–6 | Select a hotbar slot. |
+| I (or C) | Open the creative inventory; choose a block, then click a hotbar slot or press 1–6 to assign it. I / Escape / Done returns to play. |
 | F; Q / E | Toggle creative flight; descend / ascend. |
 | Tab | Close inspection, or open it and select the target under the center dot. |
 | G / N | Optional pilot conversation / next nearby pilot. |
@@ -248,7 +251,9 @@ Geographic islands now have persistent rabbits and wolves. Rabbits hop and lower
 | F10 | Disconnect and return to the join screen. |
 | F12 | Save a screenshot in `artifacts/`. |
 
-Touch **Blocks 1/2** switches the same material pages; five slots appear on page two. Building materials are unlimited and do not spend cargo. While the map is open, **C** retains its map-center action.
+Touch **Inventory** opens the same catalog; tap a block, then the desired hotbar slot. The 153-block library includes nature, stone, masonry, eight woods with logs/planks/parquet, metals, and 18 colors each of concrete, wool and tiles. Browse categories/pages or click Search and type on desktop. Textured cube previews match the material patterns used in the world. Building materials are unlimited and do not spend cargo. Six hotbar choices persist in `creative-hotbar.json` beside other client preferences and survive launcher updates. Movement, looking and editing stop while the inventory is open, including its closing frame; the shared simulation continues. Observers remain read-only. While the map is open, **C** retains its map-center action.
+
+Native previews: [desktop inventory](artifacts/creative-inventory-desktop.png), [colored blocks](artifacts/creative-inventory-colors.png), [compact touch inventory](artifacts/creative-inventory-touch.png).
 
 Press **M** while playing or observing to open the north-up world map, or choose **Map** in the pause menu. It shows the actual island, rivers, trails, named towns, spawn, and your live position (camera position for observers). Town numbers match the directory, which gives your horizontal distance to each town and regional architecture where space permits. W/L badges identify windmills and lookouts. Fresh V5 worlds show violet R/S markers for trail ruins and waystones; V6 adds P/Q for shelters and quarry yards; larger layouts show the nearest roadside site and distance. Scroll or pinch over the map to zoom and drag with a mouse or one finger to pan. The visible **Zoom − / +**, **Center on you**, and **Whole world** buttons also work on touch screens; **C** and **R** retain the desktop shortcuts. **M**, **Escape / Android Back**, or **Return** closes it. Player controls stop while the shared world and airship travel continue. Legacy valleys have an overhead terrain map without towns. The geographic map represents generated terrain; individual block edits remain visible in the game nearby.
 
@@ -262,7 +267,7 @@ Developer controls work only for player sessions when the server allows them:
 | F9 | Set hunger to 85 and energy to 35 for testing. |
 | `[` / `]` | Favor rest / restore equal forage and rest weights. |
 
-The local auto-host enables these controls for every connected player. They are disabled by default on a dedicated server. On keyboards with media function keys, use the platform's function-key modifier if needed.
+The local auto-host enables these controls for every connected player. Dedicated servers grant them to the player named exactly `maccam912` as an easter egg; other players need the server's `--allow-admin` setting. Names are freely chosen, so anyone using that exact name receives admin permissions. On keyboards with media function keys, use the platform's function-key modifier if needed.
 
 ## Admin commands
 
@@ -278,7 +283,7 @@ Press the **backquote / tilde key** (` / ~) in an admin-enabled player session t
 
 `tp` is an alias for `teleport`; a leading `/` is optional. Coordinates are **meters**, in X Y Z order, with Y the height of the player's feet. They must be inside the world and clear of terrain and characters. Named destinations choose clear space within three meters so players do not overlap; grounded destinations require a nearby supported floor. Names match in full, ignoring case; quote names containing spaces, for example `teleport "Ian Koski" Violet`. Missing or duplicate names produce a readable error.
 
-The existing server-wide admin setting controls access: local hosting enables it for every connected player, dedicated servers default to disabled, and observers remain read-only. No per-user authentication is added. Teleporting clears velocity and preserves the player's creative-flight toggle. Coordinate teleports detach from airships; teleporting to a passenger places you on their moving deck. Teleporting invalidates pre-teleport movement inputs and requires matching rebuilt clients and servers.
+The server grants admin commands and NPC developer controls to player sessions named exactly `maccam912` (case-sensitive), even without `--allow-admin`. Local hosting and `--allow-admin` grant them to every connected player. Observers remain read-only and still require the server-wide setting for admission. No per-user authentication is added. Teleporting clears velocity and preserves the player's creative-flight toggle. Coordinate teleports detach from airships; teleporting to a passenger places you on their moving deck. Teleporting invalidates pre-teleport movement inputs and requires matching rebuilt clients and servers.
 
 ## Ride village airships
 
@@ -309,9 +314,11 @@ The read-only camera creates no avatar and passes freely through terrain. WASD f
 
 Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. In geographic worlds, nearby detailed terrain follows the camera and distant landforms cover the full 32.768 km region. The old 160 × 160 m valley renderer remains available for legacy saves.
 
-The current handshake uses **protocol v19**. Rebuild/restart both client and server together. Save version 7 records the terrain generator, village residents/stores, private player trading progress, shared consumed quarry cells, persistent wildlife/forage, and interrupted animal journeys. Wildlife home ranges change on physical arrival. Versions 1–6 load additively; earlier residents receive default needs and keep their jobs, goods, and terrain. Generation identifiers remain explicit, but pre-release scenery geometry may change in place under the October 8 save waiver. Original valleys remain a separate generator.
+The current handshake uses **protocol v22**. Rebuild/restart both client and server together. Save version 8 records the terrain generator, village residents/stores, private player trading progress, shared consumed quarry/salvage cells, persistent wildlife/forage, and interrupted animal journeys. Wildlife home ranges change on physical arrival. Versions 1–7 load additively; earlier residents receive default needs and keep their jobs, goods, and terrain. Generation identifiers remain explicit, but pre-release scenery geometry may change in place under the October 8 save waiver. Original valleys remain a separate generator.
 
 ## Graphics
+
+The sky has drifting clouds, pale blue at the horizon and deeper blue overhead, and a visible sun. The shared world runs a **40-minute day–night cycle: 20 minutes of day and 20 of night**, with gradual dawn and dusk. Sunset warms the sky, clouds and sunlight; Balanced/High shadows lengthen as the sun lowers. Shadow direction advances in small one-second steps to prevent continuous edge shimmer; the visible sun and color transitions remain smooth. Stars fade in at night while cool ambient and directional light keep the landscape readable. Low retains inexpensive contact shadows. Sky time resumes from the world's saved simulation clock, with no downtime catch-up.
 
 Before loading a world, choose **Use minimum graphics** on the main menu to reset quality to Low, near detail to 24 m, and medium trees to 128 m, with dynamic shadows and antialiasing off. This saves immediately for the next launch and can help when expensive saved settings prevent entering a world. It is also available on Android.
 
@@ -380,7 +387,7 @@ The public test server address is **`rubblekin.oci.koski.co:7878`**, prefilled o
 cargo run --locked -p rubblekin_client -- --connect rubblekin.oci.koski.co:7878 --name Visitor
 ```
 
-The October 4 native client and two-client socket checks passed over the original public IP (`147.224.165.110:7878`), including shared player state, ping, and logout removal. Dedicated-server admin controls are disabled. OCI's security list permits TCP 7878 to the shared load balancer; its existing private rules cover forwarding to Kubernetes.
+The October 4 native client and two-client socket checks passed over the original public IP (`147.224.165.110:7878`), including shared player state, ping, and logout removal. The public server disables the server-wide admin setting; the `maccam912` exception becomes available when this server change is deployed. OCI's security list permits TCP 7878 to the shared load balancer; its existing private rules cover forwarding to Kubernetes.
 
 For cluster-local troubleshooting, you can also forward the service:
 

@@ -132,30 +132,42 @@ impl Client {
         self.writer.write_all(&bytes).unwrap();
     }
 
+    #[track_caller]
     fn until(&mut self, predicate: impl Fn(&ServerMessage) -> bool) -> ServerMessage {
         self.until_for(predicate, Duration::from_secs(5))
     }
 
+    #[track_caller]
     fn until_for(
         &mut self,
         predicate: impl Fn(&ServerMessage) -> bool,
         timeout: Duration,
     ) -> ServerMessage {
-        let deadline = Instant::now() + timeout;
+        let started = Instant::now();
+        let deadline = started + timeout;
+        let mut last_message = String::from("none");
         loop {
             assert!(
                 Instant::now() < deadline,
-                "Timed out waiting for expected server message"
+                "Timed out after {timeout:?} waiting for expected server message; last message: {last_message}"
             );
             let mut line = String::new();
+            let count = match self.reader.read_line(&mut line) {
+                Ok(count) => count,
+                Err(error) => panic!(
+                    "Server read failed after {:?}: {error}; last message: {last_message}",
+                    started.elapsed()
+                ),
+            };
             assert!(
-                self.reader.read_line(&mut line).unwrap() > 0,
-                "Server disconnected"
+                count > 0,
+                "Server disconnected; last message: {last_message}"
             );
             let message = serde_json::from_str(&line).unwrap();
             if predicate(&message) {
                 return message;
             }
+            last_message = line.trim_end().chars().take(400).collect();
         }
     }
 
@@ -1014,6 +1026,97 @@ fn assert_distinct_bodies(positions: impl IntoIterator<Item = [f32; 3]>) {
             );
         }
     }
+}
+
+#[test]
+fn easter_egg_name_grants_player_admin_without_enabling_other_players() {
+    let save = TestSave::new();
+    let server = spawn(save.config(false)).unwrap();
+    let (mut admin, welcome) = Client::connect(server.addr, "maccam912");
+    let admin_id = match welcome {
+        ServerMessage::Welcome {
+            can_admin,
+            session_id,
+            ..
+        } => {
+            assert!(can_admin);
+            session_id
+        }
+        _ => unreachable!(),
+    };
+    admin.teleport([20.0, 50.0, 20.0]);
+    assert!(matches!(
+        admin.until(|m| matches!(m, ServerMessage::State { players, .. } if players.iter().any(|p| p.id == admin_id && p.movement_epoch == 1))),
+        ServerMessage::State { players, .. } if players.iter().any(|p| p.id == admin_id && p.body.position[0] == 20.0 && p.body.position[2] == 20.0)
+    ));
+    thread::sleep(Duration::from_millis(110));
+    admin.send(ClientMessage::Admin {
+        action: AdminAction::SetNpcGoal {
+            goal: Some(NpcAction::Rest),
+        },
+    });
+    assert!(matches!(
+        admin.until(|m| matches!(m, ServerMessage::Notice { .. })),
+        ServerMessage::Notice { text } if text == "NPC settings updated"
+    ));
+    admin.until(|m| matches!(m, ServerMessage::State { npc, .. } if npc.forced && npc.action == NpcAction::Rest));
+
+    for name in ["Ian", "Maccam912", "maccam912 ", "maccam912x"] {
+        let (mut player, welcome) = Client::connect(server.addr, name);
+        assert!(matches!(
+            welcome,
+            ServerMessage::Welcome {
+                can_admin: false,
+                ..
+            }
+        ));
+        player.send(ClientMessage::AdminCommand {
+            command: "tp 30 50 30".into(),
+        });
+        assert!(matches!(
+            player.until(|m| matches!(m, ServerMessage::AdminCommandResult { .. })),
+            ServerMessage::AdminCommandResult { text } if text.contains("disabled")
+        ));
+        player.send(ClientMessage::Admin {
+            action: AdminAction::SetNpcGoal { goal: None },
+        });
+        assert!(matches!(
+            player.until(|m| matches!(m, ServerMessage::Notice { .. })),
+            ServerMessage::Notice { text } if text.contains("disabled")
+        ));
+    }
+    let (mut target, _) = Client::connect(server.addr, "Violet");
+    admin.send(ClientMessage::AdminCommand {
+        command: "tp Violet 30 50 30".into(),
+    });
+    assert!(matches!(
+        admin.until(|m| matches!(m, ServerMessage::AdminCommandResult { .. })),
+        ServerMessage::AdminCommandResult { text } if text.starts_with("Teleported Violet")
+    ));
+    target.until(|m| matches!(m, ServerMessage::State { players, .. } if players.iter().any(|p| p.name == "Violet" && p.movement_epoch == 1 && p.body.position[0] == 30.0 && p.body.position[2] == 30.0)));
+
+    // The name exception grants player controls, not observer admission.
+    let mut observer = Client::open(server.addr);
+    observer.send(ClientMessage::Hello {
+        version: PROTOCOL_VERSION,
+        name: "maccam912".into(),
+        mode: SessionMode::Observer,
+        profile_id: None,
+    });
+    assert!(matches!(
+        observer.until(|m| matches!(m, ServerMessage::Notice { .. })),
+        ServerMessage::Notice { text } if text.contains("observation is disabled")
+    ));
+    drop(admin);
+    let (_, welcome) = Client::connect(server.addr, "maccam912");
+    assert!(matches!(
+        welcome,
+        ServerMessage::Welcome {
+            can_admin: true,
+            ..
+        }
+    ));
+    server.stop().unwrap();
 }
 
 #[test]
@@ -2655,10 +2758,32 @@ fn finite_resource_race(
         matches!(started, ServerMessage::WorkState { accepted: true, .. }),
         "{started:?}"
     );
-    let changed = observer.until_for(
-        |m| matches!(m, ServerMessage::BlockChanged {edit,..} if edit.position == anchor),
-        Duration::from_secs(15),
-    );
+    // Keep every peer reading during the six-second race. Leaving both players
+    // unread while waiting on the observer can fill TCP buffers with old
+    // snapshots. Use the existing race budget for all three peers together.
+    let (changed, first_result, second_result) = thread::scope(|scope| {
+        let first_wait = scope.spawn(|| {
+            first.until_for(
+                |m| matches!(m, ServerMessage::WorkState {request_id:0,work,ledger,..} if work.active.is_none() && ledger.cargo[slot]==1),
+                Duration::from_secs(15),
+            )
+        });
+        let second_wait = scope.spawn(|| {
+            second.until_for(
+                |m| matches!(m, ServerMessage::WorkState {request_id:0,work,accepted:false,..} if work.active.is_none()),
+                Duration::from_secs(15),
+            )
+        });
+        let changed = observer.until_for(
+            |m| matches!(m, ServerMessage::BlockChanged {edit,..} if edit.position == anchor),
+            Duration::from_secs(15),
+        );
+        (
+            changed,
+            first_wait.join().unwrap(),
+            second_wait.join().unwrap(),
+        )
+    });
     assert!(started_at.elapsed() >= Duration::from_millis(5700));
     assert!(
         matches!(changed, ServerMessage::BlockChanged { request_id:0, edit,..} if edit.block == Block::Air)
@@ -2672,10 +2797,10 @@ fn finite_resource_race(
     assert_eq!(durable["profiles"][FIRST]["ledger"]["cargo"][slot], 1);
     assert_eq!(durable["profiles"][SECOND]["ledger"]["cargo"][slot], 0);
     assert!(
-        matches!(first.until_for(|m| matches!(m, ServerMessage::WorkState {request_id:0,work,ledger,..} if work.active.is_none() && ledger.cargo[slot]==1), Duration::from_secs(5)), ServerMessage::WorkState {accepted:true,ledger,..} if ledger.coins==0 && ledger.revision==1)
+        matches!(first_result, ServerMessage::WorkState {accepted:true,ledger,..} if ledger.coins==0 && ledger.revision==1)
     );
     assert!(
-        matches!(second.until_for(|m| matches!(m, ServerMessage::WorkState {request_id:0,work,accepted:false,..} if work.active.is_none()), Duration::from_secs(5)), ServerMessage::WorkState {ledger,..} if ledger.cargo_total()==0)
+        matches!(second_result, ServerMessage::WorkState {ledger,..} if ledger.cargo_total()==0)
     );
     assert!(matches!(
         first.work(2, WorkAction::Start { site }),
@@ -2913,5 +3038,42 @@ fn wildlife_replicates_advances_without_clients_and_keeps_its_saved_population()
         matches!(reply,ServerMessage::AdminCommandResult{text} if text.contains("rabbits")&&text.contains("wolves"))
     );
     drop(observer);
+    server.stop().unwrap();
+}
+
+#[test]
+fn creative_catalog_blocks_replicate_and_survive_server_restart() {
+    let save = TestSave::new();
+    let config = save.config(false);
+    let server = spawn(config.clone()).unwrap();
+    let (mut builder, _) = Client::connect(server.addr, "Creative builder");
+    let (mut spectator, _) = Client::connect(server.addr, "Creative neighbor");
+    let position = nearby_air();
+    for (index, &block) in Block::ALL.iter().enumerate() {
+        if index != 0 {
+            thread::sleep(Duration::from_millis(110));
+        }
+        let request_id = index as u64 + 1;
+        builder.send(ClientMessage::Edit {
+            request_id,
+            position,
+            block,
+        });
+        for client in [&mut builder, &mut spectator] {
+            let reply = client.until(|m| matches!(m, ServerMessage::BlockChanged { request_id: id, .. } | ServerMessage::Rejected { request_id: id, .. } if *id == request_id));
+            assert!(
+                matches!(reply, ServerMessage::BlockChanged { edit, .. } if edit.position == position && edit.block == block),
+                "{block:?}: {reply:?}"
+            );
+        }
+    }
+    drop(builder);
+    drop(spectator);
+    server.stop().unwrap();
+    let server = spawn(config).unwrap();
+    let (_, welcome) = Client::connect(server.addr, "Creative builder returned");
+    assert!(
+        matches!(welcome,ServerMessage::Welcome { edits, .. } if edits.iter().any(|e| e.position == position && e.block == *Block::ALL.last().unwrap()))
+    );
     server.stop().unwrap();
 }

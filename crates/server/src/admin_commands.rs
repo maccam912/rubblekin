@@ -34,7 +34,7 @@ pub(super) fn handle(
     airships: &AirshipNetwork,
     config: &ServerConfig,
 ) {
-    let result = if !config.allow_admin {
+    let result = if !connections[&id].admin_enabled(config) {
         Err("Admin commands are disabled on this server".into())
     } else if !connections.get_mut(&id).unwrap().admit_admin_request() {
         Err("Commands are arriving too quickly; try again in a moment".into())

@@ -322,7 +322,10 @@ pub(crate) fn read(
     console.just_closed = false;
     let was_open = console.open;
     console.input_blocked = was_open;
-    if !session.is_some_and(|session| session.can_admin && session.observer.is_none()) {
+    if !session
+        .as_ref()
+        .is_some_and(|session| session.can_admin && session.observer.is_none())
+    {
         if was_open {
             console.close();
         }
@@ -347,6 +350,7 @@ pub(crate) fn read(
         console.close();
     } else if !was_open
         && toggle
+        && !session.as_ref().is_some_and(|s| s.inventory.input_blocked)
         && !pause.is_some_and(|pause| pause.open || pause.input_blocked)
         && !conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         && !map.is_some_and(|map| map.open || map.input_blocked)

@@ -678,7 +678,8 @@ pub(crate) fn read(
         panel.gesture = None;
         return;
     }
-    let other_modal = pause.is_some_and(|menu| menu.open || menu.input_blocked)
+    let other_modal = session.inventory.input_blocked
+        || pause.is_some_and(|menu| menu.open || menu.input_blocked)
         || console.is_some_and(|menu| menu.open || menu.input_blocked)
         || map.is_some_and(|menu| menu.open || menu.input_blocked)
         || pilot.is_some_and(|menu| menu.open() || menu.input_blocked);

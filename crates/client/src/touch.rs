@@ -9,7 +9,7 @@ use bevy::{
 };
 use rubblekin_core::physics::MoveInput;
 
-use crate::{GameEntity, PALETTE, Session, network::Connection};
+use crate::{GameEntity, Session, network::Connection};
 
 #[derive(Resource, Default)]
 pub struct TouchControls {
@@ -83,7 +83,7 @@ struct Layout {
 impl Layout {
     fn for_session(size: Vec2, session: &Session, menu_open: bool) -> Self {
         let mut layout = Self::new(size, session.observer.is_some(), session.flying, menu_open);
-        layout.set_palette_page(session.selected);
+        layout.set_hotbar(&session.hotbar);
         if session.ride.is_some() {
             layout.regions.retain(|region| {
                 matches!(
@@ -102,23 +102,14 @@ impl Layout {
         layout
     }
 
-    fn set_palette_page(&mut self, selected: usize) {
-        self.regions.retain_mut(|region| {
+    fn set_hotbar(&mut self, slots: &[rubblekin_core::world::Block; crate::palette::QUICK_SLOTS]) {
+        for region in &mut self.regions {
             if let Action::Material(slot) = region.action {
-                let Some(index) = crate::palette::index_for_slot(selected, slot) else {
-                    return false;
-                };
-                region.action = Action::Material(index);
-                region.label = PALETTE[index].name().into();
+                region.label = slots[slot].name().into();
             } else if region.action == Action::PalettePage {
-                region.label = format!(
-                    "Blocks {}/{} ›",
-                    crate::palette::page(selected) + 1,
-                    crate::palette::PAGE_COUNT
-                );
+                region.label = "Inventory".into();
             }
-            true
-        });
+        }
     }
 
     fn new(size: Vec2, observing: bool, flying: bool, menu_open: bool) -> Self {
@@ -254,10 +245,10 @@ impl Layout {
                 size.y - s(132.0),
                 144.0,
                 44.0,
-                "Blocks 1/2 ›".into(),
+                "Inventory".into(),
             );
             let left = (size.x - s(301.0)) * 0.5;
-            for (index, block) in PALETTE.iter().take(crate::palette::QUICK_SLOTS).enumerate() {
+            for (index, block) in crate::palette::DEFAULT_HOTBAR.iter().enumerate() {
                 add(
                     Action::Material(index),
                     left + s(index as f32 * 51.0),
@@ -518,7 +509,8 @@ pub fn read(
         events.clear();
         return;
     }
-    if conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
+    if session.as_ref().is_some_and(|s| s.inventory.input_blocked)
+        || conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
         || map.is_some_and(|map| map.open || map.input_blocked)
         || market.is_some_and(|market| market.open || market.input_blocked)
@@ -602,6 +594,8 @@ pub fn read(
 #[derive(Component)]
 pub(crate) struct TouchButton(Action);
 #[derive(Component)]
+pub(crate) struct MaterialIcon(usize);
+#[derive(Component)]
 pub(crate) struct StickBase;
 #[derive(Component)]
 pub(crate) struct StickKnob;
@@ -659,29 +653,44 @@ pub fn setup(
     ];
     for action in actions
         .into_iter()
-        .chain((0..PALETTE.len()).map(Action::Material))
+        .chain((0..crate::palette::QUICK_SLOTS).map(Action::Material))
     {
-        commands.spawn((
-            GameEntity,
-            TouchButton(action),
-            Node {
-                position_type: PositionType::Absolute,
-                display: Display::None,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(px(8)),
-                ..default()
-            },
-            GlobalZIndex(23),
-            BackgroundColor(Color::srgba(0.055, 0.10, 0.10, 0.78)),
-            BorderColor::all(Color::srgba(0.83, 0.92, 0.82, 0.55)),
-            children![(
-                Text::new(""),
-                TextFont::from_font_size(14.0).with_font(font.clone()),
-                TextColor(Color::srgb(0.89, 0.92, 0.85))
-            )],
-        ));
+        commands
+            .spawn((
+                GameEntity,
+                TouchButton(action),
+                Node {
+                    position_type: PositionType::Absolute,
+                    display: Display::None,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(8)),
+                    ..default()
+                },
+                GlobalZIndex(23),
+                BackgroundColor(Color::srgba(0.055, 0.10, 0.10, 0.78)),
+                BorderColor::all(Color::srgba(0.83, 0.92, 0.82, 0.55)),
+            ))
+            .with_children(|button| {
+                if let Action::Material(slot) = action {
+                    button.spawn((
+                        ImageNode::default(),
+                        MaterialIcon(slot),
+                        Node {
+                            width: px(26),
+                            height: px(26),
+                            ..default()
+                        },
+                    ));
+                }
+                button.spawn((
+                    Text::new(""),
+                    TextFont::from_font_size(14.).with_font(font.clone()),
+                    TextColor(Color::srgb(0.89, 0.92, 0.85)),
+                ));
+            });
     }
 }
 
@@ -707,7 +716,14 @@ pub fn refresh(
         Or<(With<TouchButton>, With<StickBase>, With<StickKnob>)>,
     >,
     mut labels: Query<(&mut Text, &mut TextFont)>,
+    icons: Option<Res<crate::block_textures::BlockIcons>>,
+    mut material_icons: Query<(&MaterialIcon, &mut ImageNode)>,
 ) {
+    if let Some(icons) = &icons {
+        for (slot, mut img) in &mut material_icons {
+            img.image = icons.0[session.hotbar[slot.0].catalog_index().unwrap()].clone();
+        }
+    }
     let layout = Layout::for_session(
         Vec2::new(window.width(), window.height()),
         &session,
@@ -717,6 +733,7 @@ pub fn refresh(
         node.display = Display::None;
         if !controls.enabled
             || controls.menu_open
+            || session.inventory.input_blocked
             || conversation.as_ref().is_some_and(|dialog| dialog.open())
             || map.as_ref().is_some_and(|map| map.open)
             || market.as_ref().is_some_and(|market| market.open)
@@ -747,7 +764,9 @@ pub fn refresh(
             if let Some(children) = children {
                 for child in children.iter() {
                     if let Ok((mut text, mut font)) = labels.get_mut(child) {
-                        if button.0 == Action::Market
+                        if let Action::Material(slot) = button.0 {
+                            text.0 = (slot + 1).to_string();
+                        } else if button.0 == Action::Market
                             && market.as_ref().is_some_and(|panel| {
                                 panel
                                     .nearby_work(&session, time.elapsed_secs_f64())
@@ -973,10 +992,14 @@ mod tests {
             Vec2::new(640.0, 360.0),
             Vec2::new(1280.0, 720.0),
         ] {
-            for (menu, selected) in [(false, 0), (false, 6), (true, 0), (true, 6)] {
+            for (menu, custom) in [(false, false), (false, true), (true, false), (true, true)] {
                 let mut layout = Layout::new(size, false, true, menu);
-                layout.set_palette_page(selected);
-                assert!(!layout.regions.iter().any(|region| matches!(region.action, Action::Material(index) if index >= PALETTE.len())));
+                let mut slots = crate::palette::DEFAULT_HOTBAR;
+                if custom {
+                    slots[5] = rubblekin_core::world::Block::PurpleWool;
+                }
+                layout.set_hotbar(&slots);
+                assert!(!layout.regions.iter().any(|region| matches!(region.action, Action::Material(index) if index >= crate::palette::QUICK_SLOTS)));
                 if !menu {
                     assert_eq!(
                         layout
@@ -984,7 +1007,7 @@ mod tests {
                             .iter()
                             .filter(|region| matches!(region.action, Action::Material(_)))
                             .count(),
-                        if selected == 0 { 6 } else { 5 }
+                        6
                     );
                 }
                 for (index, a) in layout.regions.iter().enumerate() {
@@ -1165,13 +1188,9 @@ mod tests {
             }
         ));
 
-        // Both down and up may arrive in one frame. Page selection survives
-        // that short tap, and the visible second-page Clay button sends Clay.
-        for (id, action) in [
-            (80, Action::PalettePage),
-            (81, Action::Material(9)),
-            (82, Action::Build),
-        ] {
+        // A custom hotbar item survives a short touch tap and reaches the actual Edit message.
+        app.world_mut().resource_mut::<Session>().hotbar[3] = Block::PurpleWool;
+        for (id, action) in [(81, Action::Material(3)), (82, Action::Build)] {
             let layout = Layout::for_session(
                 Vec2::new(840., 400.),
                 app.world().resource::<Session>(),
@@ -1190,27 +1209,21 @@ mod tests {
                 read_message(&mut peer),
                 ClientMessage::Input { .. }
             ));
-            assert_eq!(
-                app.world().resource::<Session>().selected,
-                if id == 80 { 6 } else { 9 }
-            );
+            assert_eq!(app.world().resource::<Session>().selected, 3);
         }
         assert!(matches!(
             read_message(&mut peer),
             ClientMessage::Edit {
                 request_id: 3,
-                block: Block::Clay,
+                block: Block::PurpleWool,
                 ..
             }
         ));
-        // A held C cycles once; digits refer to the current page, with no
-        // phantom sixth material on page two.
+        // Number keys select the editable slots; held keys do not change them again.
         for (key, selected) in [
-            (KeyCode::Digit6, 9),
-            (KeyCode::KeyC, 0),
             (KeyCode::Digit6, 5),
-            (KeyCode::KeyC, 6),
-            (KeyCode::Digit4, 9),
+            (KeyCode::Digit1, 0),
+            (KeyCode::Digit4, 3),
         ] {
             app.world_mut()
                 .resource_mut::<ButtonInput<KeyCode>>()
@@ -1284,12 +1297,24 @@ mod tests {
             if input.direction == [0.0; 2])
         );
         // Opening either panel drops contacts; closing cannot reuse held fingers.
-        for (market_panel, open) in [(false, true), (false, false), (true, true), (true, false)] {
+        for (panel_kind, open) in [
+            (0, true),
+            (0, false),
+            (1, true),
+            (1, false),
+            (2, true),
+            (2, false),
+        ] {
             *app.world_mut().resource_mut::<crate::world_map::WorldMap>() = default();
             app.world_mut()
                 .resource_mut::<crate::market::MarketPanel>()
                 .clear();
-            if market_panel {
+            app.world_mut().resource_mut::<Session>().inventory = default();
+            if panel_kind == 2 {
+                let inv = &mut app.world_mut().resource_mut::<Session>().inventory;
+                inv.open = open;
+                inv.input_blocked = true;
+            } else if panel_kind == 1 {
                 let mut market = app.world_mut().resource_mut::<crate::market::MarketPanel>();
                 market.open = open;
                 market.input_blocked = true;
@@ -1316,7 +1341,7 @@ mod tests {
             );
             assert_eq!(
                 app.world().resource::<Session>().selected,
-                9,
+                3,
                 "Opening or closing a modal must not also change materials"
             );
             app.world_mut()
@@ -1328,6 +1353,7 @@ mod tests {
                 .send(ClientMessage::Ping);
             assert!(matches!(read_message(&mut peer), ClientMessage::Ping));
         }
+        app.world_mut().resource_mut::<Session>().inventory = default();
         *app.world_mut().resource_mut::<crate::world_map::WorldMap>() = default();
         app.world_mut()
             .resource_mut::<crate::market::MarketPanel>()

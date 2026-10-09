@@ -43,63 +43,7 @@ impl WorldGeneration {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Block {
-    #[default]
-    Air,
-    Grass,
-    Dirt,
-    Stone,
-    Sand,
-    Wood,
-    Leaves,
-    Brick,
-    Glass,
-    Snow,
-    Clay,
-    IronOre,
-}
-
-impl Block {
-    pub fn is_solid(self) -> bool {
-        self != Self::Air
-    }
-
-    /// Material colors in sRGB. The renderer supplies material transparency.
-    pub fn color(self) -> [f32; 4] {
-        match self {
-            Self::Air => [0.0, 0.0, 0.0, 0.0],
-            Self::Grass => [0.40, 0.57, 0.28, 1.0],
-            Self::Dirt => [0.43, 0.31, 0.20, 1.0],
-            Self::Stone => [0.54, 0.57, 0.58, 1.0],
-            Self::Sand => [0.75, 0.68, 0.48, 1.0],
-            Self::Wood => [0.43, 0.29, 0.16, 1.0],
-            Self::Leaves => [0.25, 0.43, 0.23, 1.0],
-            Self::Brick => [0.62, 0.32, 0.23, 1.0],
-            Self::Glass => [0.57, 0.78, 0.83, 1.0],
-            Self::Snow => [0.87, 0.91, 0.94, 1.0],
-            Self::Clay => [0.64, 0.47, 0.34, 1.0],
-            Self::IronOre => [0.45, 0.34, 0.29, 1.0],
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Air => "Air",
-            Self::Grass => "Grass",
-            Self::Dirt => "Earth",
-            Self::Stone => "Stone",
-            Self::Sand => "Sand",
-            Self::Wood => "Wood",
-            Self::Leaves => "Leaves",
-            Self::Brick => "Brick",
-            Self::Glass => "Glass",
-            Self::Snow => "Snow",
-            Self::Clay => "Clay",
-            Self::IronOre => "Iron ore",
-        }
-    }
-}
+pub use crate::blocks::Block;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlockPos {
