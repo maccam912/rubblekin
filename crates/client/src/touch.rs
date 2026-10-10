@@ -89,6 +89,32 @@ struct Layout {
 }
 
 impl Layout {
+    fn work(
+        &mut self,
+        panel: &crate::market::MarketPanel,
+        session: &Session,
+        world: &crate::VoxelWorld,
+        now: f64,
+    ) {
+        if panel.contextual_work(session, world, now).is_none()
+            || self
+                .regions
+                .iter()
+                .any(|r| matches!(r.action, Action::Activity | Action::ActivityReturn))
+            || !self.regions.iter().any(|r| r.action == Action::Market)
+        {
+            return;
+        }
+        self.regions.push(Region {
+            action: Action::Activity,
+            rect: Rect::from_corners(
+                Vec2::new(self.size.x - 328. * self.scale, 70. * self.scale),
+                Vec2::new(self.size.x - 256. * self.scale, 118. * self.scale),
+            ),
+            label: "Work".into(),
+        });
+    }
+
     fn for_session(size: Vec2, session: &Session, menu_open: bool) -> Self {
         let mut layout = Self::new(size, session.observer.is_some(), session.flying, menu_open);
         layout.set_hotbar(&session.hotbar);
@@ -547,6 +573,8 @@ pub fn read(
     console: Option<Res<crate::admin_console::AdminConsole>>,
     map: Option<Res<crate::world_map::WorldMap>>,
     market: Option<Res<crate::market::MarketPanel>>,
+    world: Option<Res<crate::VoxelWorld>>,
+    time: Option<Res<Time>>,
     mouse: Res<ButtonInput<MouseButton>>,
     window: Single<(Entity, &Window), With<PrimaryWindow>>,
     session: Option<Res<Session>>,
@@ -593,7 +621,9 @@ pub fn read(
         || conversation.is_some_and(|dialog| dialog.open() || dialog.input_blocked)
         || console.is_some_and(|console| console.input_blocked)
         || map.is_some_and(|map| map.open || map.input_blocked)
-        || market.is_some_and(|market| market.open || market.input_blocked)
+        || market
+            .as_ref()
+            .is_some_and(|market| market.open || market.input_blocked)
     {
         controls.reset();
         events.clear();
@@ -606,10 +636,35 @@ pub fn read(
     let mut received_touch = false;
     for event in events.read().filter(|event| event.window == window_entity) {
         received_touch = true;
-        let layout = Layout::for_session(size, &session, controls.menu_open);
+        let mut layout = Layout::for_session(size, &session, controls.menu_open);
+        if let Some((panel, world)) = market.as_deref().zip(world.as_deref()) {
+            layout.work(
+                panel,
+                &session,
+                world,
+                time.as_ref().map_or(0., |t| t.elapsed_secs_f64()),
+            );
+        }
         if event.phase == TouchPhase::Started
             && !controls.menu_open
             && (crate::ui::touch_panel_at(event.position, size, &session)
+                || market
+                    .as_deref()
+                    .zip(world.as_deref())
+                    .is_some_and(|(panel, world)| {
+                        crate::work_cues::panel_at(
+                            event.position,
+                            size,
+                            &session,
+                            panel,
+                            world,
+                            time.as_ref().map_or(0., |t| t.elapsed_secs_f64()),
+                            tutorials.as_ref().and_then(|t| t.world_rect),
+                        ) && !layout
+                            .regions
+                            .iter()
+                            .any(|r| r.rect.contains(event.position))
+                    })
                 || tutorials
                     .as_ref()
                     .and_then(|t| t.world_rect)
@@ -642,10 +697,32 @@ pub fn read(
                 None
             };
             if let Some(phase) = phase {
-                let layout = Layout::for_session(size, &session, controls.menu_open);
+                let mut layout = Layout::for_session(size, &session, controls.menu_open);
+                if let Some((panel, world)) = market.as_deref().zip(world.as_deref()) {
+                    layout.work(
+                        panel,
+                        &session,
+                        world,
+                        time.as_ref().map_or(0., |t| t.elapsed_secs_f64()),
+                    );
+                }
                 if phase == TouchPhase::Started
                     && !controls.menu_open
                     && (crate::ui::touch_panel_at(position, size, &session)
+                        || market
+                            .as_deref()
+                            .zip(world.as_deref())
+                            .is_some_and(|(panel, world)| {
+                                crate::work_cues::panel_at(
+                                    position,
+                                    size,
+                                    &session,
+                                    panel,
+                                    world,
+                                    time.as_ref().map_or(0., |t| t.elapsed_secs_f64()),
+                                    tutorials.as_ref().and_then(|t| t.world_rect),
+                                ) && !layout.regions.iter().any(|r| r.rect.contains(position))
+                            })
                         || tutorials
                             .as_ref()
                             .and_then(|t| t.world_rect)
@@ -675,7 +752,15 @@ pub fn read(
             controls.contacts.remove(&id);
         }
     }
-    let layout = Layout::for_session(size, &session, controls.menu_open);
+    let mut layout = Layout::for_session(size, &session, controls.menu_open);
+    if let Some((panel, world)) = market.as_deref().zip(world.as_deref()) {
+        layout.work(
+            panel,
+            &session,
+            world,
+            time.as_ref().map_or(0., |t| t.elapsed_secs_f64()),
+        );
+    }
     controls.held(&layout);
 }
 
@@ -816,11 +901,14 @@ pub fn refresh(
             img.image = icons.0[session.hotbar[slot.0].catalog_index().unwrap()].clone();
         }
     }
-    let layout = Layout::for_session(
+    let mut layout = Layout::for_session(
         Vec2::new(window.width(), window.height()),
         &session,
         controls.menu_open,
     );
+    if let Some(panel) = &market {
+        layout.work(panel, &session, &world, time.elapsed_secs_f64());
+    }
     for (mut node, button, base, knob, children, background) in &mut nodes {
         node.display = Display::None;
         if !controls.enabled
@@ -858,14 +946,6 @@ pub fn refresh(
                     if let Ok((mut text, mut font)) = labels.get_mut(child) {
                         if let Action::Material(slot) = button.0 {
                             text.0 = (slot + 1).to_string();
-                        } else if button.0 == Action::Market
-                            && market.as_ref().is_some_and(|panel| {
-                                panel
-                                    .nearby_work(&session, time.elapsed_secs_f64())
-                                    .is_some()
-                            })
-                        {
-                            text.0 = "Work".into();
                         } else if button.0 == Action::Market
                             && crate::market::nearby_market(&session, &world).is_some()
                         {

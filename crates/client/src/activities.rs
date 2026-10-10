@@ -127,7 +127,7 @@ fn symbol_parts(i: usize) -> Vec<Part> {
     }
     out
 }
-fn picture(parts: &[Part]) -> Image {
+pub(crate) fn picture(parts: &[Part]) -> Image {
     let mut pixels = vec![0_u8; 64 * 64 * 4];
     for (p, s, c) in parts {
         let left = ((p.x - s.x / 2.) * 45. + 32.).clamp(0., 63.) as usize;
@@ -374,6 +374,9 @@ fn target(session: &Session, world: &rubblekin_core::world::World) -> Option<Tar
             distance(session.body.position, a.position)
                 .total_cmp(&distance(session.body.position, b.position))
         })
+}
+pub(crate) fn has_action(session: &Session, world: &rubblekin_core::world::World) -> bool {
+    carried(session).is_some() || target(session, world).is_some()
 }
 fn focused<'a>(
     session: &'a Session,

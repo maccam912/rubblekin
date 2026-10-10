@@ -12,7 +12,7 @@ pub(crate) struct CachedTools {
     assets: Option<([Handle<Mesh>; 3], Handle<StandardMaterial>)>,
 }
 
-fn tool_index(kind: WorkKind) -> usize {
+pub(crate) fn tool_index(kind: WorkKind) -> usize {
     match kind {
         WorkKind::TendField => 0,
         WorkKind::WorkshopMaintenance | WorkKind::QuarryStone | WorkKind::Salvage => 1,
@@ -20,13 +20,13 @@ fn tool_index(kind: WorkKind) -> usize {
     }
 }
 
-fn mesh(index: usize) -> Mesh {
-    let mut mesh = Geometry::default();
+fn parts(index: usize) -> Vec<(Vec3, Vec3, [f32; 4])> {
+    let mut parts = Vec::new();
     let wood = [0.57, 0.37, 0.18, 1.];
     let metal = [0.52, 0.56, 0.55, 1.];
     let straw = [0.70, 0.53, 0.28, 1.];
     let mut part =
-        |at, size, color| mesh.cuboid(Vec3::from_array(at), Vec3::from_array(size), color);
+        |at, size, color| parts.push((Vec3::from_array(at), Vec3::from_array(size), color));
     match index {
         0 => {
             part([0., -0.34, 0.], [0.045, 0.82, 0.045], wood);
@@ -49,7 +49,23 @@ fn mesh(index: usize) -> Mesh {
             part([0., 0.035, 0.], [0.31, 0.024, 0.024], wood);
         }
     }
+    parts
+}
+
+fn mesh(index: usize) -> Mesh {
+    let mut mesh = Geometry::default();
+    for (at, size, color) in parts(index) {
+        mesh.cuboid(at, size, color);
+    }
     mesh.into_mesh()
+}
+
+pub(crate) fn picture(index: usize) -> Image {
+    let parts: Vec<_> = parts(index)
+        .into_iter()
+        .map(|(at, size, color)| (at + Vec3::Y * 0.85, size, color))
+        .collect();
+    crate::activities::picture(&parts)
 }
 
 /// The arm's existing mesh uses a non-unit scale. Cancel it for meter-sized

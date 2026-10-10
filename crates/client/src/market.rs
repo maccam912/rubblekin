@@ -217,8 +217,13 @@ impl MarketPanel {
     pub(crate) fn nearby_work(&self, session: &Session, now: f64) -> Option<&WorkOffer> {
         if self.open
             || self.input_blocked
+            || session.help
             || session.inspector
             || session.observer.is_some()
+            || session.flying
+            || session.gliding
+            || session.glider_ride.is_some()
+            || session.ride.is_some()
             || self.work.active.is_some()
             || self.pending.is_some()
             || self
@@ -231,6 +236,20 @@ impl MarketPanel {
         self.work.offer.as_ref().filter(|offer| {
             offer.unavailable_reason.is_none()
                 && within_work_reach(session.body.position, offer.position)
+        })
+    }
+
+    pub(crate) fn contextual_work(
+        &self,
+        session: &Session,
+        world: &VoxelWorld,
+        now: f64,
+    ) -> Option<&WorkOffer> {
+        self.nearby_work(session, now).filter(|_| {
+            !crate::activities::has_action(session, &world.0)
+                && !self
+                    .delivery()
+                    .is_some_and(|job| nearby_market(session, world) == Some(job.destination))
         })
     }
 
@@ -748,6 +767,20 @@ pub(crate) fn read(
             }
             return;
         }
+        if !keys.just_pressed(KeyCode::KeyB)
+            && !touch.market
+            && (keys.just_pressed(KeyCode::KeyT) || touch.activity)
+            && panel
+                .contextual_work(&session, &world, time.elapsed_secs_f64())
+                .is_some()
+            && let Some(action) = panel.work_action(Action::StartWork)
+            && let Some(message) = panel.work_request(action)
+        {
+            touch.activity = false;
+            panel.input_blocked = true;
+            connection.send(message);
+            return;
+        }
         if keys.just_pressed(KeyCode::KeyB) || touch.market {
             panel.open = true;
             panel.input_blocked = true;
@@ -1043,7 +1076,7 @@ pub(crate) fn hud_text(
     } else if let Some(id) = nearby_market(session, world) {
         text.push_str(&format!(" · {} market", village_name(world, id)));
     }
-    if let Some(offer) = panel.nearby_work(session, now) {
+    if let Some(offer) = panel.contextual_work(session, world, now) {
         let activity = match offer.site.kind {
             WorkKind::TendField => "Tend field",
             WorkKind::GatherForage => "Gather wild food",
@@ -1054,7 +1087,7 @@ pub(crate) fn hud_text(
         };
         text.push_str(&format!(
             "\n{}: {} · {}{}",
-            if touch { "Work" } else { "B" },
+            if touch { "Work" } else { "T" },
             activity,
             reward_text(offer.reward),
             if matches!(offer.reward, WorkReward::Cargo { .. }) {
@@ -1868,7 +1901,7 @@ mod tests {
     fn test_app(layout: bool) -> (App, Entity, Entity, std::net::TcpStream) {
         use std::{io::Write, net::TcpListener};
         let welcome = crate::join::tests::welcome(SessionMode::Player);
-        let (world, session) = crate::join::session_from_welcome(
+        let (world, mut session) = crate::join::session_from_welcome(
             welcome.clone(),
             "test".into(),
             crate::graphics::GraphicsQuality::default(),
@@ -1876,6 +1909,7 @@ mod tests {
             SessionMode::Player,
         )
         .unwrap();
+        session.help = false;
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap().to_string();
         let connecting = std::thread::spawn(move || {
@@ -2151,6 +2185,172 @@ mod tests {
     }
 
     #[test]
+    fn contextual_work_starts_once_with_key_or_touch_and_cargo_keeps_priority() {
+        use std::io::{BufRead, BufReader};
+        for mode in 0..3 {
+            let (mut app, window, _, peer) = app();
+            app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+            let position = {
+                let mut s = app.world_mut().resource_mut::<Session>();
+                s.help = false;
+                s.inspector = false;
+                s.flying = false;
+                s.body.position
+            };
+            let mut offer = work_offer();
+            offer.position = position;
+            {
+                let mut p = app.world_mut().resource_mut::<MarketPanel>();
+                p.open = false;
+                p.work_reply(
+                    0,
+                    WorkState {
+                        offer: Some(offer.clone()),
+                        active: None,
+                    },
+                    PlayerEconomy::default(),
+                    String::new(),
+                    true,
+                );
+            }
+            peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .unwrap();
+            let mut reader = BufReader::new(peer);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if mode == 1 {
+                app.world_mut().resource_mut::<TouchControls>().activity = true;
+            } else {
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::KeyT);
+            }
+            if mode == 2 {
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::KeyB);
+            }
+            app.world_mut().run_schedule(Update);
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let message: ClientMessage = serde_json::from_str(&line).unwrap();
+            if mode == 2 {
+                assert!(app.world().resource::<MarketPanel>().open);
+                assert!(matches!(
+                    message,
+                    ClientMessage::Market {
+                        action: MarketAction::View,
+                        ..
+                    }
+                ));
+            } else {
+                assert!(
+                    matches!(message, ClientMessage::Work { action: WorkAction::Start { site }, .. } if site == offer.site)
+                );
+                assert!(!app.world().resource::<MarketPanel>().open);
+                assert!(app.world().resource::<MarketPanel>().input_blocked);
+                assert!(
+                    app.world()
+                        .resource::<MarketPanel>()
+                        .active_work()
+                        .is_none(),
+                    "Start waits for the authoritative reply"
+                );
+                assert!(!app.world().resource::<TouchControls>().activity);
+                app.world_mut().run_schedule(Update);
+                reader
+                    .get_mut()
+                    .set_read_timeout(Some(std::time::Duration::from_millis(50)))
+                    .unwrap();
+                line.clear();
+                assert!(
+                    reader.read_line(&mut line).is_err(),
+                    "Pending input must not duplicate Start"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn contextual_work_rejects_stale_blocked_airborne_and_carried_prop_offers() {
+        let (mut app, _, _, _) = app();
+        let position = app.world().resource::<Session>().body.position;
+        let mut offer = work_offer();
+        offer.position = position;
+        let session_id = app.world().resource::<Session>().id;
+        let mut activity = rubblekin_core::activities::ActivitySnapshot {
+            plan: rubblekin_core::activities::review_plans(&app.world().resource::<VoxelWorld>().0)
+                [0]
+            .clone(),
+            revision: 0,
+            faces: [0; 3],
+            props: [
+                rubblekin_core::activities::PropState::Held(session_id),
+                rubblekin_core::activities::PropState::Home,
+                rubblekin_core::activities::PropState::Home,
+            ],
+            complete: false,
+            available: true,
+        };
+        activity.plan.objects = [[10000.; 3]; 3];
+        activity.plan.sockets = [[10000.; 3]; 3];
+        {
+            let mut p = app.world_mut().resource_mut::<MarketPanel>();
+            p.open = false;
+            p.input_blocked = false;
+            p.work_reply(
+                0,
+                WorkState {
+                    offer: Some(offer),
+                    active: None,
+                },
+                PlayerEconomy::default(),
+                String::new(),
+                true,
+            );
+            p.observe_work_reply(0.);
+        }
+        {
+            let mut s = app.world_mut().resource_mut::<Session>();
+            s.help = false;
+            s.inspector = false;
+            s.flying = false;
+        }
+        let available = |app: &App, now| {
+            app.world()
+                .resource::<MarketPanel>()
+                .contextual_work(
+                    app.world().resource::<Session>(),
+                    app.world().resource::<VoxelWorld>(),
+                    now,
+                )
+                .is_some()
+        };
+        assert!(available(&app, 0.));
+        assert!(!available(&app, 1.6));
+        app.world_mut().resource_mut::<Session>().flying = true;
+        assert!(!available(&app, 0.));
+        app.world_mut().resource_mut::<Session>().flying = false;
+        app.world_mut().resource_mut::<Session>().help = true;
+        assert!(!available(&app, 0.));
+        app.world_mut().resource_mut::<Session>().help = false;
+        app.world_mut().resource_mut::<Session>().activities = vec![activity];
+        assert!(
+            !available(&app, 0.),
+            "A carried prop owns the contextual action even far from its tray"
+        );
+        app.world_mut().resource_mut::<Session>().activities.clear();
+        app.world_mut()
+            .resource_mut::<MarketPanel>()
+            .work
+            .offer
+            .as_mut()
+            .unwrap()
+            .unavailable_reason = Some("No supplies".into());
+        assert!(!available(&app, 0.));
+    }
+
+    #[test]
     fn nearby_work_discovery_polls_real_sites_and_does_not_compete_with_opening_cargo() {
         use rubblekin_core::world::{World, WorldGeneration};
         use std::io::BufRead;
@@ -2221,7 +2421,7 @@ mod tests {
                 false,
                 0.
             )
-            .contains("B: Tend field · 2 coins")
+            .contains("T: Tend field · 2 coins")
         );
         assert!(
             hud_text(

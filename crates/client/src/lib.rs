@@ -38,6 +38,7 @@ mod ui;
 mod village_details;
 mod wildlife;
 mod work_animation;
+mod work_cues;
 mod work_tools;
 mod world_map;
 mod world_map_image;
@@ -451,6 +452,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     admin_console::setup,
                     world_map::setup,
                     market::setup,
+                    work_cues::setup,
                     inventory::setup,
                     activities::setup,
                     tutorials::setup,
@@ -482,7 +484,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         edit_blocks,
                         update_avatars,
                         work_animation::animate,
-                        work_tools::update,
+                        (work_tools::update, work_cues::update).chain(),
                         wildlife::update,
                         (forage::update, activities::update, activities::update_demo).chain(),
                         (gliders::update_scene, gliders::animate_whips).chain(),
