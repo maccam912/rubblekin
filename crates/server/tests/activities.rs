@@ -116,6 +116,149 @@ impl Drop for Save {
     }
 }
 #[test]
+fn flow_garden_shares_reversible_connections_saves_before_confirmation_and_never_pays() {
+    let save = Save(std::env::temp_dir().join(format!(
+            "rubblekin-garden-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+    let config = ServerConfig {
+        bind_addr: "127.0.0.1:0".into(),
+        save_path: save.0.join("world.json"),
+        seed: 42,
+        generation: WorldGeneration::GeographyV6,
+        allow_admin: true,
+    };
+    let p = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let q = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let server = spawn(config.clone()).unwrap();
+    let mut first = Client::connect(server.addr, p);
+    let states = first.state();
+    let mut a = states
+        .into_iter()
+        .find(|a| a.plan.kind == ActivityKind::FlowGarden)
+        .unwrap();
+    let plan = a.plan.clone();
+    let mut second = Client::connect(server.addr, q);
+    let stale = second
+        .state()
+        .into_iter()
+        .find(|a| a.plan.id == plan.id)
+        .unwrap();
+    first.tp(plan.sockets[0]);
+    for _ in 0..3 {
+        let (ok, states) = first.action(&a, ActivityAction::Turn(0));
+        assert!(ok);
+        a = states.into_iter().find(|a| a.plan.id == plan.id).unwrap();
+    }
+    second.tp(plan.sockets[1]);
+    assert!(!second.action(&stale, ActivityAction::Turn(1)).0);
+    let (ok, states) = second.action(&a, ActivityAction::Turn(1));
+    assert!(ok);
+    a = states.into_iter().find(|a| a.plan.id == plan.id).unwrap();
+    assert_eq!(flow_garden::flow(a.faces).unwrap().wet, [true, true, false]);
+    first.tp(plan.sockets[2]);
+    let before = a.clone();
+    let (ok, states) = first.action(&a, ActivityAction::Turn(2));
+    assert!(ok);
+    a = states.into_iter().find(|a| a.plan.id == plan.id).unwrap();
+    assert!(a.complete);
+    assert_eq!(a.faces, [3, 1, 1]);
+    assert!(!first.action(&before, ActivityAction::Turn(2)).0);
+    assert!(!first.action(&a, ActivityAction::Take(0)).0);
+    assert!(!first.action(&a, ActivityAction::Hammer).0);
+    assert!(!first.action(&a, ActivityAction::Turn(255)).0);
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(saved["version"], 11);
+    let record = saved["activities"]["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["plan"]["id"] == plan.id)
+        .unwrap();
+    assert_eq!(record["faces"], serde_json::json!([3, 1, 1]));
+    assert_eq!(record["complete"], true);
+    for profile in [p, q] {
+        let ledger = &saved["profiles"][profile]["ledger"];
+        assert_eq!(ledger["coins"], 0);
+        assert_eq!(ledger["revision"], 0);
+        assert_eq!(ledger["cargo"], serde_json::json!([0, 0, 0, 0, 0]));
+    }
+    for expected in [false, true] {
+        let (ok, states) = first.action(&a, ActivityAction::Turn(2));
+        assert!(ok);
+        a = states.into_iter().find(|a| a.plan.id == plan.id).unwrap();
+        assert_eq!(a.complete, expected);
+    }
+    assert_eq!(
+        a.faces,
+        [3, 1, 3],
+        "The equivalent straight orientation also works"
+    );
+    drop(first);
+    drop(second);
+    server.stop().unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let mut first = Client::connect(server.addr, p);
+    let restored = first
+        .state()
+        .into_iter()
+        .find(|r| r.plan.id == plan.id)
+        .unwrap();
+    assert!(restored.complete);
+    assert_eq!(restored.faces, a.faces);
+    first.tp(plan.sockets[2]);
+    let before = fs::read(&config.save_path).unwrap();
+    let temporary = save
+        .0
+        .join(format!(".world.json.{}.tmp", std::process::id()));
+    fs::create_dir(&temporary).unwrap();
+    thread::sleep(Duration::from_millis(160));
+    let request_id = first.next;
+    first.send(ClientMessage::Activity {
+        request_id,
+        activity_id: plan.id,
+        revision: restored.revision,
+        action: ActivityAction::Turn(2),
+    });
+    loop {
+        let mut line = String::new();
+        match first.reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let m: ServerMessage = serde_json::from_str(&line).unwrap();
+                assert!(
+                    !matches!(m,ServerMessage::ActivityState {request_id:id,accepted:true,..} if id == request_id)
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break,
+            Err(e) => panic!("Expected save-failure disconnect: {e}"),
+        }
+    }
+    assert!(server.stop().is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), before);
+    fs::remove_dir(&temporary).unwrap();
+    let server = spawn(config).unwrap();
+    let mut first = Client::connect(server.addr, p);
+    let restored = first
+        .state()
+        .into_iter()
+        .find(|r| r.plan.id == plan.id)
+        .unwrap();
+    assert!(restored.complete);
+    assert_eq!(restored.faces, [3, 1, 3]);
+    let reply = first.until(|m| matches!(m, ServerMessage::MarketState { .. }));
+    assert!(
+        matches!(reply,ServerMessage::MarketState {ledger,..} if ledger.coins == 0 && ledger.revision == 0 && ledger.cargo_total() == 0)
+    );
+    drop(first);
+    server.stop().unwrap();
+}
+#[test]
 fn cart_repairs_spend_real_cargo_share_parts_and_pay_only_durable_contributions() {
     let save = Save(std::env::temp_dir().join(format!("rubblekin-cart-{}-{}",
         std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())));

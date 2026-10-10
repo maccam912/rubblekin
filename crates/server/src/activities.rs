@@ -44,11 +44,15 @@ struct RepairWork {
 }
 impl Record {
     fn new(plan: ActivityPlan) -> Self {
-        let faces = [
-            plan.answer[0],
-            (plan.answer[1] + 1) % 3,
-            (plan.answer[2] + 2) % 3,
-        ];
+        let faces = if plan.kind == ActivityKind::FlowGarden {
+            flow_garden::START_FACES
+        } else {
+            [
+                plan.answer[0],
+                (plan.answer[1] + 1) % 3,
+                (plan.answer[2] + 2) % 3,
+            ]
+        };
         Self {
             plan,
             revision: 0,
@@ -109,13 +113,15 @@ impl Activities {
                 ids.insert(p.id)
                     && match p.site_id {
                         None => {
-                            p.kind != ActivityKind::CartRepair
-                                && p.id
-                                    == if p.kind == ActivityKind::SpilledSupplies {
-                                        1
-                                    } else {
-                                        2
-                                    }
+                            matches!(
+                                p.kind,
+                                ActivityKind::SpilledSupplies | ActivityKind::ShapeStones
+                            ) && p.id
+                                == if p.kind == ActivityKind::SpilledSupplies {
+                                    1
+                                } else {
+                                    2
+                                }
                         }
                         Some(id) => {
                             sites.insert(id)
@@ -137,7 +143,7 @@ impl Activities {
                     }
                     && (1..=RECIPE_VERSION).contains(&p.recipe_version)
                     && (p.clues.is_none()
-                        || (p.kind == ActivityKind::ShapeStones
+                        || (matches!(p.kind, ActivityKind::ShapeStones | ActivityKind::FlowGarden)
                             && p.site_id.is_some()
                             && p.recipe_version >= 2))
                     && (p.recipe_version < 2
@@ -152,7 +158,13 @@ impl Activities {
                             && v[1] >= world.min_y() as f32 * CELL_SIZE
                             && v[1] <= world.max_y() as f32 * CELL_SIZE
                     })
-                    && p.answer.iter().chain(r.faces.iter()).all(|f| *f < 3)
+                    && p.answer.iter().chain(r.faces.iter()).all(|f| {
+                        *f < if p.kind == ActivityKind::FlowGarden {
+                            4
+                        } else {
+                            3
+                        }
+                    })
                     && r.slots.iter().all(|s| match s {
                         Slot::Home => true,
                         Slot::Held(id) => profiles.contains_key(id) && holders.insert(id.clone()),
@@ -173,6 +185,18 @@ impl Activities {
                                     || r.slots[..2].iter().all(|s| matches!(s, Slot::Placed(_))))
                                 && r.complete
                                     == r.slots.iter().all(|s| matches!(s, Slot::Placed(_)))
+                        }
+                        ActivityKind::FlowGarden => {
+                            p.recipe_version >= 4
+                                && p.objects == p.sockets
+                                && p.answer == flow_garden::SOLVED_FACES
+                                && p.clues.is_some_and(|anchors| {
+                                    flow_garden::valid_layout(p.sockets, anchors)
+                                })
+                                && r.slots.iter().all(|s| *s == Slot::Home)
+                                && r.complete
+                                    == flow_garden::flow(r.faces)
+                                        .is_some_and(|flow| flow.garden_watered)
                         }
                     }
             })
@@ -225,7 +249,7 @@ impl Activities {
                 revision: r.revision,
                 faces: r.faces,
                 complete: r.complete,
-                available: r.plan.points().all(|p| supported(world, *p)),
+                available: r.plan.available(world),
                 repair: r.working.as_ref().and_then(|w| {
                     connections
                         .iter()
@@ -271,7 +295,7 @@ impl Activities {
         if revision != r.revision {
             return Err("Someone changed this activity. Try again.".into());
         }
-        if r.complete {
+        if r.complete && r.plan.kind != ActivityKind::FlowGarden {
             return Err("This activity is already finished.".into());
         }
         if r.revision >= u64::MAX - 2 {
@@ -296,8 +320,13 @@ impl Activities {
             r.revision += 1;
             return Ok(0);
         }
-        if !r.plan.points().all(|p| supported(world, *p)) {
-            return Err("The activity's ground is blocked or missing. Return the supply to its starting place.".into());
+        if !r.plan.available(world) {
+            return Err(if r.plan.kind == ActivityKind::FlowGarden {
+                "The garden's ground or channels are blocked. Clear the obstruction before turning."
+                    .into()
+            } else {
+                "The activity's ground is blocked or missing. Return the supply to its starting place.".into()
+            });
         }
         let (i, target) = match action {
             ActivityAction::Take(i) if r.plan.kind == ActivityKind::SpilledSupplies => {
@@ -306,7 +335,12 @@ impl Activities {
             ActivityAction::Place(i) if r.plan.kind == ActivityKind::SpilledSupplies => {
                 (i as usize, r.plan.sockets.get(i as usize))
             }
-            ActivityAction::Turn(i) if r.plan.kind == ActivityKind::ShapeStones => {
+            ActivityAction::Turn(i)
+                if matches!(
+                    r.plan.kind,
+                    ActivityKind::ShapeStones | ActivityKind::FlowGarden
+                ) =>
+            {
                 (i as usize, r.plan.sockets.get(i as usize))
             }
             ActivityAction::Contribute(i) if r.plan.kind == ActivityKind::CartRepair && i < 2 => {
@@ -349,8 +383,13 @@ impl Activities {
                 r.complete = r.slots.iter().all(|s| matches!(s, Slot::Placed(_)));
             }
             ActivityAction::Turn(_) => {
-                r.faces[i] = (r.faces[i] + 1) % 3;
-                r.complete = r.faces == r.plan.answer;
+                if r.plan.kind == ActivityKind::FlowGarden {
+                    r.faces[i] = (r.faces[i] + 1) % 4;
+                    r.complete = flow_garden::flow(r.faces).is_some_and(|f| f.garden_watered);
+                } else {
+                    r.faces[i] = (r.faces[i] + 1) % 3;
+                    r.complete = r.faces == r.plan.answer;
+                }
             }
             ActivityAction::Contribute(_) => {
                 if holding {
@@ -935,11 +974,14 @@ mod tests {
         let world = World::generate(42, rubblekin_core::world::WorldGeneration::GeographyV6);
         let (_, mut activities, profiles) = fixture();
         activities.records = poi_plans(&world).into_iter().map(Record::new).collect();
-        // Repairs did not exist in recipe1. Only the earlier two families need
-        // migration; cart records are introduced separately by add_poi_plans.
-        activities
-            .records
-            .retain(|r| r.plan.kind != ActivityKind::CartRepair);
+        // Repairs and gardens did not exist in recipe1. Only the earlier two
+        // families need migration; later records are introduced separately.
+        activities.records.retain(|r| {
+            matches!(
+                r.plan.kind,
+                ActivityKind::SpilledSupplies | ActivityKind::ShapeStones
+            )
+        });
         let profile = profiles.keys().next().unwrap();
         for r in &mut activities.records {
             r.plan.recipe_version = 1;
@@ -999,5 +1041,134 @@ mod tests {
         let mut bad = restored;
         bad.records[shape].plan.clues.as_mut().unwrap()[0][0] = f32::NAN;
         assert!(!bad.validate(&world, &profiles));
+    }
+    #[test]
+    fn gardens_are_reversible_without_payments_and_recipe_three_adds_one_without_resetting_receipts()
+     {
+        let world = World::generate(42, rubblekin_core::world::WorldGeneration::GeographyV6);
+        let (_, _, profiles) = fixture();
+        let profile = profiles.keys().next().unwrap();
+        let mut activities = Activities::new(&world);
+        let index = activities
+            .records
+            .iter()
+            .position(|r| r.plan.kind == ActivityKind::FlowGarden)
+            .unwrap();
+        let plan = activities.records[index].plan.clone();
+        assert!(activities.validate(&world, &profiles));
+        let mut blocked = world.clone();
+        let source = plan.clues.unwrap()[0];
+        blocked
+            .set_block(
+                rubblekin_core::world::BlockPos::new(
+                    ((source[0] - 0.75) / CELL_SIZE).floor() as i32,
+                    ((source[1] + 0.55) / CELL_SIZE).floor() as i32,
+                    ((source[2] + 0.75) / CELL_SIZE).floor() as i32,
+                ),
+                rubblekin_core::world::Block::Stone,
+            )
+            .unwrap();
+        assert!(
+            plan.points().all(|p| supported(&blocked, *p)),
+            "The reserved prop edge is beyond the standing capsule"
+        );
+        assert!(!plan.available(&blocked));
+        assert!(
+            activities
+                .clone()
+                .apply(
+                    &blocked,
+                    profile,
+                    plan.sockets[0],
+                    plan.id,
+                    0,
+                    ActivityAction::Turn(0)
+                )
+                .is_err()
+        );
+        assert!(
+            activities.validate(&blocked, &profiles),
+            "Blocked scenes keep their saved connections without replacement"
+        );
+        for (i, turns) in [(0, 3), (1, 1), (2, 1)] {
+            for _ in 0..turns {
+                let revision = activities.records[index].revision;
+                assert_eq!(
+                    activities
+                        .apply(
+                            &world,
+                            profile,
+                            plan.sockets[i],
+                            plan.id,
+                            revision,
+                            ActivityAction::Turn(i as u8)
+                        )
+                        .unwrap(),
+                    0
+                );
+            }
+        }
+        assert!(activities.records[index].complete);
+        for expected in [false, true, false, true] {
+            let revision = activities.records[index].revision;
+            assert_eq!(
+                activities
+                    .apply(
+                        &world,
+                        profile,
+                        plan.sockets[2],
+                        plan.id,
+                        revision,
+                        ActivityAction::Turn(2)
+                    )
+                    .unwrap(),
+                0
+            );
+            assert_eq!(activities.records[index].complete, expected);
+            assert!(activities.validate(&world, &profiles));
+        }
+        for variant in 0..7 {
+            let mut bad = activities.clone();
+            let r = &mut bad.records[index];
+            match variant {
+                0 => r.faces[0] = 4,
+                1 => r.complete = !r.complete,
+                2 => r.slots[0] = Slot::Placed(profile.clone()),
+                3 => r.plan.clues.as_mut().unwrap()[0][0] += 0.3,
+                4 => r.plan.sockets[2][0] += 0.3,
+                5 => r.plan.answer[0] = 0,
+                _ => r.plan.recipe_version = 3,
+            }
+            assert!(!bad.validate(&world, &profiles), "variant {variant}");
+        }
+        let mut old = activities;
+        old.records
+            .retain(|r| r.plan.kind != ActivityKind::FlowGarden);
+        for r in &mut old.records {
+            r.plan.recipe_version = 3;
+        }
+        let supplied = old
+            .records
+            .iter_mut()
+            .find(|r| r.plan.kind == ActivityKind::SpilledSupplies)
+            .unwrap();
+        supplied.slots[0] = Slot::Placed(profile.clone());
+        let before = old.clone();
+        old.add_poi_plans(&world);
+        assert_eq!(old.records.len(), before.records.len() + 1);
+        for saved in &before.records {
+            let upgraded = old
+                .records
+                .iter()
+                .find(|r| r.plan.id == saved.plan.id)
+                .unwrap();
+            assert_eq!(upgraded.slots, saved.slots);
+            assert_eq!(upgraded.faces, saved.faces);
+            assert_eq!(upgraded.complete, saved.complete);
+        }
+        assert!(old.validate(&world, &profiles));
+        let snapshot = serde_json::to_value(&old).unwrap();
+        old.add_poi_plans(&world);
+        assert_eq!(serde_json::to_value(&old).unwrap(), snapshot);
     }
 }

@@ -31,6 +31,7 @@ pub(crate) enum Lesson {
     Travel,
     Glide,
     Flight,
+    FlowGarden,
 }
 impl Lesson {
     fn title(self) -> &'static str {
@@ -46,6 +47,7 @@ impl Lesson {
             Self::Travel => "WHIP TRAVEL",
             Self::Glide => "YOUR CANOPY",
             Self::Flight => "CREATIVE FLIGHT",
+            Self::FlowGarden => "FOLLOW THE WATER",
         }
     }
     fn instruction(self, stage: u8, touch: bool) -> &'static str {
@@ -129,6 +131,12 @@ impl Lesson {
             (Self::Stones, _, false) => {
                 "Find its matching dotted picture along the route. T turns; Y guides; J shows."
             }
+            (Self::FlowGarden, _, true) => {
+                "Turn channels. Join their open ends. Follow the water; Hint finds the break."
+            }
+            (Self::FlowGarden, _, false) => {
+                "T turns channels. Connect their open ends; Y finds the break and J shows a turn."
+            }
             (Self::Travel, 0, _) => {
                 "Choose a reachable town or explorer to board. Up to four can ride; one is enough."
             }
@@ -169,6 +177,7 @@ pub(crate) enum Signal {
     ExploreMap,
     Finished(Lesson),
     Activity(ActivityAction, bool),
+    Garden(bool),
 }
 
 #[derive(Resource, Default)]
@@ -246,6 +255,12 @@ impl Tutorials {
                     self.finish(Lesson::Building);
                 } else {
                     self.advance(Lesson::Building, stage);
+                }
+            }
+            Signal::Garden(complete) => {
+                self.start(Lesson::FlowGarden);
+                if complete {
+                    self.finish(Lesson::FlowGarden);
                 }
             }
             Signal::Activity(action, complete) => match action {
@@ -330,7 +345,10 @@ impl Context {
             Self::Map => lesson == Lesson::Map,
             Self::Market => matches!(lesson, Lesson::Cargo | Lesson::Work | Lesson::Parcel),
             Self::Travel => lesson == Lesson::Travel,
-            Self::Activity => matches!(lesson, Lesson::Supplies | Lesson::Stones),
+            Self::Activity => matches!(
+                lesson,
+                Lesson::Supplies | Lesson::Stones | Lesson::FlowGarden
+            ),
             Self::World => matches!(
                 lesson,
                 Lesson::Building
@@ -822,6 +840,25 @@ fn save(path: &Path, name: &str, completed: &BTreeSet<Lesson>, reset: bool) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn garden_teaches_water_connections_without_starting_the_stone_lesson() {
+        let mut t = Tutorials::default();
+        t.signal(Signal::Garden(false));
+        assert_eq!(t.visible(Context::Activity), Some(Lesson::FlowGarden));
+        assert!(!t.stages.contains_key(&Lesson::Stones));
+        assert!(
+            Lesson::FlowGarden
+                .instruction(0, true)
+                .contains("open ends")
+        );
+        t.signal(Signal::Garden(true));
+        assert!(t.completed.contains(&Lesson::FlowGarden));
+        t.signal(Signal::Garden(false));
+        assert!(
+            t.visible(Context::Activity).is_none(),
+            "Later experiments do not repeat a completed lesson"
+        );
+    }
 
     #[test]
     fn hotbar_requires_choose_assign_and_close_and_skip_is_remembered() {

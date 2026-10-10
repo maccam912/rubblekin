@@ -10,6 +10,7 @@ mod capture;
 mod cart_repairs;
 mod crash_reporting;
 mod crops;
+mod flow_gardens;
 mod follow_camera;
 mod forage;
 mod gliders;
@@ -494,6 +495,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             forage::update,
                             activities::update,
                             cart_repairs::update,
+                            flow_gardens::update,
                             activities::update_demo,
                         )
                             .chain(),
@@ -663,11 +665,19 @@ fn receive_network(
                         && let Some((activity_id, action)) = scene.pending_action(request_id)
                         && let Some(t) = tutorials.as_deref_mut()
                     {
-                        let complete = session
-                            .activities
-                            .iter()
-                            .any(|a| a.plan.id == activity_id && a.complete);
-                        t.signal(tutorials::Signal::Activity(action, complete));
+                        let activity = session.activities.iter().find(|a| a.plan.id == activity_id);
+                        if activity.is_some_and(|a| {
+                            a.plan.kind == rubblekin_core::activities::ActivityKind::FlowGarden
+                        }) {
+                            t.signal(tutorials::Signal::Garden(
+                                activity.is_some_and(|a| a.complete),
+                            ));
+                        } else {
+                            t.signal(tutorials::Signal::Activity(
+                                action,
+                                activity.is_some_and(|a| a.complete),
+                            ));
+                        }
                     }
                     scene.reply(request_id, accepted, &session, time.elapsed_secs_f64());
                 }

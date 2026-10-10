@@ -174,6 +174,8 @@ pub(crate) struct Scene {
     repair_pictures: [Handle<Image>; 3],
     repaired_picture: Handle<Image>,
     repair_cost_pictures: [Handle<Image>; 2],
+    flow_pictures: [[[Handle<Image>; 2]; 4]; 3],
+    flow_finished: Handle<Image>,
     material: Handle<StandardMaterial>,
     ghost: Handle<StandardMaterial>,
     base: [Handle<Mesh>; 2],
@@ -191,6 +193,7 @@ impl Scene {
             ActivityKind::SpilledSupplies => self.supply_pictures[0].clone(),
             ActivityKind::ShapeStones => self.symbol_pictures[0].clone(),
             ActivityKind::CartRepair => self.repair_pictures[0].clone(),
+            ActivityKind::FlowGarden => self.flow_finished.clone(),
         }
     }
     pub(crate) fn demonstrating(&self) -> bool {
@@ -293,6 +296,17 @@ impl Demonstration {
                 .iter()
                 .position(|p| *p != PropState::Placed)
                 .unwrap_or(0),
+            ActivityKind::FlowGarden => flow_garden::next_piece(a.faces).unwrap_or(0),
+        };
+        let modulus = if a.plan.kind == ActivityKind::FlowGarden {
+            4
+        } else {
+            3
+        };
+        let answer = if a.plan.kind == ActivityKind::FlowGarden && item == 2 && a.faces[2] == 2 {
+            3
+        } else {
+            a.plan.answer[item]
         };
         Some(Self {
             id: a.plan.id,
@@ -300,11 +314,11 @@ impl Demonstration {
             kind: a.plan.kind,
             item,
             face: if a.complete {
-                (a.plan.answer[item] + 1) % 3
+                (answer + 1) % modulus
             } else {
                 a.faces[item]
             },
-            answer: a.plan.answer[item],
+            answer,
             carrying: carrying.is_some(),
             started: now,
         })
@@ -314,7 +328,10 @@ impl Demonstration {
         if t >= 7. {
             return None;
         }
-        if self.kind != ActivityKind::ShapeStones {
+        if !matches!(
+            self.kind,
+            ActivityKind::ShapeStones | ActivityKind::FlowGarden
+        ) {
             let travel = ((t - 1.5) / 2.5).clamp(0., 1.);
             let lift = ((t - 0.5) / 0.7).clamp(0., 1.);
             let lower = ((t - 4.) / 0.8).clamp(0., 1.);
@@ -331,7 +348,12 @@ impl Demonstration {
             })
         } else {
             // Each full turn changes one face, exactly like the real interaction.
-            let turns = (self.answer + 3 - self.face) % 3;
+            let modulus = if self.kind == ActivityKind::FlowGarden {
+                4
+            } else {
+                3
+            };
+            let turns = (self.answer + modulus - self.face) % modulus;
             let step = ((t / 1.5) as u8).min(turns);
             let turning = step < turns && t % 1.5 > 0.8;
             let width = if turning {
@@ -346,7 +368,7 @@ impl Demonstration {
                 x: 28. + (52. - width) / 2.,
                 y: 32.,
                 width,
-                face: ((self.face + step) % 3) as usize,
+                face: ((self.face + step) % modulus) as usize,
                 settled: step == turns,
             })
         }
@@ -373,7 +395,7 @@ fn target(session: &Session, world: &rubblekin_core::world::World) -> Option<Tar
         .activities
         .iter()
         .filter(|a| {
-            !a.complete
+            (!a.complete || a.plan.kind == ActivityKind::FlowGarden)
                 && a.available
                 && (hold.is_none() || hold.is_some_and(|(h, _)| h.plan.id == a.plan.id))
         })
@@ -386,7 +408,9 @@ fn target(session: &Session, world: &rubblekin_core::world::World) -> Option<Tar
                     ActivityKind::SpilledSupplies if a.props[i] == PropState::Home => {
                         (ActivityAction::Take(i as u8), a.plan.objects[i])
                     }
-                    ActivityKind::ShapeStones => (ActivityAction::Turn(i as u8), a.plan.sockets[i]),
+                    ActivityKind::ShapeStones | ActivityKind::FlowGarden => {
+                        (ActivityAction::Turn(i as u8), a.plan.sockets[i])
+                    }
                     ActivityKind::CartRepair if a.repair.is_none() && a.available => {
                         if i < 2 && a.props[i] == PropState::Home {
                             (ActivityAction::Contribute(i as u8), a.plan.sockets[i])
@@ -499,6 +523,10 @@ pub(crate) fn setup(
     let repair_pictures = repair_art.pictures.clone();
     let repaired_picture = repair_art.finished.clone();
     commands.insert_resource(repair_art);
+    let flow_art = crate::flow_gardens::Art::new(&mut meshes, &mut images, &mut materials);
+    let flow_pictures = flow_art.pictures.clone();
+    let flow_finished = flow_art.finished.clone();
+    commands.insert_resource(flow_art);
     commands.insert_resource(Scene {
         supplies: std::array::from_fn(|i| meshes.add(mesh(&supply_parts(i)))),
         silhouettes: std::array::from_fn(|i| meshes.add(mesh(&silhouette_parts(i)))),
@@ -515,6 +543,8 @@ pub(crate) fn setup(
         }),
         repair_pictures,
         repaired_picture,
+        flow_pictures,
+        flow_finished,
         repair_cost_pictures: [
             trade.resource(rubblekin_core::settlement::ResourceKind::Timber),
             trade.coins.clone(),
@@ -858,7 +888,10 @@ pub(crate) fn update(
     scene.objects.retain(|_, e| transforms.contains(*e));
     let mut wanted = Vec::new();
     for a in &session.activities {
-        if a.plan.kind == ActivityKind::CartRepair {
+        if matches!(
+            a.plan.kind,
+            ActivityKind::CartRepair | ActivityKind::FlowGarden
+        ) {
             continue;
         }
         if !a.plan.points().any(|p| distance(eye.to_array(), *p) < 100.) {
@@ -1067,6 +1100,18 @@ pub(crate) fn update(
         for mut text in &mut title {
             let s = if scene.demonstrating() {
                 "Watch · preview only".into()
+            } else if a.plan.kind == ActivityKind::FlowGarden {
+                if !a.available {
+                    "Garden ground changed".into()
+                } else if scene.pending.is_some() {
+                    "…".into()
+                } else if a.complete {
+                    "Garden watered! · Turn to try more".into()
+                } else if touch.enabled {
+                    "Connect water · Turn / Hint".into()
+                } else {
+                    "Connect water · T: turn · Y: hint".into()
+                }
             } else if a.plan.kind == ActivityKind::CartRepair {
                 if a.complete {
                     "Cart repaired!".into()
@@ -1124,6 +1169,9 @@ pub(crate) fn update(
                 scene.supply_pictures[i].clone()
             } else if a.plan.kind == ActivityKind::CartRepair {
                 scene.repair_pictures[i].clone()
+            } else if a.plan.kind == ActivityKind::FlowGarden {
+                let wet = flow_garden::flow(a.faces).is_some_and(|f| f.wet[i]);
+                scene.flow_pictures[i][a.faces[i] as usize][usize::from(wet)].clone()
             } else if a.plan.clues.is_some() {
                 // Progress shows the current faces. Finding the reference is
                 // part of the puzzle; Show me remains an optional solution aid.
@@ -1131,7 +1179,9 @@ pub(crate) fn update(
             } else {
                 scene.symbol_pictures[a.plan.answer[i] as usize].clone()
             };
-            let done = if a.plan.kind != ActivityKind::ShapeStones {
+            let done = if a.plan.kind == ActivityKind::FlowGarden {
+                flow_garden::flow(a.faces).is_some_and(|f| f.wet[i])
+            } else if a.plan.kind != ActivityKind::ShapeStones {
                 a.props[i] == PropState::Placed
             } else {
                 a.faces[i] == a.plan.answer[i]
@@ -1150,9 +1200,19 @@ pub(crate) fn update(
     }
     if !blocked {
         if let Some(t) = target(&session, &world.0) {
+            let garden = session
+                .activities
+                .iter()
+                .any(|a| a.plan.id == t.id && a.plan.kind == ActivityKind::FlowGarden);
             gizmos.cube(
-                Transform::from_translation(Vec3::from_array(t.position) + Vec3::Y * 0.5)
-                    .with_scale(Vec3::new(1.25, 1.15, 1.1)),
+                Transform::from_translation(
+                    Vec3::from_array(t.position) + Vec3::Y * if garden { 0.32 } else { 0.5 },
+                )
+                .with_scale(if garden {
+                    Vec3::new(0.95, 0.65, 0.95)
+                } else {
+                    Vec3::new(1.25, 1.15, 1.1)
+                }),
                 Color::WHITE,
             );
         }
@@ -1166,6 +1226,8 @@ pub(crate) fn update(
                     .iter()
                     .position(|s| *s == PropState::Home)
                     .map(|i| a.plan.objects[i])
+            } else if a.plan.kind == ActivityKind::FlowGarden {
+                flow_garden::next_piece(a.faces).map(|i| a.plan.sockets[i])
             } else if a.plan.kind == ActivityKind::CartRepair {
                 a.props
                     .iter()
@@ -1179,7 +1241,8 @@ pub(crate) fn update(
                     .map(|i| a.plan.sockets[i])
             };
             if let Some(p) = p {
-                if let Some(clues) = a.plan.clues
+                if a.plan.kind == ActivityKind::ShapeStones
+                    && let Some(clues) = a.plan.clues
                     && let Some(i) = a.faces.iter().zip(a.plan.answer).position(|(f, t)| *f != t)
                 {
                     let clue = Vec3::from_array(clues[i]);
@@ -1194,13 +1257,19 @@ pub(crate) fn update(
                     );
                 }
                 let p = Vec3::from_array(p);
+                let garden = a.plan.kind == ActivityKind::FlowGarden;
                 gizmos.line(
                     eye + Vec3::Y,
-                    p + Vec3::Y * 1.2,
+                    p + Vec3::Y * if garden { 0.32 } else { 1.2 },
                     Color::srgb(1., 0.82, 0.36),
                 );
                 gizmos.cube(
-                    Transform::from_translation(p + Vec3::Y * 0.8).with_scale(Vec3::splat(1.5)),
+                    Transform::from_translation(p + Vec3::Y * if garden { 0.32 } else { 0.8 })
+                        .with_scale(if garden {
+                            Vec3::new(0.95, 0.65, 0.95)
+                        } else {
+                            Vec3::splat(1.5)
+                        }),
                     Color::srgb(1., 0.82, 0.36),
                 );
             }
@@ -1266,6 +1335,8 @@ pub(crate) fn update_demo(
             scene.supply_pictures[demo.item].clone()
         } else if demo.kind == ActivityKind::CartRepair {
             scene.repair_pictures[demo.item].clone()
+        } else if demo.kind == ActivityKind::FlowGarden {
+            scene.flow_pictures[demo.item][frame.face][0].clone()
         } else {
             scene.symbol_pictures[frame.face].clone()
         };
@@ -1275,6 +1346,8 @@ pub(crate) fn update_demo(
             scene.tray_pictures[demo.item].clone()
         } else if demo.kind == ActivityKind::CartRepair {
             scene.repaired_picture.clone()
+        } else if demo.kind == ActivityKind::FlowGarden {
+            scene.flow_pictures[demo.item][demo.answer as usize][1].clone()
         } else {
             scene.symbol_pictures[demo.answer as usize].clone()
         };
@@ -1289,6 +1362,78 @@ pub(crate) fn update_demo(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn garden_targets_and_replays_follow_connections_and_remain_usable_after_watering() {
+        let (_, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(rubblekin_core::protocol::SessionMode::Player),
+            "garden".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            rubblekin_core::protocol::SessionMode::Player,
+        )
+        .unwrap();
+        let world = rubblekin_core::world::World::generate(
+            42,
+            rubblekin_core::world::WorldGeneration::GeographyV6,
+        );
+        let plan = plans(&world)
+            .into_iter()
+            .find(|p| p.kind == ActivityKind::FlowGarden)
+            .unwrap();
+        session.body.position = plan.sockets[0];
+        session.activities = vec![ActivitySnapshot {
+            plan,
+            revision: 0,
+            props: [PropState::Home; 3],
+            faces: [2, 0, 0],
+            complete: false,
+            available: true,
+            repair: None,
+        }];
+        assert!(matches!(
+            target(&session, &world).unwrap().action,
+            ActivityAction::Turn(0)
+        ));
+        assert_eq!(touch_activity(&session, &world).use_label, Some("Turn"));
+        let demo = Demonstration::new(
+            &session.activities[0],
+            session.id,
+            session.body.position,
+            0.,
+        )
+        .unwrap();
+        assert_eq!(
+            demo.item, 0,
+            "A wet elbow pointing away is the actual break"
+        );
+        assert_eq!(demo.frame(3.).unwrap().face, 3);
+        session.activities[0].faces = [3, 1, 2];
+        let demo = Demonstration::new(
+            &session.activities[0],
+            session.id,
+            session.body.position,
+            0.,
+        )
+        .unwrap();
+        assert_eq!(demo.item, 2);
+        assert_eq!(demo.answer, 3);
+        assert!(demo.frame(3.).unwrap().settled);
+        assert_eq!(
+            session.activities[0].faces,
+            [3, 1, 2],
+            "A replay never changes channels"
+        );
+        session.activities[0].faces = flow_garden::SOLVED_FACES;
+        session.activities[0].complete = true;
+        assert!(
+            target(&session, &world).is_some(),
+            "Watered gardens remain reversible"
+        );
+        assert!(touch_activity(&session, &world).demonstrate);
+        assert!(!touch_activity(&session, &world).return_supply);
+        session.activities[0].available = false;
+        assert!(target(&session, &world).is_none());
+    }
     #[test]
     fn cart_targets_missing_parts_then_confirmed_hammer_and_replay_never_changes_cargo() {
         let (world, mut session) = crate::join::session_from_welcome(

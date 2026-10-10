@@ -1,4 +1,5 @@
 //! Small visual activities. Plans contain real supported positions, never POI indices.
+pub mod flow_garden;
 use crate::{
     physics::{Body, EYE_HEIGHT, MoveInput, character_position_is_clear, move_character},
     poi::{SiteArrangement, SitePlan},
@@ -7,7 +8,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 pub const ACTIVITY_REACH: f32 = 2.8;
-pub const RECIPE_VERSION: u32 = 3;
+pub const RECIPE_VERSION: u32 = 4;
 pub const REPAIR_SECONDS: f32 = 6.;
 pub const MAX_PLANS: usize = 20;
 
@@ -16,6 +17,7 @@ pub enum ActivityKind {
     SpilledSupplies,
     ShapeStones,
     CartRepair,
+    FlowGarden,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivityPlan {
@@ -28,8 +30,8 @@ pub struct ActivityPlan {
     /// Foot positions: both the prop and its approach must be accessible.
     pub objects: [[f32; 3]; 3],
     pub sockets: [[f32; 3]; 3],
-    /// Supported reference boards elsewhere on the route. Legacy review scenes
-    /// keep their references immediately above the controls.
+    /// Supported stone references, or the flow garden's source, bed and viewing
+    /// point. Legacy review scenes keep references above the controls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clues: Option<[[f32; 3]; 3]>,
     pub answer: [u8; 3],
@@ -40,6 +42,13 @@ impl ActivityPlan {
             .iter()
             .chain(&self.sockets)
             .chain(self.clues.iter().flatten())
+    }
+    pub fn available(&self, world: &World) -> bool {
+        self.points().all(|p| supported(world, *p))
+            && (self.kind != ActivityKind::FlowGarden
+                || self
+                    .clues
+                    .is_some_and(|anchors| flow_garden::props_clear(world, self.sockets, anchors)))
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +208,7 @@ pub fn poi_plans(world: &World) -> Vec<ActivityPlan> {
     };
     let mut sites: Vec<_> = settlements.composed_sites.iter().collect();
     sites.sort_by_key(|s| s.id);
+    let mut garden_added = false;
     sites
         .into_iter()
         .filter_map(|site| {
@@ -207,10 +217,17 @@ pub fn poi_plans(world: &World) -> Vec<ActivityPlan> {
             hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
             hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
             hash ^= hash >> 31;
-            if hash & 1 != 0 || site.id <= 2 {
+            if (hash & 1 != 0 && site.arrangement != SiteArrangement::LowCauseway) || site.id <= 2 {
                 return None;
             }
-            at_site(world, site)
+            let plan = at_site(world, site)?;
+            if plan.kind == ActivityKind::FlowGarden {
+                if garden_added {
+                    return None;
+                }
+                garden_added = true;
+            }
+            Some(plan)
         })
         .take(MAX_PLANS)
         .collect()
@@ -231,6 +248,7 @@ pub fn site_kind(arrangement: SiteArrangement) -> Option<ActivityKind> {
             Some(ActivityKind::ShapeStones)
         }
         SiteArrangement::ExtractionFace => Some(ActivityKind::CartRepair),
+        SiteArrangement::LowCauseway => Some(ActivityKind::FlowGarden),
         _ => None,
     }
 }
@@ -297,6 +315,27 @@ pub fn at_site(world: &World, site: &SitePlan) -> Option<ActivityPlan> {
             }
             (sockets, sockets, None)
         }
+        (ActivityKind::FlowGarden, _) => {
+            let tile = flow_garden::TILE;
+            let (sockets, anchors) = [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85]
+                .into_iter()
+                .find_map(|t| {
+                    let sockets = [
+                        point(t, tile / 2.)?,
+                        point(t - tile / length, tile / 2.)?,
+                        point(t - tile / length, -tile / 2.)?,
+                    ];
+                    let anchors = [
+                        point(t, 1.5 * tile)?,
+                        point(t - tile / length, -1.5 * tile)?,
+                        point(t + tile / length, 0.)?,
+                    ];
+                    (flow_garden::valid_layout(sockets, anchors)
+                        && flow_garden::props_clear(world, sockets, anchors))
+                    .then_some((sockets, anchors))
+                })?;
+            (sockets, sockets, Some(anchors))
+        }
     };
     // Verify approach and return for every piece, plus the actual carried route.
     if objects
@@ -320,7 +359,11 @@ pub fn at_site(world: &World, site: &SitePlan) -> Option<ActivityPlan> {
         objects,
         sockets,
         clues,
-        answer: [shift, (shift + 1) % 3, (shift + 2) % 3],
+        answer: if kind == ActivityKind::FlowGarden {
+            flow_garden::SOLVED_FACES
+        } else {
+            [shift, (shift + 1) % 3, (shift + 2) % 3]
+        },
     })
 }
 
@@ -367,10 +410,19 @@ mod tests {
             );
             let sites = &world.settlements().unwrap().composed_sites;
             assert!(activities.len() < sites.len() / 2);
+            assert_eq!(
+                activities
+                    .iter()
+                    .filter(|p| p.kind == ActivityKind::FlowGarden)
+                    .count(),
+                1,
+                "Seed {seed}: start with one authored garden per island"
+            );
             for kind in [
                 ActivityKind::SpilledSupplies,
                 ActivityKind::ShapeStones,
                 ActivityKind::CartRepair,
+                ActivityKind::FlowGarden,
             ] {
                 assert!(
                     activities.iter().any(|p| p.kind == kind),
@@ -421,6 +473,14 @@ mod tests {
                 if p.kind == ActivityKind::CartRepair {
                     assert!(distance(p.sockets[0], p.sockets[1]) > 1.5);
                     assert!(p.points().all(|v| (v[1] - p.sockets[2][1]).abs() < 0.1));
+                } else if p.kind == ActivityKind::FlowGarden {
+                    assert_eq!(p.answer, flow_garden::SOLVED_FACES);
+                    assert!(flow_garden::valid_layout(p.sockets, p.clues.unwrap()));
+                    assert!(flow_garden::props_clear(
+                        &world,
+                        p.sockets,
+                        p.clues.unwrap()
+                    ));
                 } else {
                     assert!(
                         distance(p.objects[0], p.objects[2]) > 12.,
@@ -435,7 +495,7 @@ mod tests {
                 for i in 0..3 {
                     assert!(walk(&world, p.objects[i], p.sockets[i]));
                     assert!(walk(&world, p.sockets[i], p.objects[i]));
-                    if let Some(clues) = p.clues {
+                    if let Some(clues) = p.clues.filter(|_| p.kind == ActivityKind::ShapeStones) {
                         assert!(distance(clues[i], p.sockets[i]) > ACTIVITY_REACH);
                         assert!(walk(&world, p.sockets[i], clues[i]));
                         assert!(walk(&world, clues[i], p.sockets[i]));

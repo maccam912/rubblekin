@@ -194,6 +194,11 @@ fn description(
                 .filter(|p| **p == PropState::Placed)
                 .count(),
         ),
+        ActivityKind::FlowGarden => (
+            "Water garden",
+            rubblekin_core::activities::flow_garden::flow(activity.faces)
+                .map_or(0, |f| f.wet.into_iter().filter(|wet| *wet).count()),
+        ),
     };
     let place = world
         .settlements()
@@ -214,7 +219,11 @@ fn description(
         "{title}\n{} · {distance} · {}",
         place.unwrap_or("Activity"),
         if activity.complete {
-            "Done".into()
+            if activity.plan.kind == ActivityKind::FlowGarden {
+                "Watered".into()
+            } else {
+                "Done".into()
+            }
         } else {
             format!("{progress}/3")
         }

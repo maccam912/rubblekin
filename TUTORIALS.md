@@ -10,17 +10,18 @@ Implemented in [tutorials.rs](crates/client/src/tutorials.rs). These are small p
 | Cargo & coins | Open Cargo | Review cargo and offers, then close; unlimited building stock is separate | Close the panel |
 | A little work | Start accepted work with T/touch Work at its pictured site, or in Cargo | Stay beside the site while its bar fills; moving away cancels | Confirmed coins or cargo reward |
 | Picture parcel | Accept a parcel | Open Map to find its town picture, then deliver at the matching market sign | Return from Map after opening it; paid handover also completes it |
-| Carry & match | Take a supply | Carry to the matching outline and Use; Return safely puts it back | Confirmed matching placement |
+| Carry & match | Take a supply | Carry to the matching outline and T/touch Place; Return safely puts it back | Confirmed matching placement |
 | Turn & match | Turn a stone | Find its matching dotted reference along the route; Show me demonstrates and Hint guides | This player's accepted turn solves the puzzle |
+| Follow the water | Turn a garden channel | Connect its open ends and watch where water stops; Hint finds the break and Show me demonstrates a turn | This player’s accepted turn waters the garden |
 | Whip travel | Open station travel | Choose a destination, board, and Launch when everyone is ready | Authoritative launch |
 | Your canopy | Enter personal gliding | Look to steer, then try Brake or Dive; ground contact closes the canopy | Steering followed by brake or dive |
 | Creative flight | Turn on Fly | Rise or descend, then turn Fly off | Change height and leave creative flight |
 
 Each prompt contains a short explanation and one next action. Desktop and touch instructions name their actual controls. The existing inventory pictures, town emblems, parcel signs, supply silhouettes, puzzle references, work bar and model demonstrations carry the visual explanation. Show me temporarily takes the activity card's space while its animation plays. The parcel lesson finishes when the player returns from Map; the existing parcel picture then keeps the destination visible during the journey. Skip is always available.
 
-Inventory, map, cargo and station prompts sit inside their panels. Supply and stone prompts use the existing picture card. World prompts avoid the hotbar and touch buttons. The paid-work picture and progress bar move below the first-use world lesson while it is visible. A confirmed payment then shows its actual coin or cargo picture; resource pictures also identify the buy/sell exchange in Cargo. In the compact inventory, Search appears after the hotbar lesson is completed or skipped, leaving space for the block pictures and six slots.
+Inventory, map, cargo and station prompts sit inside their panels. Supply, stone and flow-garden prompts use the existing picture card. World prompts avoid the hotbar and touch buttons. The paid-work picture and progress bar move below the first-use world lesson while it is visible. A confirmed payment then shows its actual coin or cargo picture; resource pictures also identify the buy/sell exchange in Cargo. In the compact inventory, Search appears after the hotbar lesson is completed or skipped, leaving space for the block pictures and six slots.
 
-The map's Activities view shows the three available supply/puzzle/repair activities, with unfinished scenes first and distance ordering within each group, with their object pictures and real shared progress. Choosing a picture centers the map on its start. Towns restores the settlement list; this navigation does not accept an expedition or award a postcard.
+The map's Activities view shows the three available activities with their object pictures and real shared progress, unfinished scenes first and distance ordering within each group. Choosing a picture centers the map on its start. Towns restores the settlement list; this navigation does not accept an expedition or award a postcard.
 
 Tap/click **Skip**, or press **F3**, to dismiss the visible lesson. **Menu → Teach me again** clears tutorial completion for the current character on this device; the next interaction reintroduces the appropriate lesson. The full Controls reference remains available from Menu/H. Player sessions start with that reference and the inspector closed; observers retain their previous reference.
 
