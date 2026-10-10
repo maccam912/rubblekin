@@ -144,8 +144,17 @@ Repeat the station menu at 840×400 with --touch. Swipe the list without boardin
 
 ## First composed surface POIs
 
-Use matching Protocol24 builds and an isolated seed42 GeographyV6 save. Regenerate the source/route review sheets with `cargo run --locked -p rubblekin_core --example poi_catalog -- artifacts/poi-compositions`. The JSON contains actual placed coordinates and 36 separate terrain-adapted review examples; the sheets show solids, sampled ground, an approximate human scale reference and overhead walking routes. The unlabelled sheet also removes color. These are geometry-review tools, separate from native rendering or a walking-time/fun measurement.
+Use matching current Protocol26 builds and an isolated seed42 GeographyV6 save. Regenerate the source/route review sheets with `cargo run --locked -p rubblekin_core --example poi_catalog -- artifacts/poi-compositions`. The JSON contains actual placed coordinates and 36 separate terrain-adapted review examples; the sheets show solids, sampled ground, an approximate human scale reference and overhead walking routes. The unlabelled sheet also removes color. These are geometry-review tools, separate from native rendering or a walking-time/fun measurement.
 
 Seed42 places32 compositions among2177 existing roadside/wilderness discoveries. Stage at split crossing `(7211.75,161.5,-4073.25)` facing north and follow the descending bypass beneath both bridge ends to the opposite natural approach. At quarry steps `(2727.75,204.5,-2747.75)`, face west and descend/return along the haul ramp, comparing the three ledges and surviving pillar. Grove portal `(4325.75,283.5,2959.75)` faces east. Test both route directions without jumping and compare views from beside and above each place. Verify map A/Q/X markers, nearest-site names and inspection of actual generated surfaces. Compare a silhouette around128m and toward900m, then the detailed replacement; openings and the missing span should remain.
 
 Sites fit gentle dry ground in this first batch; broader slope/resource relationships, major landmarks and dungeons remain future content. Catalog distinctions and automated access checks do not establish memorable exploration, a complete twenty-minute route or representative hardware performance. Native sampled evidence is in the October9 POI work log in DESIGN.md.
+
+
+## POI activity routes — 2026-10-09
+
+Use matching Protocol26 peers and a fresh seed42 GeographyV6 save. Geographic worlds should have no spawn review trays/stones. Composed sites independently host10 supported encounters in this seed; inspect the explicit plans in the activity state/save to stage a site entrance, then walk normally inside it.
+
+At Quarry Steps, look for the rack below the entrance and supplies at different parts of the haul route. Take a supply, carry it down and place it in its own silhouette. Check the filled picture and exactly two saved coins, then reopen and verify the contribution remains. Edited support must pause a damaged scene without generating a replacement reward; Return must still recover a carried supply.
+
+At a grove portal/span/rib site, follow the route to the separated reference boards. Match one/two/three raised dots to the turning controls. The default card must show current faces, including wrong ones; Hint and Show me remain optional. Check the wider side positions from both the entrance and following camera, turn a piece and verify its matched progress border. Repeat on compact touch with Use and optional guidance. [Native evidence and limits](artifacts/poi-activity-spatial-checks.md).

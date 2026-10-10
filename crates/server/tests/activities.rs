@@ -126,21 +126,36 @@ fn old_save9_gains_poi_scenes_and_their_identity_and_receipts_survive_restart() 
         allow_admin: true,
     };
     let server = spawn(config.clone()).unwrap();
+    let profile = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let mut first = Client::connect(server.addr, profile);
+    first.state();
+    drop(first);
     server.stop().unwrap();
-    // A genuine earlier Save9 record has just the two introduction scenes.
+    // Earlier Save9 town scenes can include paid progress. Retiring their
+    // presentation must retain the wallet and never regenerate those rewards.
     let mut old: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    old["activities"]["records"]
-        .as_array_mut()
-        .unwrap()
-        .truncate(2);
+    let world = rubblekin_core::world::World::generate(42, WorldGeneration::GeographyV6);
+    let records: Vec<_> = review_plans(&world)
+        .into_iter()
+        .map(|mut plan| {
+            plan.recipe_version = 1;
+            serde_json::json!({
+                "faces": [plan.answer[0], (plan.answer[1]+1)%3, (plan.answer[2]+2)%3],
+                "plan": plan, "revision": 0, "slots": ["Home", "Home", "Home"], "complete": false,
+            })
+        })
+        .collect();
+    old["activities"]["records"] = records.into();
+    old["activities"]["records"][0]["slots"][0] = serde_json::json!({"Placed":profile});
+    old["profiles"][profile]["ledger"]["coins"] = 2.into();
     assert_eq!(old["version"], 9);
     fs::write(&config.save_path, serde_json::to_vec(&old).unwrap()).unwrap();
     let server = spawn(config.clone()).unwrap();
-    let profile = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let mut client = Client::connect(server.addr, profile);
     let mut states = client.state();
-    assert_eq!(states.len(), 8);
+    assert_eq!(states.len(), poi_plans(&world).len());
+    assert!(states.iter().all(|a| a.plan.site_id.is_some()));
     let index = states
         .iter()
         .position(|a| a.plan.site_id.is_some() && a.plan.kind == ActivityKind::SpilledSupplies)
@@ -159,7 +174,7 @@ fn old_save9_gains_poi_scenes_and_their_identity_and_receipts_survive_restart() 
     server.stop().unwrap();
     let saved: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    assert_eq!(saved["profiles"][profile]["ledger"]["coins"], 2);
+    assert_eq!(saved["profiles"][profile]["ledger"]["coins"], 4);
     let server = spawn(config.clone()).unwrap();
     let mut client = Client::connect(server.addr, profile);
     let restored = client.state();

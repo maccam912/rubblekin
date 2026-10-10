@@ -56,29 +56,31 @@ impl Activities {
             records: plans(world).into_iter().map(Record::new).collect(),
         }
     }
-    /// Add this content to existing Save9 worlds without moving saved scenes,
-    /// losing receipts, or replacing a damaged scene with a new payable copy.
+    /// Retire the geographic town review area and upgrade POI layouts while
+    /// preserving contributions and wallets. A damaged site keeps its saved
+    /// layout; it never receives a new payable copy.
     pub fn add_poi_plans(&mut self, world: &World) {
         let Some(settlements) = world.settlements() else {
             return;
         };
+        self.records.retain(|r| r.plan.site_id.is_some());
+        for record in &mut self.records {
+            if record.plan.recipe_version < RECIPE_VERSION
+                && record.revision < u64::MAX - 1
+                && record.plan.points().all(|p| supported(world, *p))
+                && let Some(site) = settlements
+                    .composed_sites
+                    .iter()
+                    .find(|s| Some(s.id) == record.plan.site_id)
+                && let Some(plan) = at_site(world, site)
+            {
+                record.plan = plan;
+                record.revision += 1;
+            }
+        }
         for plan in poi_plans(world) {
-            let arrangement = settlements
-                .composed_sites
-                .iter()
-                .find(|s| Some(s.id) == plan.site_id)
-                .map(|s| s.arrangement);
-            let present = self.records.iter().any(|r| {
-                r.plan.id == plan.id
-                    || r.plan.site_id.and_then(|id| {
-                        settlements
-                            .composed_sites
-                            .iter()
-                            .find(|s| s.id == id)
-                            .map(|s| s.arrangement)
-                    }) == arrangement
-            });
-            if !present && self.records.len() < MAX_PLANS {
+            if !self.records.iter().any(|r| r.plan.id == plan.id) && self.records.len() < MAX_PLANS
+            {
                 self.records.push(Record::new(plan));
             }
         }
@@ -108,7 +110,7 @@ impl Activities {
                                     s.composed_sites.iter().any(|site| {
                                         site.id == id
                                             && site_kind(site.arrangement) == Some(p.kind)
-                                            && p.objects.iter().chain(&p.sockets).all(|v| {
+                                            && p.points().all(|v| {
                                                 v[0] >= site.bounds[0] as f32 * CELL_SIZE
                                                     && v[0] < site.bounds[2] as f32 * CELL_SIZE
                                                     && v[2] >= site.bounds[1] as f32 * CELL_SIZE
@@ -118,9 +120,17 @@ impl Activities {
                                 })
                         }
                     }
-                    && p.recipe_version == RECIPE_VERSION
+                    && (1..=RECIPE_VERSION).contains(&p.recipe_version)
+                    && (p.clues.is_none()
+                        || (p.kind == ActivityKind::ShapeStones
+                            && p.site_id.is_some()
+                            && p.recipe_version >= 2))
+                    && (p.recipe_version < 2
+                        || p.site_id.is_none()
+                        || p.kind != ActivityKind::ShapeStones
+                        || p.clues.is_some())
                     && r.revision < u64::MAX
-                    && p.objects.iter().chain(p.sockets.iter()).all(|v| {
+                    && p.points().all(|v| {
                         v.iter().all(|n| n.is_finite())
                             && v[0].abs() <= radius
                             && v[2].abs() <= radius
@@ -187,12 +197,7 @@ impl Activities {
                 revision: r.revision,
                 faces: r.faces,
                 complete: r.complete,
-                available: r
-                    .plan
-                    .objects
-                    .iter()
-                    .chain(r.plan.sockets.iter())
-                    .all(|p| supported(world, *p)),
+                available: r.plan.points().all(|p| supported(world, *p)),
                 props: std::array::from_fn(|i| match &r.slots[i] {
                     Slot::Home => PropState::Home,
                     Slot::Placed(_) => PropState::Placed,
@@ -245,13 +250,7 @@ impl Activities {
             r.revision += 1;
             return Ok(0);
         }
-        if !r
-            .plan
-            .objects
-            .iter()
-            .chain(r.plan.sockets.iter())
-            .all(|p| supported(world, *p))
-        {
+        if !r.plan.points().all(|p| supported(world, *p)) {
             return Err("The activity's ground is blocked or missing. Return the supply to its starting place.".into());
         }
         let (i, target) = match action {
@@ -641,13 +640,10 @@ mod tests {
         };
         activities.records[1].faces = activities.records[1].plan.answer;
         activities.records[1].complete = true;
-        let original = serde_json::to_value(&activities.records).unwrap();
         activities.add_poi_plans(&world);
-        assert_eq!(activities.records.len(), 8);
-        assert_eq!(
-            serde_json::to_value(&activities.records[..2]).unwrap(),
-            original
-        );
+        let count = poi_plans(&world).len();
+        assert_eq!(activities.records.len(), count);
+        assert!(activities.records.iter().all(|r| r.plan.site_id.is_some()));
         assert!(activities.validate(&world, &profiles));
         let index = activities
             .records
@@ -700,7 +696,7 @@ mod tests {
             .set_block(support, rubblekin_core::world::Block::Air)
             .unwrap();
         activities.add_poi_plans(&edited);
-        assert_eq!(activities.records.len(), 8);
+        assert_eq!(activities.records.len(), count);
         assert!(activities.validate(&edited, &profiles));
         assert!(
             activities
@@ -733,5 +729,70 @@ mod tests {
             }
             assert!(!bad.validate(&edited, &profiles));
         }
+    }
+    #[test]
+    fn earlier_poi_layouts_move_without_resetting_paid_slots_or_stone_faces() {
+        let world = World::generate(42, rubblekin_core::world::WorldGeneration::GeographyV6);
+        let (_, mut activities, profiles) = fixture();
+        activities.records = poi_plans(&world).into_iter().map(Record::new).collect();
+        let profile = profiles.keys().next().unwrap();
+        for r in &mut activities.records {
+            r.plan.recipe_version = 1;
+            r.plan.clues = None;
+            // Earlier scenes clustered their props on the first route leg.
+            r.plan.objects[2] = r.plan.objects[0];
+            if r.plan.kind == ActivityKind::SpilledSupplies {
+                r.slots[0] = Slot::Placed(profile.clone());
+            } else {
+                r.faces = r.plan.answer;
+                r.complete = true;
+            }
+            r.revision = 4;
+        }
+        assert!(activities.validate(&world, &profiles));
+        let before = activities.clone();
+        let bytes = serde_json::to_vec(&activities).unwrap();
+        let mut restored: Activities = serde_json::from_slice(&bytes).unwrap();
+        restored.recover();
+        restored.add_poi_plans(&world);
+        assert_eq!(restored.records.len(), before.records.len());
+        assert!(restored.validate(&world, &profiles));
+        for (old, new) in before.records.iter().zip(&restored.records) {
+            assert_eq!(old.plan.id, new.plan.id);
+            assert_ne!(old.plan.objects, new.plan.objects);
+            assert_eq!(new.plan.recipe_version, RECIPE_VERSION);
+            assert_eq!(new.slots, old.slots);
+            assert_eq!(new.faces, old.faces);
+            assert_eq!(new.complete, old.complete);
+            assert_eq!(new.revision, 5);
+            if new.plan.kind == ActivityKind::SpilledSupplies {
+                let p = new.plan.clone();
+                assert!(
+                    restored
+                        .clone()
+                        .apply(
+                            &world,
+                            profile,
+                            p.objects[0],
+                            p.id,
+                            5,
+                            ActivityAction::Take(0)
+                        )
+                        .is_err()
+                );
+            }
+        }
+        // Upgrade once; repeated loads neither move the scene nor bump state.
+        let again = serde_json::to_value(&restored).unwrap();
+        restored.add_poi_plans(&world);
+        assert_eq!(serde_json::to_value(&restored).unwrap(), again);
+        let shape = restored
+            .records
+            .iter()
+            .position(|r| r.plan.kind == ActivityKind::ShapeStones)
+            .unwrap();
+        let mut bad = restored;
+        bad.records[shape].plan.clues.as_mut().unwrap()[0][0] = f32::NAN;
+        assert!(!bad.validate(&world, &profiles));
     }
 }

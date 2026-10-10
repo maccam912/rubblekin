@@ -124,10 +124,10 @@ impl Lesson {
                 "Carry it to its matching outline, then T. Backspace puts it safely back."
             }
             (Self::Stones, _, true) => {
-                "Use turns a stone. Match the picture above it. Show me demonstrates; Hint guides."
+                "Find its matching dotted picture along the route. Use turns; Hint guides."
             }
             (Self::Stones, _, false) => {
-                "T turns a stone. Match the picture above it. J demonstrates; Y gives a hint."
+                "Find its matching dotted picture along the route. T turns; Y guides; J shows."
             }
             (Self::Travel, 0, _) => {
                 "Choose a reachable town or explorer to board. Up to four can ride; one is enough."

@@ -84,6 +84,26 @@ fn base_parts(stones: bool) -> Vec<Part> {
     }
     out
 }
+fn marker_parts(i: usize, y: f32) -> Vec<Part> {
+    (0..=i)
+        .map(|n| {
+            (
+                Vec3::new((n as f32 - i as f32 / 2.) * 0.18, y, -0.42),
+                Vec3::splat(0.11),
+                GOLD,
+            )
+        })
+        .collect()
+}
+fn stone_parts(i: usize, reference: bool) -> Vec<Part> {
+    let mut parts = base_parts(true);
+    if !reference {
+        // A low turning rack; the upper reference board lives down the route.
+        parts.retain(|(p, _, _)| p.y < 0.9);
+    }
+    parts.extend(marker_parts(i, if reference { 0.75 } else { 0.15 }));
+    parts
+}
 fn symbol_parts(i: usize) -> Vec<Part> {
     let mut out = Vec::new();
     let mut add = |x, y, w, h| out.push((Vec3::new(x, y, 0.), Vec3::new(w, h, 0.40), CREAM));
@@ -150,9 +170,12 @@ pub(crate) struct Scene {
     supply_pictures: [Handle<Image>; 3],
     tray_pictures: [Handle<Image>; 3],
     symbol_pictures: [Handle<Image>; 3],
+    numbered_pictures: [[Handle<Image>; 3]; 3],
     material: Handle<StandardMaterial>,
     ghost: Handle<StandardMaterial>,
     base: [Handle<Mesh>; 2],
+    stone_controls: [Handle<Mesh>; 3],
+    clue_boards: [Handle<Mesh>; 3],
     base_material: Handle<StandardMaterial>,
     objects: HashMap<(u64, u8, u8), Entity>,
     pending: Option<(u64, f64, Target)>,
@@ -189,7 +212,7 @@ impl Scene {
                 .enumerate()
                 .any(|(i, p)| *p == PropState::Held(session.id) && i != tray as usize)
         {
-            self.demonstration = Demonstration::new(a, session.id, now);
+            self.demonstration = Demonstration::new(a, session.id, session.body.position, now);
             self.hint_until = now + 8.;
         }
     }
@@ -226,21 +249,25 @@ struct DemoFrame {
     settled: bool,
 }
 impl Demonstration {
-    fn new(a: &ActivitySnapshot, session_id: u64, now: f64) -> Option<Self> {
+    fn new(a: &ActivitySnapshot, session_id: u64, position: [f32; 3], now: f64) -> Option<Self> {
         let carrying = a
             .props
             .iter()
             .position(|p| *p == PropState::Held(session_id));
+        let nearest = |eligible: [bool; 3], points: &[[f32; 3]; 3]| {
+            (0..3).filter(|i| eligible[*i]).min_by(|a, b| {
+                distance(position, points[*a]).total_cmp(&distance(position, points[*b]))
+            })
+        };
         let item = match a.plan.kind {
             ActivityKind::SpilledSupplies => carrying
-                .or_else(|| a.props.iter().position(|p| *p == PropState::Home))
+                .or_else(|| nearest(a.props.map(|p| p == PropState::Home), &a.plan.objects))
                 .or(a.complete.then_some(0))?,
-            ActivityKind::ShapeStones => a
-                .faces
-                .iter()
-                .zip(a.plan.answer)
-                .position(|(face, answer)| *face != answer)
-                .unwrap_or(0),
+            ActivityKind::ShapeStones => nearest(
+                std::array::from_fn(|i| a.faces[i] != a.plan.answer[i]),
+                &a.plan.sockets,
+            )
+            .unwrap_or(0),
         };
         Some(Self {
             id: a.plan.id,
@@ -362,10 +389,19 @@ fn focused<'a>(
             session
                 .activities
                 .iter()
-                .filter(|a| distance(session.body.position, a.plan.sockets[1]) < 12.)
+                .filter(|a| {
+                    a.plan
+                        .points()
+                        .any(|p| distance(session.body.position, *p) < 12.)
+                })
                 .min_by(|a, b| {
-                    distance(session.body.position, a.plan.sockets[1])
-                        .total_cmp(&distance(session.body.position, b.plan.sockets[1]))
+                    let nearest = |a: &ActivitySnapshot| {
+                        a.plan
+                            .points()
+                            .map(|p| distance(session.body.position, *p))
+                            .fold(f32::INFINITY, f32::min)
+                    };
+                    nearest(a).total_cmp(&nearest(b))
                 })
         })
 }
@@ -373,9 +409,7 @@ pub(crate) fn touch_opportunity(session: &Session) -> bool {
     session.observer.is_none()
         && (session.activities.iter().any(|a| {
             a.plan
-                .objects
-                .iter()
-                .chain(a.plan.sockets.iter())
+                .points()
                 .any(|p| distance(session.body.position, *p) < 12.)
         }) || session.parcel_market.is_some_and(|market| {
             rubblekin_core::economy::can_reach_market(session.body.position, market)
@@ -399,6 +433,13 @@ pub(crate) fn setup(
         supply_pictures: std::array::from_fn(|i| images.add(picture(&supply_parts(i)))),
         tray_pictures: std::array::from_fn(|i| images.add(picture(&silhouette_parts(i)))),
         symbol_pictures: std::array::from_fn(|i| images.add(picture(&symbol_parts(i)))),
+        numbered_pictures: std::array::from_fn(|i| {
+            std::array::from_fn(|face| {
+                let mut parts = symbol_parts(face);
+                parts.extend(marker_parts(i, 0.04));
+                images.add(picture(&parts))
+            })
+        }),
         material: materials.add(StandardMaterial {
             perceptual_roughness: 1.,
             unlit: true,
@@ -410,6 +451,8 @@ pub(crate) fn setup(
             ..default()
         }),
         base: std::array::from_fn(|i| meshes.add(mesh(&base_parts(i == 1)))),
+        stone_controls: std::array::from_fn(|i| meshes.add(mesh(&stone_parts(i, false)))),
+        clue_boards: std::array::from_fn(|i| meshes.add(mesh(&stone_parts(i, true)))),
         base_material: materials.add(StandardMaterial {
             unlit: true,
             ..default()
@@ -557,7 +600,14 @@ pub(crate) fn read(
     if demo_now {
         scene.demonstration = focused(&session, &world.0)
             .filter(|a| a.available)
-            .and_then(|a| Demonstration::new(a, session.id, time.elapsed_secs_f64()));
+            .and_then(|a| {
+                Demonstration::new(
+                    a,
+                    session.id,
+                    session.body.position,
+                    time.elapsed_secs_f64(),
+                )
+            });
     }
     if use_now || return_now {
         scene.demonstration = None;
@@ -604,6 +654,7 @@ fn entity(
     handle: Handle<Mesh>,
     ghost: bool,
     position: Vec3,
+    rotation: Quat,
 ) -> Entity {
     commands
         .spawn((
@@ -614,7 +665,7 @@ fn entity(
             } else {
                 scene.material.clone()
             }),
-            Transform::from_translation(position),
+            Transform::from_translation(position).with_rotation(rotation),
         ))
         .id()
 }
@@ -651,9 +702,16 @@ pub(crate) fn update(
     scene.objects.retain(|_, e| transforms.contains(*e));
     let mut wanted = Vec::new();
     for a in &session.activities {
-        if distance(eye.to_array(), a.plan.sockets[1]) > 100. {
+        if !a.plan.points().any(|p| distance(eye.to_array(), *p) < 100.) {
             continue;
         }
+        // Face references and tray outlines toward the route's approach.
+        let rotation = if a.plan.site_id.is_some() {
+            let d = Vec3::from_array(a.plan.objects[2]) - Vec3::from_array(a.plan.objects[0]);
+            Quat::from_rotation_y(d.x.atan2(d.z))
+        } else {
+            Quat::IDENTITY
+        };
         for i in 0..3 {
             let base = Vec3::from_array(a.plan.sockets[i]);
             let base_key = (a.plan.id, i as u8, 0);
@@ -662,12 +720,14 @@ pub(crate) fn update(
                 let e = commands
                     .spawn((
                         GameEntity,
-                        Mesh3d(
+                        Mesh3d(if a.plan.clues.is_some() {
+                            scene.stone_controls[i].clone()
+                        } else {
                             scene.base[usize::from(a.plan.kind == ActivityKind::ShapeStones)]
-                                .clone(),
-                        ),
+                                .clone()
+                        }),
                         MeshMaterial3d(scene.base_material.clone()),
-                        Transform::from_translation(base),
+                        Transform::from_translation(base).with_rotation(rotation),
                     ))
                     .id();
                 scene.objects.insert(base_key, e);
@@ -705,7 +765,7 @@ pub(crate) fn update(
             };
             if let Some(e) = scene.objects.get(&key).copied() {
                 if let Ok((mut t, mut m, mut mat)) = transforms.get_mut(e) {
-                    *t = Transform::from_translation(p);
+                    *t = Transform::from_translation(p).with_rotation(rotation);
                     if a.complete && a.plan.kind == ActivityKind::ShapeStones {
                         t.rotation = Quat::from_rotation_y(time.elapsed_secs() * 1.2);
                     }
@@ -717,7 +777,7 @@ pub(crate) fn update(
                     };
                 }
             } else {
-                let e = entity(&mut commands, &scene, handle, ghost, p);
+                let e = entity(&mut commands, &scene, handle, ghost, p, rotation);
                 scene.objects.insert(key, e);
             }
             let key = (a.plan.id, i as u8, 2);
@@ -728,11 +788,27 @@ pub(crate) fn update(
                 } else {
                     (
                         scene.symbols[a.plan.answer[i] as usize].clone(),
-                        base + Vec3::new(0., 1.35, 0.10),
+                        Vec3::from_array(a.plan.clues.map_or(a.plan.sockets[i], |c| c[i]))
+                            + rotation * Vec3::new(0., 1.35, 0.10),
                     )
                 };
                 if !scene.objects.contains_key(&key) {
-                    let e = entity(&mut commands, &scene, handle, true, p);
+                    let e = entity(&mut commands, &scene, handle, true, p, rotation);
+                    scene.objects.insert(key, e);
+                }
+            }
+            if let Some(clues) = a.plan.clues {
+                let key = (a.plan.id, i as u8, 3);
+                wanted.push(key);
+                if !scene.objects.contains_key(&key) {
+                    let e = entity(
+                        &mut commands,
+                        &scene,
+                        scene.clue_boards[i].clone(),
+                        false,
+                        Vec3::from_array(clues[i]),
+                        rotation,
+                    );
                     scene.objects.insert(key, e);
                 }
             }
@@ -813,6 +889,10 @@ pub(crate) fn update(
             let i = index.0;
             img.image = if a.plan.kind == ActivityKind::SpilledSupplies {
                 scene.supply_pictures[i].clone()
+            } else if a.plan.clues.is_some() {
+                // Progress shows the current faces. Finding the reference is
+                // part of the puzzle; Show me remains an optional solution aid.
+                scene.numbered_pictures[i][a.faces[i] as usize].clone()
             } else {
                 scene.symbol_pictures[a.plan.answer[i] as usize].clone()
             };
@@ -859,6 +939,20 @@ pub(crate) fn update(
                     .map(|i| a.plan.sockets[i])
             };
             if let Some(p) = p {
+                if let Some(clues) = a.plan.clues
+                    && let Some(i) = a.faces.iter().zip(a.plan.answer).position(|(f, t)| *f != t)
+                {
+                    let clue = Vec3::from_array(clues[i]);
+                    gizmos.line(
+                        Vec3::from_array(p) + Vec3::Y,
+                        clue + Vec3::Y * 1.5,
+                        Color::srgb(1., 0.82, 0.36),
+                    );
+                    gizmos.cube(
+                        Transform::from_translation(clue + Vec3::Y).with_scale(Vec3::splat(1.5)),
+                        Color::srgb(1., 0.82, 0.36),
+                    );
+                }
                 let p = Vec3::from_array(p);
                 gizmos.line(
                     eye + Vec3::Y,
@@ -962,7 +1056,7 @@ mod tests {
             complete: false,
             available: true,
         };
-        let demo = Demonstration::new(&a, 7, 10.).unwrap();
+        let demo = Demonstration::new(&a, 7, a.plan.objects[2], 10.).unwrap();
         assert_eq!(
             demo.item, 2,
             "Do not demonstrate taking someone else's prop"
@@ -976,7 +1070,7 @@ mod tests {
         assert!(placed.settled);
         assert!(demo.frame(17.).is_none());
         a.props[2] = PropState::Held(7);
-        let demo = Demonstration::new(&a, 7, 0.).unwrap();
+        let demo = Demonstration::new(&a, 7, a.plan.objects[2], 0.).unwrap();
         assert!(demo.carrying);
         assert_eq!(demo.frame(0.).unwrap().y, 8.);
         // Replays are pure presentation and leave ownership/completion intact.
@@ -995,13 +1089,64 @@ mod tests {
             complete: false,
             available: true,
         };
-        let demo = Demonstration::new(&a, 7, 0.).unwrap();
+        let demo = Demonstration::new(&a, 7, a.plan.sockets[1], 0.).unwrap();
         assert_eq!(demo.item, 1);
         assert_eq!(demo.frame(0.).unwrap().face, 2);
         assert_eq!(demo.frame(1.5).unwrap().face, 0);
         assert_eq!(demo.frame(3.).unwrap().face, 1);
         assert!(demo.frame(3.).unwrap().settled);
         assert_eq!(a.faces, [0, 2, 2]);
+    }
+    #[test]
+    fn separated_pieces_demonstrate_the_nearby_action_and_clues_keep_touch_help_available() {
+        let (world, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(rubblekin_core::protocol::SessionMode::Player),
+            "route".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            rubblekin_core::protocol::SessionMode::Player,
+        )
+        .unwrap();
+        let mut plan = review_plans(&world)[1].clone();
+        plan.sockets = [[0., 2., 0.], [0., 2., 15.], [0., 2., 30.]];
+        plan.objects = plan.sockets;
+        plan.clues = Some([[0., 2., 5.], [0., 2., 20.], [0., 2., 45.]]);
+        let mut a = ActivitySnapshot {
+            faces: plan.answer.map(|f| (f + 1) % 3),
+            plan,
+            revision: 0,
+            props: [PropState::Home; 3],
+            complete: false,
+            available: true,
+        };
+        session.body.position = a.plan.clues.unwrap()[2];
+        session.activities = vec![a.clone()];
+        assert!(
+            touch_opportunity(&session),
+            "A distant clue still offers optional guidance"
+        );
+        assert_eq!(focused(&session, &world).unwrap().plan.id, a.plan.id);
+        assert_eq!(
+            Demonstration::new(&a, session.id, a.plan.sockets[2], 0.)
+                .unwrap()
+                .item,
+            2
+        );
+        a.plan.kind = ActivityKind::SpilledSupplies;
+        a.plan.clues = None;
+        assert_eq!(
+            Demonstration::new(&a, session.id, a.plan.objects[2], 0.)
+                .unwrap()
+                .item,
+            2
+        );
+        a.props[1] = PropState::Held(session.id);
+        assert_eq!(
+            Demonstration::new(&a, session.id, a.plan.objects[2], 0.)
+                .unwrap()
+                .item,
+            1
+        );
     }
     #[test]
     fn replay_panel_closes_when_another_player_changes_progress_or_the_player_leaves() {
@@ -1037,7 +1182,7 @@ mod tests {
         app.update();
         for leave in [false, true] {
             let s = app.world().resource::<Session>();
-            let demo = Demonstration::new(&s.activities[0], s.id, 0.).unwrap();
+            let demo = Demonstration::new(&s.activities[0], s.id, s.body.position, 0.).unwrap();
             app.world_mut().resource_mut::<Scene>().demonstration = Some(demo);
             app.world_mut().run_schedule(Update);
             let mut stage = app.world_mut().query_filtered::<&Node, With<DemoStage>>();
