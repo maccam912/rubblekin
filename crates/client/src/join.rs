@@ -1215,6 +1215,7 @@ pub(crate) fn session_from_welcome(
     Ok((
         world,
         Session {
+            building: default(),
             parcel_market: None,
             activities: Vec::new(),
             id: session_id,
@@ -1340,6 +1341,7 @@ pub fn leave_world(
 pub fn refresh(
     menu: Res<JoinScreen>,
     session: Option<Res<Session>>,
+    mut cursor: Single<&mut CursorOptions>,
     focus: Res<InputFocus>,
     mut root: Single<&mut Node, With<MenuRoot>>,
     mut camera: Single<&mut Camera, With<MenuCamera>>,
@@ -1356,6 +1358,12 @@ pub fn refresh(
         Without<MenuRoot>,
     >,
 ) {
+    // Keep the join screen usable even when a window backend delivers a stale
+    // capture change after teardown, or a failed join never installed a Session.
+    if session.is_none() {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    }
     root.display = if session.is_some() {
         Display::None
     } else {
@@ -2569,6 +2577,12 @@ pub(crate) mod tests {
         app.world_mut()
             .resource_mut::<Connection>()
             .fail("test disconnect".into());
+        {
+            let mut cursor = app.world_mut().query::<&mut CursorOptions>();
+            let mut cursor = cursor.single_mut(app.world_mut()).unwrap();
+            cursor.visible = false;
+            cursor.grab_mode = CursorGrabMode::Locked;
+        }
         app.update();
         let menu = app.world().resource::<JoinScreen>();
         assert!(menu.status.contains("test disconnect"));
@@ -2576,6 +2590,20 @@ pub(crate) mod tests {
         assert_eq!(menu.address, "remote.example:7878");
         assert_eq!(menu.name, "Tester");
         assert!(!app.world().contains_resource::<Session>());
+        {
+            let mut cursor = app.world_mut().query::<&mut CursorOptions>();
+            let mut cursor = cursor.single_mut(app.world_mut()).unwrap();
+            assert!(cursor.visible);
+            assert_eq!(cursor.grab_mode, CursorGrabMode::None);
+            // A delayed backend capture update must not strand the join form.
+            cursor.visible = false;
+            cursor.grab_mode = CursorGrabMode::Locked;
+        }
+        app.update();
+        let mut cursor = app.world_mut().query::<&CursorOptions>();
+        let cursor = cursor.single(app.world()).unwrap();
+        assert!(cursor.visible);
+        assert_eq!(cursor.grab_mode, CursorGrabMode::None);
         assert!(
             app.world_mut()
                 .query_filtered::<&Camera, With<MenuCamera>>()

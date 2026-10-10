@@ -19,7 +19,7 @@ fn load_from(path: &std::path::Path) -> [Block; QUICK_SLOTS] {
         .ok()
         .filter(|bytes| bytes.len() < 4096)
         .and_then(|bytes| serde_json::from_slice::<[Block; QUICK_SLOTS]>(&bytes).ok())
-        .filter(|slots| slots.iter().all(|b| b.is_solid()))
+        .filter(|slots| slots.iter().all(|b| *b != Block::Air))
         .unwrap_or(DEFAULT_HOTBAR)
 }
 pub fn save(slots: &[Block; QUICK_SLOTS]) -> std::io::Result<()> {
@@ -47,6 +47,7 @@ mod tests {
         let mut slots = DEFAULT_HOTBAR;
         slots[2] = Block::PurpleWool;
         slots[5] = Block::OakPlanks;
+        slots[0] = Block::Torch;
         save_to(&path, &slots).unwrap();
         assert_eq!(load_from(&path), slots);
         slots[0] = Block::Air;

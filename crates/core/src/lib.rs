@@ -4,6 +4,7 @@ pub mod admin_commands;
 mod airship_landings;
 pub mod airships;
 pub mod blocks;
+pub mod building;
 pub mod economy;
 pub mod environment;
 pub mod forage;

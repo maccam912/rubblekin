@@ -13,6 +13,8 @@ use crate::{GameEntity, Session, network::Connection};
 
 #[derive(Resource, Default)]
 pub struct TouchControls {
+    pub(crate) selection_mode: bool,
+    pub(crate) emergency_whip: bool,
     pub enabled: bool,
     pub leave: bool,
     pub menu_open: bool,
@@ -123,6 +125,16 @@ impl Layout {
     ) -> Self {
         let mut layout = Self::new(size, session.observer.is_some(), session.flying, menu_open);
         layout.set_hotbar(&session.hotbar);
+        if session.building.enabled {
+            for region in &mut layout.regions {
+                if region.action == Action::Dig {
+                    region.label = "Select".into();
+                }
+                if region.action == Action::Build {
+                    region.label = "Fill".into();
+                }
+            }
+        }
         if session.gliding {
             for region in &mut layout.regions {
                 match region.action {
@@ -420,6 +432,8 @@ impl TouchControls {
         self.zoom = 0.0;
         self.return_spawn = false;
         self.next_village = false;
+        self.selection_mode = false;
+        self.emergency_whip = false;
     }
 
     fn press(&mut self, action: Action) {
@@ -798,6 +812,8 @@ pub fn read(
 #[derive(Component)]
 pub(crate) struct TouchButton(Action);
 #[derive(Component)]
+pub(crate) struct CornerPicture;
+#[derive(Component)]
 pub(crate) struct MaterialIcon(usize);
 #[derive(Component)]
 pub(crate) struct StickBase;
@@ -882,6 +898,55 @@ pub fn setup(
                 BorderColor::all(Color::srgba(0.83, 0.92, 0.82, 0.55)),
             ))
             .with_children(|button| {
+                if action == Action::Dig {
+                    button
+                        .spawn((
+                            CornerPicture,
+                            Node {
+                                width: px(20),
+                                height: px(16),
+                                border: UiRect::all(px(1)),
+                                display: Display::None,
+                                ..default()
+                            },
+                            BorderColor::all(Color::srgb(0.97, 0.82, 0.4)),
+                        ))
+                        .with_children(|icon| {
+                            icon.spawn((
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: px(-2),
+                                    top: px(-2),
+                                    width: px(6),
+                                    height: px(6),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.4, 1., 0.6)),
+                            ));
+                            icon.spawn((
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    right: px(-2),
+                                    bottom: px(-2),
+                                    width: px(6),
+                                    height: px(6),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(1., 0.78, 0.3)),
+                            ));
+                        });
+                }
+                if action == Action::Build {
+                    button.spawn((
+                        ImageNode::default(),
+                        MaterialIcon(usize::MAX),
+                        Node {
+                            width: px(24),
+                            height: px(24),
+                            ..default()
+                        },
+                    ));
+                }
                 if let Action::Material(slot) = action {
                     button.spawn((
                         ImageNode::default(),
@@ -921,15 +986,31 @@ pub fn refresh(
             Option<&Children>,
             Option<&mut BackgroundColor>,
         ),
-        Or<(With<TouchButton>, With<StickBase>, With<StickKnob>)>,
+        (
+            Or<(With<TouchButton>, With<StickBase>, With<StickKnob>)>,
+            Without<CornerPicture>,
+        ),
     >,
     mut labels: Query<(&mut Text, &mut TextFont)>,
     icons: Option<Res<crate::block_textures::BlockIcons>>,
     mut material_icons: Query<(&MaterialIcon, &mut ImageNode)>,
+    mut corners: Query<&mut Node, With<CornerPicture>>,
 ) {
+    for mut node in &mut corners {
+        node.display = if session.building.enabled {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
     if let Some(icons) = &icons {
         for (slot, mut img) in &mut material_icons {
-            img.image = icons.0[session.hotbar[slot.0].catalog_index().unwrap()].clone();
+            let slot = if slot.0 == usize::MAX {
+                session.selected
+            } else {
+                slot.0
+            };
+            img.image = icons.0[session.hotbar[slot].catalog_index().unwrap()].clone();
         }
     }
     let mut layout = Layout::for_session(

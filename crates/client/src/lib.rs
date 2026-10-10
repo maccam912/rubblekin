@@ -6,8 +6,11 @@ mod airship_motion_tests;
 #[allow(dead_code)]
 mod airships;
 mod block_textures;
+mod build_lod;
+mod building;
 mod capture;
 mod cart_repairs;
+mod compass;
 mod crash_reporting;
 mod crops;
 mod flow_gardens;
@@ -21,6 +24,7 @@ mod inspection_details;
 mod inventory;
 mod join;
 mod join_preferences;
+mod lighting;
 mod map_activities;
 mod market;
 mod network;
@@ -87,6 +91,7 @@ pub struct VoxelWorld(pub GameWorld);
 
 #[derive(Resource)]
 pub struct Session {
+    building: building::Tools,
     pub(crate) parcel_market: Option<[f32; 3]>,
     pub activities: Vec<rubblekin_core::activities::ActivitySnapshot>,
     pub id: u64,
@@ -298,7 +303,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 hotbar slot | I inventory | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G whip station / travel | V vehicles | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 hotbar slot | I inventory | F creative flight\nK / Shift-click box selection | Enter / right click fill | Backspace clear\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G whip station / travel | V vehicles | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -466,6 +471,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     inventory::setup,
                     activities::setup,
                     tutorials::setup,
+                    (compass::setup, build_lod::setup, lighting::setup).chain(),
                 )
                     .chain()
                     .run_if(resource_added::<Session>),
@@ -491,7 +497,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .chain(),
                     (
                         terrain::stream_terrain,
-                        edit_blocks,
+                        (
+                            edit_blocks,
+                            build_lod::update,
+                            lighting::update,
+                            compass::update,
+                        )
+                            .chain(),
                         update_avatars,
                         work_animation::animate,
                         (work_tools::update, work_cues::update).chain(),
@@ -518,7 +530,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         pause::refresh,
                         gliders::refresh,
                         admin_console::refresh,
-                        (world_map::refresh, map_activities::refresh).chain(),
+                        (
+                            world_map::refresh,
+                            map_activities::refresh,
+                            build_lod::map_markers,
+                        )
+                            .chain(),
                         (market::refresh, parcels::update).chain(),
                         (inventory::refresh, tutorials::update).chain(),
                         join::leave_world,
@@ -722,6 +739,37 @@ fn receive_network(
                     session.edits = world.0.edits().len();
                 }
             }
+            ServerMessage::BlocksChanged {
+                request_id,
+                player_id,
+                edits,
+            } => {
+                let mut changed = Vec::new();
+                for edit in edits {
+                    if world.0.set_block(edit.position, edit.block).is_ok() {
+                        changed.push(edit.position);
+                    }
+                }
+                terrain::rebuild_batch(&mut scene, &changed, &world.0, &mut commands, &mut meshes);
+                session.edits = world.0.edits().len();
+                if player_id == session.id && request_id != 0 {
+                    session.status = format!("Filled {} blocks", changed.len());
+                    session.status_until = time.elapsed_secs_f64() + 4.;
+                    if let Some(t) = tutorials.as_deref_mut() {
+                        t.signal(tutorials::Signal::Edit(session.hotbar[session.selected]));
+                    }
+                }
+            }
+            ServerMessage::EmergencyStation { station } => {
+                session.whip_stations.retain(|s| !s.temporary);
+                if let Some(station) = station {
+                    conversation.station_id = Some(station.village_id);
+                    conversation.input_blocked = true;
+                    session.whip_stations.push(station);
+                } else {
+                    conversation.close();
+                }
+            }
             ServerMessage::Rejected { reason, .. } => {
                 session.status = reason;
                 session.status_until = time.elapsed_secs_f64() + 4.0;
@@ -919,6 +967,15 @@ fn controls(
         || console.as_ref().is_some_and(|console| console.just_closed)
         || map.as_ref().is_some_and(|map| map.just_closed)
         || market.as_ref().is_some_and(|panel| panel.just_closed);
+    if touch.selection_mode && !observing {
+        session.building.enabled = !session.building.enabled;
+        session.building.clear();
+    }
+    if touch.emergency_whip && !observing && connection.error.is_none() {
+        connection.send(ClientMessage::Glider {
+            action: rubblekin_core::gliders::GliderAction::Emergency,
+        });
+    }
     if touch.enabled {
         session.captured =
             window.focused && !blocked && !touch.menu_open && connection.error.is_none();
@@ -935,7 +992,7 @@ fn controls(
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
         session.edit_clock = 0.3;
-    } else if blocked || !window.focused {
+    } else if blocked || !window.focused || connection.error.is_some() {
         session.captured = false;
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
@@ -1335,7 +1392,57 @@ fn edit_blocks(
     } else {
         mouse.just_pressed(MouseButton::Right) || repeated && mouse.pressed(MouseButton::Right)
     };
-    let attempted = session.captured
+    let selecting = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    if session.captured && session.edit_clock <= 0. && connection.error.is_none() {
+        if keys.just_pressed(KeyCode::KeyK) {
+            session.building.enabled = !session.building.enabled;
+            session.building.clear();
+        }
+        if keys.just_pressed(KeyCode::Backspace) {
+            session.building.clear();
+        }
+        if let Some((position, previous)) = session.target
+            && ((selecting && (dig || build)) || (session.building.enabled && dig))
+        {
+            session.building.enabled = true;
+            session.building.corner(if build || touch.enabled {
+                previous
+            } else {
+                position
+            });
+            session.edit_clock = 0.2;
+        }
+        if session.building.enabled
+            && (keys.just_pressed(KeyCode::Enter) || build && !selecting)
+            && let Some((first, second)) = session.building.corners()
+        {
+            match rubblekin_core::building::Selection::new(first, second) {
+                Ok(_) => {
+                    let request_id = session.next_request;
+                    session.next_request += 1;
+                    connection.send(ClientMessage::Fill {
+                        request_id,
+                        first,
+                        second,
+                        block: session.hotbar[session.selected],
+                    });
+                    session.edit_clock = 0.3;
+                }
+                Err(reason) => {
+                    session.status = reason.into();
+                    session.status_until = time.elapsed_secs_f64() + 4.;
+                }
+            }
+        }
+    }
+    building::preview(
+        &session.building,
+        session.target.map(|(_, p)| p),
+        &mut gizmos,
+    );
+    let attempted = !session.building.enabled
+        && !selecting
+        && session.captured
         && session.edit_clock <= 0.0
         && connection.error.is_none()
         && (dig || build);

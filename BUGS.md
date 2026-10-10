@@ -1,8 +1,8 @@
-# Open bugs
+# Bugs
 
 ## B001 — hidden cursor remains hidden after a kick
 
-Status: open. Reported by the user on 2026-10-10; not reproduced or fixed in this follow-up.
+Status: fixed locally on 2026-10-10. The join page enforces a visible, ungrabbed cursor every frame, and gameplay controls stop recapturing it after connection failure.
 
 Reproduction reported:
 
@@ -12,4 +12,4 @@ Reproduction reported:
 
 Expected: returning to the login/join page restores a visible cursor and releases mouse capture so its controls can be clicked.
 
-Acceptance check for a future fix: reproduce an unexpected disconnect while captured, click the login controls afterward, and confirm mouse capture still works when joining again.
+Verification: the client regression starts with a hidden/locked cursor, simulates failure, verifies visibility and release, and checks that a delayed stale capture is repaired. Native macOS acceptance stopped the disposable TCP server during captured gameplay, returned to the login page, clicked the session choices and Join, and successfully rejoined. Other platforms and physical Android remain unverified.

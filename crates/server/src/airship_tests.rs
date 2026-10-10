@@ -6,7 +6,7 @@ pub(super) struct Fixture {
     pub(super) network: AirshipNetwork,
     pub(super) connections: BTreeMap<u64, Connection>,
     _peers: Vec<TcpStream>,
-    config: ServerConfig,
+    pub(super) config: ServerConfig,
 }
 
 impl Fixture {

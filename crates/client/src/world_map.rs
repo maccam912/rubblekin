@@ -50,6 +50,9 @@ struct MapContact {
 }
 
 impl WorldMap {
+    pub(crate) fn zoom(&self) -> f32 {
+        self.zoom
+    }
     pub(crate) fn tutorial_view(&self) -> (f32, Vec2) {
         (self.zoom, self.center)
     }
@@ -65,7 +68,7 @@ impl WorldMap {
     }
     fn zoom_at(&mut self, pointer: Vec2, factor: f32) {
         let anchor = self.view().min + pointer / self.zoom;
-        self.zoom = (self.zoom * factor).clamp(1., 8.);
+        self.zoom = (self.zoom * factor).clamp(1., 64.);
         self.center = anchor + (Vec2::splat(0.5) - pointer) / self.zoom;
         self.center = self.view().center();
     }
@@ -2002,7 +2005,7 @@ mod tests {
         map.finger(1, TouchPhase::Moved, Vec2::splat(10.));
         assert_eq!(map.view().min, Vec2::ZERO);
         map.zoom_at(Vec2::splat(0.5), 100.);
-        assert_eq!(map.zoom, 8.);
+        assert_eq!(map.zoom, 64.);
         map.zoom_at(Vec2::splat(0.5), 0.001);
         assert_eq!(map.zoom, 1.);
         assert_eq!(map.view(), Rect::from_corners(Vec2::ZERO, Vec2::ONE));

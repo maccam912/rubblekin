@@ -162,6 +162,8 @@ pub(super) enum Action {
     Controls,
     Tutorials,
     Vehicles,
+    Building,
+    EmergencyWhip,
     VehicleBack,
     Vehicle(rubblekin_core::vehicles::VehicleKind),
     Dismount,
@@ -313,6 +315,8 @@ pub fn setup(
                             row.spawn(button(Action::Controls, percent(50))).with_child(label("Controls", &font, 16.));
                         });
                         if session.observer.is_none() {
+                            actions.spawn(button(Action::Building, percent(100))).with_child(label("Building: select / fill", &font,16.));
+                            actions.spawn(button(Action::EmergencyWhip, percent(100))).with_child(label("Return to town", &font,16.));
                             actions.spawn(button(Action::Vehicles,percent(100))).with_children(|row| {
                                 row.spawn((ImageNode::new(pictures.0[0].clone()),Node{width:px(32),height:px(32),..default()}));
                                 row.spawn(label("Vehicles", &font,18.));
@@ -409,6 +413,8 @@ fn activate(
                 }
                 Action::Inspect => touch.inspect = true,
                 Action::Controls => touch.help = true,
+                Action::Building => touch.selection_mode = true,
+                Action::EmergencyWhip => touch.emergency_whip = true,
                 Action::ReturnSpawn => touch.return_spawn = true,
                 Action::NextVillage => touch.next_village = true,
                 Action::Leave => pause.leave = true,
@@ -730,6 +736,8 @@ pub fn read(
             Action::Controls,
             Action::Tutorials,
             Action::Vehicles,
+            Action::Building,
+            Action::EmergencyWhip,
             Action::VehicleBack,
             Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Bike),
             Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Kayak),

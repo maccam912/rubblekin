@@ -65,7 +65,7 @@ macro_rules! blocks {
         pub enum Block { #[default] Air, $( $id, )* }
         impl Block {
             pub const ALL: &'static [Self] = &[$(Self::$id,)*];
-            pub fn is_solid(self) -> bool { self != Self::Air }
+            pub fn is_solid(self) -> bool { !matches!(self,Self::Air|Self::Torch) }
             /// Base tint in sRGB; the renderer adds a material-specific pattern.
             pub fn color(self) -> [f32; 4] { match self { Self::Air => [0.; 4], $(Self::$id => [$r, $g, $b, 1.],)* }}
             pub fn name(self) -> &'static str { match self { Self::Air => "Air", $(Self::$id => $name,)* }}
@@ -229,6 +229,20 @@ blocks! {
     BrownTile, "Brown tile", [0.42, 0.29, 0.22], Tile, Tiles;
     GrayTile, "Gray tile", [0.48, 0.51, 0.53], Tile, Tiles;
     BlackTile, "Black tile", [0.14, 0.16, 0.18], Tile, Tiles;
+    Torch, "Torch", [0.78, 0.44, 0.15], Decor, Planks;
+    Lamp, "Lamp", [0.99, 0.83, 0.44], Decor, Smooth;
+}
+
+impl Block {
+    /// Warm light color and luminous flux. This is the shared list for every
+    /// emitting block, including future entries, rather than a torch-only path.
+    pub fn light(self) -> Option<([f32; 3], f32)> {
+        match self {
+            Self::Torch => Some(([1., 0.55, 0.18], 900.)),
+            Self::Lamp => Some(([1., 0.85, 0.55], 1800.)),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -240,7 +254,7 @@ mod tests {
         let mut names = std::collections::HashSet::new();
         assert!(Block::ALL.len() >= 150);
         for &block in Block::ALL {
-            assert!(block.is_solid());
+            assert_eq!(block.is_solid(), block != Block::Torch);
             let id = serde_json::to_string(&block).unwrap();
             assert!(ids.insert(id.clone()));
             assert!(names.insert(block.name()));

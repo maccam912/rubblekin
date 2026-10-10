@@ -905,6 +905,7 @@ fn carriage_jump_replays_from_acknowledgment_without_reboarding() {
     let world = World::new(42);
     let network = AirshipNetwork::default();
     let f = GliderFlight {
+        emergency: false,
         id: 1,
         station_id: 0,
         destination: GliderDestination::Village(1),

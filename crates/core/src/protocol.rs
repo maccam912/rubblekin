@@ -7,8 +7,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-// Faster player movement requires matching client/server physics.
-pub const PROTOCOL_VERSION: u32 = 32;
+// Bulk building, light blocks and emergency travel require matching peers.
+pub const PROTOCOL_VERSION: u32 = 33;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -74,6 +74,12 @@ pub enum ClientMessage {
     },
     Vehicle {
         action: crate::vehicles::VehicleAction,
+    },
+    Fill {
+        request_id: u64,
+        first: BlockPos,
+        second: BlockPos,
+        block: Block,
     },
 }
 
@@ -149,6 +155,14 @@ pub enum ServerMessage {
         activities: Vec<crate::activities::ActivitySnapshot>,
         notice: String,
         accepted: bool,
+    },
+    BlocksChanged {
+        request_id: u64,
+        player_id: u64,
+        edits: Vec<BlockEdit>,
+    },
+    EmergencyStation {
+        station: Option<crate::gliders::WhipStation>,
     },
 }
 

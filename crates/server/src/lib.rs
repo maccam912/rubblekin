@@ -4,6 +4,7 @@
 mod activities;
 mod admin_commands;
 mod airships;
+mod building;
 mod ecology;
 mod forage_work;
 mod gliders;
@@ -963,7 +964,7 @@ fn handle_message(
     }
     if connections[&id].mode == Some(SessionMode::Observer) {
         match &message {
-            ClientMessage::Edit { request_id, .. } => {
+            ClientMessage::Edit { request_id, .. } | ClientMessage::Fill { request_id, .. } => {
                 reject(
                     connections,
                     id,
@@ -1008,6 +1009,24 @@ fn handle_message(
         }
     }
     match message {
+        ClientMessage::Fill {
+            request_id,
+            first,
+            second,
+            block,
+        } => {
+            building::fill(
+                id,
+                request_id,
+                first,
+                second,
+                block,
+                connections,
+                sim,
+                config,
+                edit_budget,
+            )?;
+        }
         ClientMessage::Activity {
             request_id,
             activity_id,

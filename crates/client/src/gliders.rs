@@ -28,6 +28,7 @@ pub(crate) struct Scene {
     scroll_finger: Option<(u64, f32, f32)>,
     scroll_dragged: bool,
     selected: usize,
+    personal: HashMap<u32, Entity>,
 }
 #[derive(Component)]
 pub(crate) struct Panel;
@@ -35,6 +36,8 @@ pub(crate) struct Panel;
 pub(crate) struct Rows;
 #[derive(Component)]
 pub(crate) struct Title;
+#[derive(Component)]
+pub(crate) struct TravelHelp;
 #[derive(Component)]
 pub(crate) struct Hint;
 #[derive(Component)]
@@ -139,6 +142,7 @@ pub(crate) fn setup(
         scroll_finger: None,
         scroll_dragged: false,
         selected: 0,
+        personal: HashMap::new(),
     };
     for station in &session.whip_stations {
         commands
@@ -237,6 +241,7 @@ pub(crate) fn setup(
                 TextColor(Color::srgb(0.95, 0.83, 0.56)),
             ));
             panel.spawn((
+                TravelHelp,
                 Text::new("Choose a town or an explorer within 16 km.\nFour seats · solo trips welcome · Jump to glide away\nExplorer targets use their location at launch."),
                 TextFont::from_font_size(16.0).with_font(font.clone()),
                 TextColor(Color::srgb(0.88, 0.92, 0.83)),
@@ -553,6 +558,47 @@ pub(crate) fn update_scene(
     mut idle: Query<(&Idle, &mut Transform, &mut Visibility)>,
 ) {
     let now = session.airship_clock.time;
+    let stations: Vec<_> = session
+        .whip_stations
+        .iter()
+        .filter(|s| s.temporary)
+        .collect();
+    let stale: Vec<_> = scene
+        .personal
+        .keys()
+        .copied()
+        .filter(|id| !stations.iter().any(|s| s.village_id == *id))
+        .collect();
+    for id in stale {
+        commands
+            .entity(scene.personal.remove(&id).unwrap())
+            .despawn();
+    }
+    for station in stations {
+        if scene.personal.contains_key(&station.village_id) {
+            continue;
+        }
+        let entity = commands
+            .spawn((
+                GameEntity,
+                Transform::from_translation(Vec3::from_array(station.position)),
+                Visibility::default(),
+            ))
+            .with_children(|parent| {
+                parts(
+                    parent,
+                    &scene,
+                    &[
+                        (Vec3::new(0., 0.05, 0.), Vec3::new(3.5, 0.1, 4.), 3),
+                        (Vec3::new(2., 1.25, 0.), Vec3::new(0.16, 2.5, 0.16), 0),
+                        (Vec3::new(1., 2.5, 0.), Vec3::new(2., 0.12, 0.12), 3),
+                        (Vec3::new(2., 0.5, 0.), Vec3::new(0.7, 0.7, 0.7), 1),
+                    ],
+                )
+            })
+            .id();
+        scene.personal.insert(station.village_id, entity);
+    }
     for (mark, mut transform, mut visibility) in &mut idle {
         if let Some(station) = session
             .whip_stations
@@ -732,6 +778,7 @@ pub(crate) fn refresh(
     mut scene: ResMut<Scene>,
     mut panel: Query<&mut Node, With<Panel>>,
     rows: Query<Entity, With<Rows>>,
+    help: Query<Entity, With<TravelHelp>>,
     mut title: Query<&mut Text, With<Title>>,
     mut hints: Query<(&mut Node, &Children), (With<Hint>, Without<Panel>)>,
     mut texts: Query<&mut Text, Without<Title>>,
@@ -748,12 +795,27 @@ pub(crate) fn refresh(
         .station_id
         .and_then(|id| session.whip_stations.iter().find(|s| s.village_id == id))
     {
+        if let Ok(entity) = help.single()
+            && let Ok(mut text) = texts.get_mut(entity)
+        {
+            let label = if station.temporary {
+                "Your one trip to the nearest town with a safe route.\nLaunch uses up this station · Leave puts it away.\nJump during the flight to glide away."
+            } else {
+                "Choose a town or an explorer within 16 km.\nFour seats · solo trips welcome · Jump to glide away\nExplorer targets use their location at launch."
+            };
+            if text.0 != label {
+                text.0 = label.into();
+            }
+        }
         let flight = session
             .glider_ride
             .and_then(|r| session.gliders.iter().find(|f| f.id == r.carriage_id));
         let label = flight.map_or_else(
             || format!("{} · whip station", station.name),
             |f| {
+                if station.temporary {
+                    return format!("Personal return · {}", f.destination_name);
+                }
                 format!(
                     "{} · {} / 4 aboard",
                     f.destination_name,
@@ -784,7 +846,11 @@ pub(crate) fn refresh(
                         parent,
                         &font,
                         if flight.started_at.is_none() {
-                            "Friends can join at the station. Launch when ready."
+                            if station.temporary {
+                                "Launch your personal return trip"
+                            } else {
+                                "Friends can join at the station. Launch when ready."
+                            }
                         } else {
                             "Leave the carriage and glide to somewhere you see."
                         },
@@ -899,12 +965,14 @@ mod tests {
         )
         .unwrap();
         let station = WhipStation {
+            temporary: false,
             village_id: 1,
             name: "Test".into(),
             position: session.body.position,
             landing_position: session.body.position,
         };
         session.gliders.push(GliderFlight {
+            emergency: false,
             id: 2,
             station_id: 1,
             destination: GliderDestination::Village(3),
@@ -939,6 +1007,7 @@ mod tests {
         )
         .unwrap();
         let station = WhipStation {
+            temporary: false,
             village_id: 1,
             name: "Test".into(),
             position: world.spawn_position(),

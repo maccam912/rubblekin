@@ -634,7 +634,7 @@ pub(crate) fn update(
             && activities
                 .as_ref()
                 .is_some_and(|scene| scene.demonstrating()));
-    let visible = (!blocked)
+    let visible = (!blocked && !(context == Context::World && session.building.enabled))
         .then(|| t.visible(context))
         .flatten()
         .filter(|lesson| match lesson {
@@ -1072,6 +1072,29 @@ mod tests {
                 .resource::<Tutorials>()
                 .completed
                 .contains(&Lesson::Hotbar)
+        );
+    }
+
+    #[test]
+    fn confirmed_box_fill_keeps_the_ordinary_dig_lesson_hidden_until_selection_exits() {
+        let (mut app, _peer) = app();
+        app.world_mut().resource_mut::<Session>().building.enabled = true;
+        app.world_mut()
+            .resource_mut::<Tutorials>()
+            .signal(Signal::Edit(Block::Wood));
+        app.update();
+        let world = app.world_mut();
+        let mut cards = world.query_filtered::<&Node, With<WorldCard>>();
+        assert_eq!(cards.single(world).unwrap().display, Display::None);
+        app.world_mut().resource_mut::<Session>().building.enabled = false;
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(cards.single(world).unwrap().display, Display::Flex);
+        assert!(
+            !world
+                .resource::<Tutorials>()
+                .completed
+                .contains(&Lesson::Building)
         );
     }
 

@@ -715,7 +715,7 @@ impl World {
             if distance > exit + 0.00001 || distance > max_distance + 0.00001 {
                 return None;
             }
-            if self.block(position).is_solid() {
+            if self.block(position) != Block::Air {
                 return Some(RayHit {
                     position,
                     previous,

@@ -735,7 +735,8 @@ pub(crate) fn read(
     ),
 ) {
     let use_now = keys.just_pressed(KeyCode::KeyT) || touch.activity;
-    let return_now = keys.just_pressed(KeyCode::Backspace) || touch.activity_return;
+    let return_now = !session.building.enabled
+        && (keys.just_pressed(KeyCode::Backspace) || touch.activity_return);
     let help_now = keys.just_pressed(KeyCode::KeyY) || touch.activity_hint;
     let demo_now = keys.just_pressed(KeyCode::KeyJ) || touch.activity_demo;
     touch.activity = false;

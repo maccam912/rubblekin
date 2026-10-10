@@ -52,7 +52,7 @@ pub struct TerrainScene {
     pub map_image: Option<Handle<Image>>,
     chunks: HashMap<ChunkKey, ChunkMesh>,
     opaque_material: Handle<TerrainMaterial>,
-    glass_material: Handle<StandardMaterial>,
+    glass_material: Handle<TerrainMaterial>,
     water_material: Handle<StandardMaterial>,
     landscape: Option<Landscape>,
     pending_landscape: Option<LandscapeJob>,
@@ -216,13 +216,16 @@ pub(crate) fn install_terrain(
     let opaque_material = terrain_materials.add(crate::terrain_material::block_material(
         images.add(crate::block_textures::atlas()),
     ));
-    let glass_material = materials.add(StandardMaterial {
+    let mut glass = terrain_material(None);
+    glass.base = StandardMaterial {
         base_color: Color::srgba(0.77, 0.94, 0.95, 0.36),
         alpha_mode: AlphaMode::Blend,
         perceptual_roughness: 0.22,
         cull_mode: None,
+        double_sided: true,
         ..default()
-    });
+    };
+    let glass_material = terrain_materials.add(glass);
     let water_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.23, 0.52, 0.59),
         perceptual_roughness: 0.32,
@@ -683,6 +686,31 @@ pub fn rebuild_chunks(
         if scene.chunks.contains_key(&key) {
             rebuild_one(scene, key, world, commands, meshes);
         }
+    }
+}
+
+pub(crate) fn rebuild_batch(
+    scene: &mut TerrainScene,
+    changes: &[BlockPos],
+    world: &World,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+) {
+    let keys: HashSet<_> = changes.iter().flat_map(|p| affected_chunks(*p)).collect();
+    for key in keys {
+        scene.pending_chunks.remove(&key);
+        if scene.chunks.contains_key(&key) {
+            rebuild_one(scene, key, world, commands, meshes);
+        }
+    }
+}
+
+impl TerrainScene {
+    pub(crate) fn detailed_at(&self, key: (i32, i32)) -> bool {
+        self.chunks.get(&key).is_some_and(|c| c.detailed)
+    }
+    pub(crate) fn build_materials(&self) -> (Handle<TerrainMaterial>, Handle<TerrainMaterial>) {
+        (self.opaque_material.clone(), self.glass_material.clone())
     }
 }
 
@@ -1894,7 +1922,7 @@ fn surface_tile(
 }
 
 // Vertices are counter-clockwise when viewed from outside the solid cell.
-const FACES: [([i32; 3], [[f32; 3]; 4]); 6] = [
+pub(crate) const FACES: [([i32; 3], [[f32; 3]; 4]); 6] = [
     (
         [1, 0, 0],
         [[1., 0., 0.], [1., 1., 0.], [1., 1., 1.], [1., 0., 1.]],
@@ -1922,7 +1950,7 @@ const FACES: [([i32; 3], [[f32; 3]; 4]); 6] = [
 ];
 
 fn occludes(block: Block) -> bool {
-    block != Block::Air && block != Block::Glass
+    block.is_solid() && block != Block::Glass
 }
 
 /// Keep drops readable when their vertical face points away from the camera.
@@ -1974,7 +2002,7 @@ fn chunk_geometry(world: &World, cx: i32, cz: i32) -> (Geometry, Geometry) {
             let mut leaf_color = None;
             for y in cache.bottom(x, z)..=cache.top(x, z) {
                 let block = cache.get(x, y, z);
-                if block == Block::Air {
+                if matches!(block, Block::Air | Block::Torch) {
                     continue;
                 }
                 if block == Block::Leaves && leaf_color.is_none() {
@@ -2305,7 +2333,12 @@ pub(crate) struct Geometry {
 }
 
 impl Geometry {
-    fn quad(&mut self, vertices: [[f32; 3]; 4], normal: [f32; 3], colors: [[f32; 4]; 4]) {
+    pub(crate) fn quad(
+        &mut self,
+        vertices: [[f32; 3]; 4],
+        normal: [f32; 3],
+        colors: [[f32; 4]; 4],
+    ) {
         self.quad_normals(vertices, [normal; 4], colors, quad_diagonal(colors));
     }
     fn quad_normals(

@@ -13,10 +13,12 @@ pub const GLIDER_SEATS: u8 = 4;
 pub const LAUNCH_RANGE: f32 = 16_000.0;
 pub const STATION_REACH: f32 = 9.0;
 pub const LAUNCH_SECONDS: f64 = 8.0;
+pub const RETURN_LANDING_SECONDS: f64 = 12.0;
 pub const CARRIAGE_VISIBILITY: f32 = 1_000.0;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhipStation {
+    pub temporary: bool,
     pub village_id: u32,
     pub name: String,
     /// Launch beside an existing outgoing road, clear of town buildings/crops.
@@ -40,6 +42,7 @@ pub fn stations(world: &World) -> Vec<WhipStation> {
                     .position;
                 position[1] -= 0.35;
                 WhipStation {
+                    temporary: false,
                     village_id: v.id,
                     name: v.name.clone(),
                     position,
@@ -68,9 +71,12 @@ pub enum GliderAction {
     },
     Launch,
     Leave,
+    Emergency,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GliderFlight {
+    #[serde(default)]
+    pub emergency: bool,
     pub id: u64,
     pub station_id: u32,
     pub destination: GliderDestination,
@@ -120,7 +126,43 @@ impl GliderFlight {
         id: u64,
         now: f64,
     ) -> Result<Self, &'static str> {
-        if !reachable(station.position, target) {
+        Self::plan_with_range(
+            world,
+            station,
+            destination,
+            name,
+            target,
+            id,
+            now,
+            LAUNCH_RANGE,
+        )
+    }
+    /// Emergency returns retain terrain/landing checks but waive the hop range.
+    pub fn plan_return(
+        world: &World,
+        station: &WhipStation,
+        destination: GliderDestination,
+        name: String,
+        target: [f32; 3],
+        id: u64,
+        now: f64,
+    ) -> Result<Self, &'static str> {
+        Self::plan_with_range(world, station, destination, name, target, id, now, f32::MAX)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn plan_with_range(
+        world: &World,
+        station: &WhipStation,
+        destination: GliderDestination,
+        name: String,
+        target: [f32; 3],
+        id: u64,
+        now: f64,
+        range: f32,
+    ) -> Result<Self, &'static str> {
+        if !target.iter().all(|n| n.is_finite())
+            || horizontal_distance(station.position, target) > range
+        {
             return Err(
                 "That destination is outside this station's 16 km reach. Take another hop first.",
             );
@@ -131,11 +173,64 @@ impl GliderFlight {
         );
         let to = landing_near_facing(world, target, yaw)
             .ok_or("There is no clear, dry landing near that destination.")?;
-        if !reachable(station.position, to) {
+        if horizontal_distance(station.position, to) > range {
             return Err("The nearest safe landing is outside launch range.");
         }
         let mut from = station.position;
         from[1] += 0.65;
+        if range == f32::MAX {
+            let distance = horizontal_distance(from, to);
+            let steps = (distance / 8.).ceil().max(1.) as usize;
+            let mut apex = (from[1] + 100.).max(to[1] + 100.);
+            for i in 0..=steps {
+                let u = i as f32 / steps as f32;
+                let x = lerp(from[0], to[0], u);
+                let z = lerp(from[2], to[2], u);
+                // Cruise clears the full carriage width as well as its centre.
+                for side in [-8., 0., 8.] {
+                    apex = apex.max(
+                        world
+                            .surface_height(x + side * libm::cosf(yaw), z - side * libm::sinf(yaw))
+                            + 45.,
+                    );
+                }
+            }
+            if apex > world.max_y() as f32 * CELL_SIZE - 4. {
+                return Err("Move to another clearing for a safe return route.");
+            }
+            for p in [from, to] {
+                let pose = GliderPose {
+                    position: p,
+                    yaw,
+                    landed: false,
+                    launching: false,
+                };
+                if std::iter::once(p)
+                    .chain((0..GLIDER_SEATS).map(|seat| seat_position(pose, seat)))
+                    .any(|p| {
+                        world.surface_height(p[0], p[2]) > p[1]
+                            || !character_position_is_clear(world, p, &[])
+                    })
+                {
+                    return Err("The vertical launch or landing is obstructed.");
+                }
+            }
+            return Ok(Self {
+                emergency: true,
+                id,
+                station_id: station.village_id,
+                destination,
+                destination_name: name,
+                from,
+                to,
+                apex,
+                duration: LAUNCH_SECONDS
+                    + (distance / 130.).max(18.) as f64
+                    + RETURN_LANDING_SECONDS,
+                created_at: now,
+                started_at: None,
+            });
+        }
         // A shallow glide with a steeper final approach clears sampled ground. Extra clearance
         // covers trees and normal village roofs; final approach is checked below.
         let distance = horizontal_distance(from, to);
@@ -149,6 +244,7 @@ impl GliderFlight {
             apex = apex.max((ground + clearance - descent * to[1]) / (1.0 - descent));
         }
         let flight = Self {
+            emergency: false,
             id,
             station_id: station.village_id,
             destination,
@@ -245,6 +341,20 @@ impl GliderFlight {
                     ease(((t - 0.25) / 0.75).clamp(0.0, 1.0)),
                 ),
                 self.from[2],
+            ]
+        } else if self.emergency && elapsed >= self.duration - RETURN_LANDING_SECONDS {
+            let t = ((elapsed - (self.duration - RETURN_LANDING_SECONDS)) / RETURN_LANDING_SECONDS)
+                .clamp(0., 1.) as f32;
+            [self.to[0], lerp(self.apex, self.to[1], ease(t)), self.to[2]]
+        } else if self.emergency {
+            let t = ((elapsed - LAUNCH_SECONDS)
+                / (self.duration - LAUNCH_SECONDS - RETURN_LANDING_SECONDS))
+                .clamp(0., 1.) as f32;
+            let u = ease(t);
+            [
+                lerp(self.from[0], self.to[0], u),
+                self.apex,
+                lerp(self.from[2], self.to[2], u),
             ]
         } else {
             let t = ((elapsed - LAUNCH_SECONDS) / (self.duration - LAUNCH_SECONDS)).clamp(0.0, 1.0)
@@ -446,6 +556,7 @@ mod tests {
     #[test]
     fn flight_is_continuous_and_reaches_destination_without_teleporting() {
         let f = GliderFlight {
+            emergency: false,
             id: 1,
             station_id: 0,
             destination: GliderDestination::Village(1),
@@ -683,6 +794,7 @@ mod canopy_tests {
         let world = World::new(42);
         let spawn = world.spawn_position();
         let f = GliderFlight {
+            emergency: false,
             id: 1,
             station_id: 0,
             destination: GliderDestination::Village(1),
