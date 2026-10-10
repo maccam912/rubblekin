@@ -443,7 +443,9 @@ mod tests {
                 }
             }
         }
-        assert_eq!(signature, 4_310_952_318_501_764_209);
+        // Rebaselined with portable terrain math (protocol 29); the old value
+        // described macOS output and did not hold on Android.
+        assert_eq!(signature, 15_424_402_352_767_419_659);
     }
 
     #[test]
@@ -615,7 +617,7 @@ mod tests {
                         for _ in 0..100 {
                             let dx = destination[0] - body.position[0];
                             let dz = destination[2] - body.position[2];
-                            let distance = dx.hypot(dz);
+                            let distance = libm::hypotf(dx, dz);
                             if distance < 0.35 && (body.position[1] - destination[1]).abs() < 0.8 {
                                 reached = true;
                                 break;

@@ -318,6 +318,17 @@ mod tests {
         let mut f = Fixture::new();
         f.network = rubblekin_core::airships::AirshipNetwork::default();
         f.sim.gliders = GliderService::new(&f.sim.world);
+        // Village IDs follow generated site order, not flight connectivity.
+        // Exercise seats/lifecycle on a nearby hop instead of assuming that
+        // the first two towns can clear every mountain between them.
+        let stops = &mut f.sim.gliders.stations;
+        let nearest = (1..stops.len())
+            .min_by(|&a, &b| {
+                horizontal_distance(stops[0].position, stops[a].position)
+                    .total_cmp(&horizontal_distance(stops[0].position, stops[b].position))
+            })
+            .unwrap();
+        stops.swap(1, nearest);
         f
     }
     fn board(f: &mut Fixture, id: u64, destination: GliderDestination) {

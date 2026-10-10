@@ -83,7 +83,7 @@ pub fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
         .sqrt()
 }
 pub fn horizontal_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-    (a[0] - b[0]).hypot(a[2] - b[2])
+    libm::hypotf(a[0] - b[0], a[2] - b[2])
 }
 pub fn reachable(a: [f32; 3], b: [f32; 3]) -> bool {
     b.iter().all(|v| v.is_finite()) && horizontal_distance(a, b) <= LAUNCH_RANGE
@@ -110,7 +110,10 @@ impl GliderFlight {
                 "That destination is outside this station's 16 km reach. Take another hop first.",
             );
         }
-        let yaw = (target[0] - station.position[0]).atan2(target[2] - station.position[2]);
+        let yaw = libm::atan2f(
+            target[0] - station.position[0],
+            target[2] - station.position[2],
+        );
         let to = landing_near_facing(world, target, yaw)
             .ok_or("There is no clear, dry landing near that destination.")?;
         if !reachable(station.position, to) {
@@ -145,39 +148,35 @@ impl GliderFlight {
         // Use the actual edited cells for the final approach, including tree
         // canopies. Raise the launch height if a descent would clip an obstacle.
         let mut flight = flight;
+        // Fixed-count samples can skip whole voxel columns on a long route.
+        let approach_steps = (distance * 0.1 / (CELL_SIZE * 0.5)).ceil().max(80.0) as usize;
         for _ in 0..4 {
             if flight.apex > world.max_y() as f32 * CELL_SIZE - 4.0 {
                 return Err("The mountains require an intermediate station on this route.");
             }
-            let clear = (0..=80).all(|i| {
-                let u = 0.90 + 0.10 * i as f32 / 80.0;
+            let clear = (0..=approach_steps).all(|i| {
+                let u = 0.90 + 0.10 * i as f32 / approach_steps as f32;
                 let p = [
                     lerp(from[0], to[0], u),
                     lerp(flight.apex, to[1], u.powi(4)),
                     lerp(from[2], to[2], u),
                 ];
-                (0..GLIDER_SEATS).all(|seat| {
-                    character_position_is_clear(
-                        world,
-                        seat_position(
-                            GliderPose {
-                                position: p,
-                                yaw: flight.yaw(),
-                                landed: false,
-                                launching: false,
-                            },
-                            seat,
-                        ),
-                        &[],
-                    )
-                })
+                let pose = GliderPose {
+                    position: p,
+                    yaw: flight.yaw(),
+                    landed: false,
+                    launching: false,
+                };
+                std::iter::once(p)
+                    .chain((0..GLIDER_SEATS).map(|seat| seat_position(pose, seat)))
+                    .all(|p| character_position_is_clear(world, p, &[]))
             });
             if clear {
                 return Ok(flight);
             }
             let mut required = flight.apex + 150.0;
-            for i in 0..80 {
-                let u = 0.90 + 0.10 * i as f32 / 80.0;
+            for i in 0..approach_steps {
+                let u = 0.90 + 0.10 * i as f32 / approach_steps as f32;
                 let pose = GliderPose {
                     position: [
                         lerp(from[0], to[0], u),
@@ -188,8 +187,9 @@ impl GliderFlight {
                     landed: false,
                     launching: false,
                 };
-                for seat in 0..GLIDER_SEATS {
-                    let p = seat_position(pose, seat);
+                for p in std::iter::once(pose.position)
+                    .chain((0..GLIDER_SEATS).map(|seat| seat_position(pose, seat)))
+                {
                     if !character_position_is_clear(world, p, &[]) {
                         let mut roof = p[1];
                         for x in [
@@ -215,7 +215,7 @@ impl GliderFlight {
         Err("The landing approach is blocked. Choose another destination.")
     }
     fn yaw(&self) -> f32 {
-        (self.to[0] - self.from[0]).atan2(self.to[2] - self.from[2])
+        libm::atan2f(self.to[0] - self.from[0], self.to[2] - self.from[2])
     }
     pub fn pose(&self, now: f64) -> GliderPose {
         let elapsed = self.started_at.map_or(0.0, |start| (now - start).max(0.0));
@@ -258,7 +258,7 @@ impl GliderFlight {
 pub fn seat_position(pose: GliderPose, seat: u8) -> [f32; 3] {
     let side = if seat.is_multiple_of(2) { -0.8 } else { 0.8 };
     let fore = if seat < 2 { 0.9 } else { -0.9 };
-    let (s, c) = pose.yaw.sin_cos();
+    let (s, c) = libm::sincosf(pose.yaw);
     [
         pose.position[0] + side * c + fore * s,
         pose.position[1],
@@ -271,6 +271,7 @@ pub fn landing_near(world: &World, target: [f32; 3]) -> Option<[f32; 3]> {
 }
 
 pub fn landing_near_facing(world: &World, target: [f32; 3], yaw: f32) -> Option<[f32; 3]> {
+    let (sin, cos) = libm::sincosf(yaw);
     for ring in 0_i32..=16 {
         for z in -ring..=ring {
             for x in -ring..=ring {
@@ -301,17 +302,24 @@ pub fn landing_near_facing(world: &World, target: [f32; 3], yaw: f32) -> Option<
                             (pz / CELL_SIZE).floor() as i32,
                         ))
                         .is_solid();
-                let pose = GliderPose {
-                    position: p,
-                    yaw,
-                    landed: true,
-                    launching: false,
-                };
+                // A clear endpoint beside a tree or terrain lip can still
+                // require an impossible descent. Keep the last four meters
+                // flat and clear for the carriage and every passenger.
                 if dry
-                    && (0..GLIDER_SEATS).all(|seat| {
-                        let s = seat_position(pose, seat);
-                        (world.surface_height(s[0], s[2]) - h).abs() < CELL_SIZE * 0.75
-                            && character_position_is_clear(world, s, &[])
+                    && (0..=8).all(|step| {
+                        let back = step as f32 * CELL_SIZE;
+                        let pose = GliderPose {
+                            position: [p[0] - sin * back, p[1], p[2] - cos * back],
+                            yaw,
+                            landed: true,
+                            launching: false,
+                        };
+                        std::iter::once(pose.position)
+                            .chain((0..GLIDER_SEATS).map(|seat| seat_position(pose, seat)))
+                            .all(|s| {
+                                (world.surface_height(s[0], s[2]) - h).abs() < CELL_SIZE * 0.75
+                                    && character_position_is_clear(world, s, &[])
+                            })
                     })
                 {
                     return Some(p);
@@ -440,11 +448,27 @@ mod tests {
                     panic!("seed {seed} {} -> {}: {error}", station.name, other.name)
                 });
                 f.started_at = Some(0.0);
-                for i in 0..100 {
+                for i in 0..=100 {
                     let p = f
                         .pose(LAUNCH_SECONDS + (f.duration - LAUNCH_SECONDS) * i as f64 / 100.0)
                         .position;
-                    assert!(p[1] + 0.1 >= world.surface_height(p[0], p[2]));
+                    assert!(
+                        p[1] + 0.1 >= world.surface_height(p[0], p[2]),
+                        "seed {seed} {} -> {}, sample {i}: {p:?}, surface {}",
+                        station.name,
+                        other.name,
+                        world.surface_height(p[0], p[2])
+                    );
+                    let pose =
+                        f.pose(LAUNCH_SECONDS + (f.duration - LAUNCH_SECONDS) * i as f64 / 100.0);
+                    for seat in 0..GLIDER_SEATS {
+                        assert!(
+                            character_position_is_clear(&world, seat_position(pose, seat), &[]),
+                            "seed {seed} {} -> {}, sample {i}, seat {seat}",
+                            station.name,
+                            other.name
+                        );
+                    }
                 }
             }
         }

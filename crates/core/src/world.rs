@@ -613,7 +613,7 @@ impl World {
     /// terrain in its shallow bed remains solid and editable.
     pub fn river_center(&self, z: i32) -> f32 {
         let phase = (self.seed % 1000) as f32 * 0.006;
-        32.0 + (z as f32 * 0.024 + phase).sin() * 10.0 + (z as f32 * 0.061).sin() * 3.0
+        32.0 + libm::sinf(z as f32 * 0.024 + phase) * 10.0 + libm::sinf(z as f32 * 0.061) * 3.0
     }
 
     /// Grid DDA with clipping to the finite world. Direction need not be unit
@@ -809,7 +809,7 @@ impl World {
         let fine = value_noise(xf / 17.0, zf / 17.0, self.seed.wrapping_add(31));
         let ridge_distance = (xf.abs() * 0.92).max(zf.abs() * 0.83);
         let mountains = smoothstep(38.0, 152.0, ridge_distance);
-        let ridges = 0.65 + 0.35 * (xf * 0.048 + zf * 0.035 + broad * 2.2).sin().abs();
+        let ridges = 0.65 + 0.35 * libm::sinf(xf * 0.048 + zf * 0.035 + broad * 2.2).abs();
         let mut height = 4.0
             + clearing * (broad * 4.0 + fine * 1.5)
             + mountains * mountains * (66.0 + broad * 27.0) * ridges;
@@ -1246,9 +1246,10 @@ mod tests {
 
     #[test]
     fn geography_v4_geometry_with_side_landing_clearings_is_reproducible() {
+        // Portable terrain math supersedes the platform-native snapshots.
         assert_eq!(
             world_identity(WorldGeneration::GeographyV4),
-            10_415_806_305_234_660_094
+            8_555_870_435_748_570_619
         );
     }
 
@@ -1256,7 +1257,7 @@ mod tests {
     fn geography_v5_geometry_with_side_landing_clearings_is_reproducible() {
         assert_eq!(
             world_identity(WorldGeneration::GeographyV5),
-            1_214_427_176_827_204_515
+            5_975_590_706_442_097_444
         );
     }
 

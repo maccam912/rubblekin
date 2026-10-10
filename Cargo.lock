@@ -5453,6 +5453,7 @@ dependencies = [
 name = "rubblekin_core"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "serde",
  "serde_json",
 ]

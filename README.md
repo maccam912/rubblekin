@@ -316,7 +316,7 @@ The read-only camera creates no avatar and passes freely through terrain. WASD f
 
 Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. In geographic worlds, nearby detailed terrain follows the camera and distant landforms cover the full 32.768 km region. The old 160 × 160 m valley renderer remains available for legacy saves.
 
-The current handshake uses **protocol v22**. Rebuild/restart both client and server together. Save version 8 records the terrain generator, village residents/stores, private player trading progress, shared consumed quarry/salvage cells, persistent wildlife/forage, and interrupted animal journeys. Wildlife home ranges change on physical arrival. Versions 1–7 load additively; earlier residents receive default needs and keep their jobs, goods, and terrain. Generation identifiers remain explicit, but pre-release scenery geometry may change in place under the October 8 save waiver. Original valleys remain a separate generator.
+The current handshake uses **protocol v29**. Rebuild/restart both client and server together: seeded terrain now uses pinned portable math so Android and server village IDs, stations and landforms agree. Older clients are rejected at connection. Save version 11 retains terrain edits, village life, player trading progress, shared salvage/ecology and activity contributions, including repairs and flow gardens. Versions 1–10 load additively. Generation identifiers remain explicit, but pre-release geometry may change in place under the October 8 save waiver. Original valleys remain a separate generator.
 
 ## Graphics
 

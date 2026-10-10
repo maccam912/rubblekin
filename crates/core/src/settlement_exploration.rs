@@ -105,7 +105,7 @@ impl SettlementPlan {
                     }
                     let dx = anchor[0] - previous[0];
                     let dz = anchor[2] - previous[2];
-                    let run = dx.hypot(dz).max(0.01);
+                    let run = libm::hypotf(dx, dz).max(0.01);
                     let sign = if h.is_multiple_of(2) { 1.0 } else { -1.0 };
                     for side in [22.0, -22.0, 30.0, -30.0, 38.0, -38.0].map(|s| s * sign) {
                         let center = [anchor[0] - dz / run * side, anchor[2] + dx / run * side];
@@ -170,7 +170,7 @@ impl SettlementPlan {
                         let previous = self.trails[ti].points[index - 1];
                         let dx = anchor[0] - previous[0];
                         let dz = anchor[2] - previous[2];
-                        let run = dx.hypot(dz).max(0.01);
+                        let run = libm::hypotf(dx, dz).max(0.01);
                         for kind_offset in 0..SMALL.len() {
                             let kind = SMALL[(h as usize + kind_offset) % SMALL.len()];
                             if kind == BuildingKind::DeadSnag
@@ -269,7 +269,7 @@ impl SettlementPlan {
             return None;
         }
         let [w, _, d] = village_assets::dimensions(kind);
-        let radius = (w as f32).hypot(d as f32) * CELL_SIZE * 0.5;
+        let radius = libm::hypotf(w as f32, d as f32) * CELL_SIZE * 0.5;
         if self.trails.iter().any(|trail| {
             let clearance = if kind.is_small_discovery() {
                 radius + trail.width * 0.5 + 0.5
@@ -409,7 +409,7 @@ mod tests {
         for _ in 0..600 {
             let dx = target[0] - body.position[0];
             let dz = target[2] - body.position[2];
-            let distance = dx.hypot(dz);
+            let distance = libm::hypotf(dx, dz);
             if distance < 0.12 && (target[1] - body.position[1]).abs() < 0.55 {
                 return;
             }

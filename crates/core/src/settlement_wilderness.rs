@@ -197,7 +197,7 @@ mod tests {
         for _ in 0..180 {
             let dx = target[0] - body.position[0];
             let dz = target[2] - body.position[2];
-            let distance = dx.hypot(dz);
+            let distance = libm::hypotf(dx, dz);
             if distance < 0.15 && (target[1] - body.position[1]).abs() < 0.55 {
                 return;
             }

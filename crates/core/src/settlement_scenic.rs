@@ -47,7 +47,7 @@ impl SettlementPlan {
                 }
                 let dx = segment[1][0] - segment[0][0];
                 let dz = segment[1][2] - segment[0][2];
-                let run = dx.hypot(dz).max(0.01);
+                let run = libm::hypotf(dx, dz).max(0.01);
                 let kind = if new_places {
                     if (trail_index + world.seed as usize).is_multiple_of(2) {
                         BuildingKind::TrailPavilion
@@ -122,7 +122,7 @@ impl SettlementPlan {
                     let steps = (distance2(anchor[0], anchor[2], entry[0], entry[2]).sqrt() / 1.0)
                         .ceil()
                         .max(1.0) as usize;
-                    let points: Vec<_> = (0..=steps)
+                    let mut points: Vec<_> = (0..=steps)
                         .map(|i| {
                             let t = i as f32 / steps as f32;
                             [
@@ -132,6 +132,22 @@ impl SettlementPlan {
                             ]
                         })
                         .collect();
+                    // The entrance waypoint is 1.25 m outside the footprint.
+                    // Continue its grading to the doorway so a walker's body
+                    // cannot catch a natural terrain lip in the gap.
+                    let inward = match rotation {
+                        0 => [0.0, 1.0],
+                        1 => [-1.0, 0.0],
+                        2 => [0.0, -1.0],
+                        _ => [1.0, 0.0],
+                    };
+                    for step in 1..=3 {
+                        points.push([
+                            entry[0] + inward[0] * step as f32 * CELL_SIZE,
+                            floor,
+                            entry[2] + inward[1] * step as f32 * CELL_SIZE,
+                        ]);
+                    }
                     if points.iter().any(|p| {
                         let sample = g.sample(p[0], p[2]);
                         sample.water.is_some() || (sample.height + CELL_SIZE - floor).abs() > 2.0
@@ -170,7 +186,7 @@ mod tests {
         for _ in 0..900 {
             let dx = target[0] - body.position[0];
             let dz = target[2] - body.position[2];
-            let distance = dx.hypot(dz);
+            let distance = libm::hypotf(dx, dz);
             if distance < 0.1 && (target[1] - body.position[1]).abs() < 0.6 {
                 return;
             }

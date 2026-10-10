@@ -271,7 +271,7 @@ fn segment_distance(point: [f32; 3], a: [f32; 3], b: [f32; 3]) -> f32 {
     } else {
         0.0
     };
-    (point[0] - a[0] - t * dx).hypot(point[2] - a[2] - t * dz)
+    libm::hypotf(point[0] - a[0] - t * dx, point[2] - a[2] - t * dz)
 }
 
 fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {

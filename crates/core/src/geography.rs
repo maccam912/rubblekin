@@ -10,6 +10,10 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap};
+// Seeded terrain must use the same math on Android, Linux, Windows and macOS.
+// Platform libm differences amplify through drainage/erosion and can change
+// village IDs, making a client's station point at another town on the server.
+use libm::{hypotf, logf, powf};
 
 pub const WORLD_SIZE: f32 = 32_768.0;
 pub const GRID_SIDE: usize = 513;
@@ -139,7 +143,7 @@ impl Geography {
             moisture[i] = if version >= 2 {
                 refined_moisture(x, z, heights[i], heights[west], seed, drainage.flow[i])
             } else {
-                (moisture[i] - shadow + (drainage.flow[i].max(1.0).ln() * 0.035).min(0.25))
+                (moisture[i] - shadow + (logf(drainage.flow[i].max(1.0)) * 0.035).min(0.25))
                     .clamp(0.0, 1.0)
             };
             if heights[i] < SEA_LEVEL
@@ -377,9 +381,10 @@ impl Geography {
                     nearby_river = nearby_river.max(self.flow[neighbor]);
                 }
                 let [mx, mz] = grid_position(i);
-                let score =
-                    steepness * 7.0 + (h - 170.0).abs() * 0.06 + (mx.hypot(mz) / HALF_WORLD) * 12.0
-                        - nearby_river.min(1_000.0).sqrt() * 0.12;
+                let score = steepness * 7.0
+                    + (h - 170.0).abs() * 0.06
+                    + (hypotf(mx, mz) / HALF_WORLD) * 12.0
+                    - nearby_river.min(1_000.0).sqrt() * 0.12;
                 if score < best.0 && self.safe_spawn(mx, mz) {
                     best = (score, i);
                 }
@@ -441,7 +446,7 @@ fn refined_moisture(x: f32, z: f32, height: f32, west_height: f32, seed: u32, fl
         + value_noise(x / 4_800.0, z / 4_800.0, seed.wrapping_add(41)) * 0.38
         + value_noise(x / 1_600.0, z / 1_600.0, seed.wrapping_add(42)) * 0.08
         - shadow
-        + (flow.max(1.0).ln() * 0.012).min(0.12))
+        + (logf(flow.max(1.0)) * 0.012).min(0.12))
     .clamp(0.08, 0.95)
 }
 
@@ -478,7 +483,7 @@ fn initial_height(x: f32, z: f32, seed: u32) -> f32 {
     let wz = z + warp_z;
     // Keep the finite-world boundary policy in one place. The current region
     // uses an irregular island, surrounded by a strip of ocean at every edge.
-    let radius = (x / 14_600.0).hypot(z / 13_800.0);
+    let radius = hypotf(x / 14_600.0, z / 13_800.0);
     let coast = 0.94 - radius
         + value_noise(wx / 4_300.0, wz / 4_300.0, seed.wrapping_add(3)) * 0.14
         + value_noise(wx / 1_500.0, wz / 1_500.0, seed.wrapping_add(4)) * 0.04;
@@ -510,7 +515,7 @@ fn initial_height(x: f32, z: f32, seed: u32) -> f32 {
         + inland
             * (65.0
                 + foothills * foothills * 150.0
-                + 2_240.0 * range * range * ridge.powf(2.1)
+                + 2_240.0 * range * range * powf(ridge, 2.1)
                 + roughness * (0.20 + range * 0.8))
 }
 
@@ -639,12 +644,12 @@ fn erode(heights: &mut [f32], drainage: &Drainage) -> f64 {
         }
         let [x, z] = grid_position(i);
         let [nx, nz] = grid_position(next);
-        let slope = ((heights[i] - heights[next]) / (x - nx).hypot(z - nz)).max(0.0);
+        let slope = ((heights[i] - heights[next]) / hypotf(x - nx, z - nz)).max(0.0);
         let lake = drainage.filled[i] > heights[i] + 0.6;
         let incision = if lake {
             0.0
         } else {
-            (1.2 * drainage.flow[i].powf(0.43) * slope.sqrt())
+            (1.2 * powf(drainage.flow[i], 0.43) * slope.sqrt())
                 .min(14.0)
                 .min((heights[i] - heights[next]).max(0.0) * 0.22)
         };
@@ -722,7 +727,7 @@ fn breach_spillways(heights: &mut [f32], drainage: &Drainage) -> f64 {
                             continue;
                         }
                         let index = z as usize * GRID_SIDE + x as usize;
-                        let valley = level + (dx as f32).hypot(dz as f32) * GRID_SPACING * 0.85;
+                        let valley = level + hypotf(dx as f32, dz as f32) * GRID_SPACING * 0.85;
                         if heights[index] > valley {
                             moved += f64::from(heights[index] - valley);
                             heights[index] = valley;
@@ -885,7 +890,7 @@ mod tests {
             };
             let a = grid_position(i);
             let b = grid_position(next);
-            let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+            let length = hypotf(b[0] - a[0], b[1] - a[1]);
             let perpendicular = [-(b[1] - a[1]) / length, (b[0] - a[0]) / length];
             let width = (world.flow[i].sqrt() * 0.32).clamp(5.0, 29.0);
             for t in [0.0, 0.5, 1.0] {

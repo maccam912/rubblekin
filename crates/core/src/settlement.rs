@@ -884,13 +884,13 @@ impl SettlementPlan {
                             * CELL_SIZE;
                         let dz = (b.origin.z - z).max(0).max(z - (b.origin.z + d - 1)) as f32
                             * CELL_SIZE;
-                        let mut distance = dx.hypot(dz);
+                        let mut distance = libm::hypotf(dx, dz);
                         if pathless {
                             // The entrance's small flat landing is outside the
                             // asset footprint; blend its edge into the ground too.
                             let dx = ((x - ex).abs() - 1).max(0) as f32 * CELL_SIZE;
                             let dz = ((z - ez).abs() - 1).max(0) as f32 * CELL_SIZE;
-                            distance = distance.min(dx.hypot(dz));
+                            distance = distance.min(libm::hypotf(dx, dz));
                         }
                         if distance > 0.0 && distance < 8.0 {
                             let blend = 1.0 - distance / 8.0;
@@ -1388,8 +1388,9 @@ fn landmark_site(
     for radius in [64.0, 80.0, 96.0, 112.0] {
         for direction in 0..24 {
             let angle = (direction as f32 + (seed % 24) as f32) * std::f32::consts::TAU / 24.0;
-            let x = village.center[0] + angle.cos() * radius;
-            let z = village.center[2] + angle.sin() * radius;
+            let (sin, cos) = libm::sincosf(angle);
+            let x = village.center[0] + cos * radius;
+            let z = village.center[2] + sin * radius;
             // Existing airship approaches use offsets up to 24 m beside trails.
             // Leave another 21 m for the deck, ramps and this building's eaves.
             if !clear(x, z, 12.0)
@@ -1401,9 +1402,9 @@ fn landmark_site(
             {
                 continue;
             }
-            let rotation = if angle.cos().abs() > angle.sin().abs() {
-                if angle.cos() > 0.0 { 3 } else { 1 }
-            } else if angle.sin() > 0.0 {
+            let rotation = if cos.abs() > sin.abs() {
+                if cos > 0.0 { 3 } else { 1 }
+            } else if sin > 0.0 {
                 0
             } else {
                 2

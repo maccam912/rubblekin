@@ -3132,6 +3132,64 @@ fn creative_catalog_blocks_replicate_and_survive_server_restart() {
 }
 
 #[test]
+fn live_seed_mossvale_can_board_and_launch_over_tcp() {
+    use rubblekin_core::gliders::{GliderAction, GliderDestination};
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.seed = 2_689_504_302;
+    config.generation = WorldGeneration::GeographyV6;
+    let server = spawn(config).unwrap();
+    let (mut client, welcome) = Client::connect(server.addr, "Mossvale traveller");
+    let id = match welcome {
+        ServerMessage::Welcome {
+            session_id, seed, ..
+        } => {
+            assert_eq!(seed, 2_689_504_302);
+            session_id
+        }
+        _ => unreachable!(),
+    };
+    // Captured by running the old ARM64 Android generator. The old Linux
+    // server assigned ID 2 to Birchvale, 15.6 km from this station, and rejected
+    // every destination with "Move closer to the whip station to board."
+    client.teleport([-386.25, 183.5, 7808.25]);
+    client.send(ClientMessage::Glider {
+        action: GliderAction::Board {
+            station_id: 2,
+            destination: GliderDestination::Village(0),
+        },
+    });
+    let response = client.until(|m| {
+        matches!(m, ServerMessage::Notice { .. })
+            || matches!(m, ServerMessage::State { players, .. }
+                if players.iter().any(|p| p.id == id && p.glider_ride.is_some()))
+    });
+    assert!(
+        !matches!(response, ServerMessage::Notice { ref text } if !text.starts_with("Aboard.")),
+        "Mossvale boarding failed: {response:?}"
+    );
+    thread::sleep(Duration::from_millis(220));
+    client.send(ClientMessage::Glider {
+        action: GliderAction::Launch,
+    });
+    let state = client.until(|m| {
+        matches!(m, ServerMessage::State { gliders, .. }
+        if gliders.iter().any(|f| f.station_id == 2 && f.started_at.is_some()))
+    });
+    if let ServerMessage::State {
+        players, gliders, ..
+    } = state
+    {
+        let player = players.iter().find(|p| p.id == id).unwrap();
+        let flight = gliders.iter().find(|f| f.station_id == 2).unwrap();
+        assert_eq!(player.glider_ride.unwrap().carriage_id, flight.id);
+        assert_eq!(flight.destination_name, "Fernvale");
+        assert_eq!(flight.destination, GliderDestination::Village(0));
+    }
+    server.stop().unwrap();
+}
+
+#[test]
 fn whip_carriage_is_shared_and_jump_out_replicates_over_tcp() {
     use rubblekin_core::gliders::{GliderAction, GliderDestination, stations};
     let save = TestSave::new();
