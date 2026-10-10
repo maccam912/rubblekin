@@ -151,6 +151,15 @@ impl Client {
                 Instant::now() < deadline,
                 "Timed out after {timeout:?} waiting for expected server message; last message: {last_message}"
             );
+            // A quiet socket must respect the requested response budget too.
+            self.reader
+                .get_ref()
+                .set_read_timeout(Some(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(1)),
+                ))
+                .unwrap();
             let mut line = String::new();
             let count = match self.reader.read_line(&mut line) {
                 Ok(count) => count,
@@ -3138,6 +3147,13 @@ fn live_seed_mossvale_can_board_and_launch_over_tcp() {
     let mut config = save.config(true);
     config.seed = 2_689_504_302;
     config.generation = WorldGeneration::GeographyV6;
+    // Finish expensive client-side generation before starting the live server.
+    let world = World::generate(config.seed, config.generation);
+    let stops = stations(&world);
+    let mossvale = stops.iter().find(|s| s.village_id == 2).unwrap();
+    assert_eq!(mossvale.name, "Mossvale");
+    assert_eq!(mossvale.landing_position, [-386.25, 183.5, 7808.25]);
+    let response_timeout = Duration::from_secs(15);
     let server = spawn(config).unwrap();
     let (mut client, welcome) = Client::connect(server.addr, "Mossvale traveller");
     let id = match welcome {
@@ -3153,33 +3169,34 @@ fn live_seed_mossvale_can_board_and_launch_over_tcp() {
     // server assigned ID 2 to Birchvale, 15.6 km from this station, and rejected
     // every destination with "Move closer to the whip station to board."
     client.teleport([-386.25, 183.5, 7808.25]);
-    let world = World::generate(2_689_504_302, WorldGeneration::GeographyV6);
-    let stops = stations(&world);
-    let mossvale = stops.iter().find(|s| s.village_id == 2).unwrap();
-    assert_eq!(mossvale.name, "Mossvale");
-    assert_eq!(mossvale.landing_position, [-386.25, 183.5, 7808.25]);
     client.send(ClientMessage::Glider {
         action: GliderAction::Board {
             station_id: 2,
             destination: GliderDestination::Village(0),
         },
     });
-    let refused = client.until(|m| matches!(m, ServerMessage::Notice { .. }));
+    let refused = client.until_for(
+        |m| matches!(m, ServerMessage::Notice { .. }),
+        response_timeout,
+    );
     assert!(matches!(refused, ServerMessage::Notice { text } if text.contains("Move closer")));
-    client.teleport(mossvale.position);
-    // The deliberately refused request still consumes the 200 ms action gate.
+    // Respect both the 200 ms glider gate and the 100 ms teleport gate.
     thread::sleep(Duration::from_millis(220));
+    client.teleport(mossvale.position);
     client.send(ClientMessage::Glider {
         action: GliderAction::Board {
             station_id: 2,
             destination: GliderDestination::Village(0),
         },
     });
-    let response = client.until(|m| {
-        matches!(m, ServerMessage::Notice { .. })
-            || matches!(m, ServerMessage::State { players, .. }
+    let response = client.until_for(
+        |m| {
+            matches!(m, ServerMessage::Notice { .. })
+                || matches!(m, ServerMessage::State { players, .. }
                 if players.iter().any(|p| p.id == id && p.glider_ride.is_some()))
-    });
+        },
+        response_timeout,
+    );
     assert!(
         !matches!(response, ServerMessage::Notice { ref text } if !text.starts_with("Aboard.")),
         "Mossvale boarding failed: {response:?}"
@@ -3188,10 +3205,13 @@ fn live_seed_mossvale_can_board_and_launch_over_tcp() {
     client.send(ClientMessage::Glider {
         action: GliderAction::Launch,
     });
-    let state = client.until(|m| {
-        matches!(m, ServerMessage::State { gliders, .. }
+    let state = client.until_for(
+        |m| {
+            matches!(m, ServerMessage::State { gliders, .. }
         if gliders.iter().any(|f| f.station_id == 2 && f.started_at.is_some()))
-    });
+        },
+        response_timeout,
+    );
     if let ServerMessage::State {
         players, gliders, ..
     } = state
