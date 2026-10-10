@@ -261,8 +261,8 @@ impl MarketPanel {
             .and_then(|(reward, expires)| expires.filter(|end| now < *end).map(|_| reward))
     }
 
-    pub(crate) fn nearby_work(&self, session: &Session, now: f64) -> Option<&WorkOffer> {
-        if self.open
+    fn work_cue_ready(&self, session: &Session, now: f64) -> bool {
+        !(self.open
             || self.input_blocked
             || session.help
             || session.inspector
@@ -276,14 +276,35 @@ impl MarketPanel {
             || self
                 .work_pending
                 .is_some_and(|(_, action)| action != WorkAction::View)
-            || !(0.0..=1.5).contains(&(now - self.work_received_at))
-        {
+            || !(0.0..=1.5).contains(&(now - self.work_received_at)))
+    }
+
+    fn nearby_work_offer(&self, session: &Session, now: f64) -> Option<&WorkOffer> {
+        if !self.work_cue_ready(session, now) {
             return None;
         }
-        self.work.offer.as_ref().filter(|offer| {
-            offer.unavailable_reason.is_none()
-                && within_work_reach(session.body.position, offer.position)
-        })
+        self.work
+            .offer
+            .as_ref()
+            .filter(|offer| within_work_reach(session.body.position, offer.position))
+    }
+
+    pub(crate) fn full_cargo_at_work_site(
+        &self,
+        session: &Session,
+        world: &VoxelWorld,
+        now: f64,
+    ) -> bool {
+        self.work_cue_ready(session, now)
+            && self.work.offer.is_none()
+            && self
+                .ledger
+                .as_ref()
+                .is_some_and(|ledger| ledger.cargo_total() >= CARGO_CAPACITY)
+            && near_worksite_geometry(world, session.body.position)
+            && !self
+                .delivery()
+                .is_some_and(|job| nearby_market(session, world) == Some(job.destination))
     }
 
     pub(crate) fn contextual_work(
@@ -292,7 +313,17 @@ impl MarketPanel {
         world: &VoxelWorld,
         now: f64,
     ) -> Option<&WorkOffer> {
-        self.nearby_work(session, now).filter(|_| {
+        self.contextual_work_offer(session, world, now)
+            .filter(|offer| offer.unavailable_reason.is_none())
+    }
+
+    pub(crate) fn contextual_work_offer(
+        &self,
+        session: &Session,
+        world: &VoxelWorld,
+        now: f64,
+    ) -> Option<&WorkOffer> {
+        self.nearby_work_offer(session, now).filter(|_| {
             !crate::activities::has_action(session, &world.0)
                 && !self
                     .delivery()
@@ -2606,6 +2637,63 @@ mod tests {
             .unwrap()
             .unavailable_reason = Some("No supplies".into());
         assert!(!available(&app, 0.));
+        assert!(
+            app.world()
+                .resource::<MarketPanel>()
+                .contextual_work_offer(
+                    app.world().resource::<Session>(),
+                    app.world().resource::<VoxelWorld>(),
+                    0.
+                )
+                .is_some(),
+            "The explanation remains available without allowing Start"
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyT);
+        app.update();
+        assert!(app.world().resource::<MarketPanel>().work_pending.is_none());
+    }
+
+    #[test]
+    fn full_cargo_explanation_requires_a_fresh_empty_offer_at_real_work_geometry() {
+        use rubblekin_core::world::{World, WorldGeneration};
+        let (world, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(SessionMode::Player),
+            "full cargo".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            SessionMode::Player,
+        )
+        .unwrap();
+        drop(world);
+        let world = VoxelWorld(World::generate(42, WorldGeneration::GeographyV5));
+        let soil = world.0.settlements().unwrap().villages[0].fields[0]
+            .plant_positions()
+            .next()
+            .unwrap();
+        session.body.position = [
+            soil.x as f32 * CELL_SIZE + 0.25,
+            (soil.y + 1) as f32 * CELL_SIZE,
+            soil.z as f32 * CELL_SIZE + 0.25,
+        ];
+        session.help = false;
+        session.inspector = false;
+        let mut panel = MarketPanel::default();
+        let ledger = PlayerEconomy {
+            cargo: [CARGO_CAPACITY, 0, 0, 0, 0],
+            ..default()
+        };
+        panel.work_reply(0, WorkState::default(), ledger, String::new(), true);
+        panel.observe_work_reply(5.);
+        assert!(panel.full_cargo_at_work_site(&session, &world, 5.));
+        assert!(panel.contextual_work(&session, &world, 5.).is_none());
+        assert!(!panel.full_cargo_at_work_site(&session, &world, 6.6));
+        session.flying = true;
+        assert!(!panel.full_cargo_at_work_site(&session, &world, 5.));
+        session.flying = false;
+        session.body.position = [10000.; 3];
+        assert!(!panel.full_cargo_at_work_site(&session, &world, 5.));
     }
 
     #[test]
@@ -2670,7 +2758,7 @@ mod tests {
         app.update();
         let panel = app.world().resource::<MarketPanel>();
         let session = app.world().resource::<Session>();
-        assert!(panel.nearby_work(session, 0.).is_some());
+        assert!(panel.nearby_work_offer(session, 0.).is_some());
         assert!(
             hud_text(
                 panel,
@@ -2692,7 +2780,7 @@ mod tests {
             .contains("Work: Tend field · 2 coins")
         );
         assert!(
-            panel.nearby_work(session, 1.6).is_none(),
+            panel.nearby_work_offer(session, 1.6).is_none(),
             "Eligibility expires without a fresh reply"
         );
         app.world_mut()
@@ -2747,7 +2835,7 @@ mod tests {
         assert!(panel.work_pending.is_none());
         assert!(
             panel
-                .nearby_work(app.world().resource::<Session>(), 1.1)
+                .nearby_work_offer(app.world().resource::<Session>(), 1.1)
                 .is_none(),
             "Open panels own their own hints"
         );
@@ -2757,7 +2845,7 @@ mod tests {
         assert!(
             app.world()
                 .resource::<MarketPanel>()
-                .nearby_work(app.world().resource::<Session>(), 1.1)
+                .nearby_work_offer(app.world().resource::<Session>(), 1.1)
                 .is_none()
         );
         app.world_mut().resource_mut::<Session>().body.position = position;
@@ -2771,7 +2859,7 @@ mod tests {
         assert!(
             app.world()
                 .resource::<MarketPanel>()
-                .nearby_work(app.world().resource::<Session>(), 1.1)
+                .nearby_work_offer(app.world().resource::<Session>(), 1.1)
                 .is_none()
         );
         app.world_mut().resource_mut::<Connection>().error = Some("Disconnected".into());

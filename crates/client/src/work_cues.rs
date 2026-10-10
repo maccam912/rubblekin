@@ -39,6 +39,8 @@ fn bounds(size: Vec2, touch: bool, teaching: Option<Rect>) -> Rect {
 enum Cue<'a> {
     Work(&'a WorkOffer, Option<f32>),
     Reward(WorkReward),
+    Unavailable(&'a WorkOffer),
+    CargoFull,
 }
 
 fn cue<'a>(
@@ -68,9 +70,18 @@ fn cue<'a>(
     if crate::activities::touch_opportunity(session) {
         return None;
     }
+    if panel.full_cargo_at_work_site(session, world, now) {
+        return Some(Cue::CargoFull);
+    }
     panel
-        .contextual_work(session, world, now)
-        .map(|offer| Cue::Work(offer, None))
+        .contextual_work_offer(session, world, now)
+        .map(|offer| {
+            if offer.unavailable_reason.is_some() {
+                Cue::Unavailable(offer)
+            } else {
+                Cue::Work(offer, None)
+            }
+        })
 }
 
 pub(crate) fn panel_at(
@@ -229,6 +240,37 @@ pub(crate) fn update(
         return;
     };
     let (picture, caption, fraction, target) = match visible {
+        Cue::CargoFull => (
+            trade.coins.clone(),
+            "Cargo full\nSell at a market".into(),
+            None,
+            None,
+        ),
+        Cue::Unavailable(offer) => {
+            let needs_space = match offer.reward {
+                WorkReward::Cargo { amount, .. } => panel.ledger.as_ref().is_some_and(|l| {
+                    l.cargo_total().saturating_add(amount) > rubblekin_core::economy::CARGO_CAPACITY
+                }),
+                WorkReward::Coins(_) => false,
+            };
+            let caption = if needs_space {
+                "Make room in cargo\nSell at a market".into()
+            } else if touch.enabled {
+                "Work unavailable\nCargo: details".into()
+            } else {
+                "Work unavailable\nB: Cargo for details".into()
+            };
+            (
+                if needs_space {
+                    trade.coins.clone()
+                } else {
+                    pictures.0[crate::work_tools::tool_index(offer.site.kind)].clone()
+                },
+                caption,
+                None,
+                Some(offer.position),
+            )
+        }
         Cue::Reward(reward) => {
             let (picture, caption) = match reward {
                 WorkReward::Coins(coins) => (trade.coins.clone(), format!("Earned {coins} coins")),

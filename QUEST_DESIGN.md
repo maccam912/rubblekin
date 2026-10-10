@@ -117,7 +117,7 @@ Durations below are local playtest targets, excluding long-distance travel. Actu
 
 **Variations.** A broken bench, campsite sign, workshop handle or small side footbridge. Vary the problem's topology: one missing part, a loose part that first needs turning, or supplies located across a short alternate route. Changing only required material quantities is not a new puzzle.
 
-**Rules.** The introductory version supplies its own non-tradable parts. A later paid material job can require actual Timber or Stone, but must identify available sources and show each unit consumed. Depleted salvage cannot be its only supplier. A bridge repair opens an optional shortcut; it must not block the village's ordinary route or strand players.
+**Rules.** The user chose real cargo for repairs on October9, superseding the proposed free repair parts. The first cart repair should consume actual Timber for its wheel and plank, identify available sources and show each unit spent. Existing spilled-supply props remain separate non-tradable matching objects. Depleted salvage cannot be a repair's only supplier; markets and renewable village production provide alternatives. A bridge repair opens an optional shortcut; it must not block the village's ordinary route or strand players.
 
 **Reward and scope.** The object visibly works, its owner responds, and a modest wage is paid. Initially let the traveller demonstrate the repaired wheel in place. Moving carts and general vehicle physics are unnecessary. Repair sockets and bounded site state are new; resource work and durable payment provide existing foundations.
 

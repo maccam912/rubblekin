@@ -16,6 +16,7 @@ player-profiles.json
 
 # Keep only the curated screenshots linked from the project documentation.
 /artifacts/*
+!/artifacts/work-full-cargo-touch.png
 !/artifacts/activity-map-choices-touch.png
 !/artifacts/activity-map-selected-touch.png
 !/artifacts/work-cargo-reward-touch.png
