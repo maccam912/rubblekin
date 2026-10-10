@@ -5,7 +5,7 @@ Implemented in [tutorials.rs](crates/client/src/tutorials.rs). These are small p
 | Lesson | First interaction | Try it | Completion |
 | --- | --- | --- | --- |
 | Your hotbar | Open Inventory | Choose a pictured block, assign a bottom slot, return to play | Close after assignment |
-| Build & dig | Attempt an edit | Place a block and remove a block you choose | Both edits confirmed for this player |
+| Build & dig | Attempt an edit | Place a block and remove a block you choose | Both direct edit requests confirmed for this player |
 | Find your way | Open Map | Zoom or pan, then return; matching town pictures identify destinations | Return after changing the view |
 | Cargo & coins | Open Cargo | Review cargo and offers, then close; unlimited building stock is separate | Close the panel |
 | A little work | Start accepted work with T/touch Work at its pictured site, or in Cargo | Stay beside the site while its bar fills; moving away cancels | Confirmed coins or cargo reward |
@@ -18,7 +18,7 @@ Implemented in [tutorials.rs](crates/client/src/tutorials.rs). These are small p
 
 Each prompt contains a short explanation and one next action. Desktop and touch instructions name their actual controls. The existing inventory pictures, town emblems, parcel signs, supply silhouettes, puzzle references, work bar and model demonstrations carry the visual explanation. Show me temporarily takes the activity card's space while its animation plays. The parcel lesson finishes when the player returns from Map; the existing parcel picture then keeps the destination visible during the journey. Skip is always available.
 
-Inventory, map, cargo and station prompts sit inside their panels. Supply and stone prompts use the existing picture card. World prompts avoid the hotbar and touch buttons. The paid-work picture and progress bar move below the first-use world lesson while it is visible. In the compact inventory, Search appears after the hotbar lesson is completed or skipped, leaving space for the block pictures and six slots.
+Inventory, map, cargo and station prompts sit inside their panels. Supply and stone prompts use the existing picture card. World prompts avoid the hotbar and touch buttons. The paid-work picture and progress bar move below the first-use world lesson while it is visible. A confirmed payment then shows its actual coin or cargo picture; resource pictures also identify the buy/sell exchange in Cargo. In the compact inventory, Search appears after the hotbar lesson is completed or skipped, leaving space for the block pictures and six slots.
 
 Tap/click **Skip**, or press **F3**, to dismiss the visible lesson. **Menu → Teach me again** clears tutorial completion for the current character on this device; the next interaction reintroduces the appropriate lesson. The full Controls reference remains available from Menu/H. Player sessions start with that reference and the inspector closed; observers retain their previous reference.
 

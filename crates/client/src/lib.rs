@@ -33,6 +33,7 @@ mod terrain;
 mod terrain_albedo;
 mod terrain_material;
 mod touch;
+mod trade_pictures;
 mod tutorials;
 mod ui;
 mod village_details;
@@ -423,6 +424,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .add_plugins(terrain_material::TerrainMaterialPlugin)
         .add_plugins(sky::SkyPlugin)
         .init_resource::<block_textures::BlockIcons>()
+        .init_resource::<trade_pictures::TradePictures>()
         .add_systems(First, platform::frame_time.before(bevy::time::TimeSystems))
         .add_systems(First, platform::activity_exit)
         .add_message::<join::MenuKey>()
@@ -671,9 +673,12 @@ fn receive_network(
                 session.habitats = habitats;
             }
             ServerMessage::BlockChanged {
-                player_id, edit, ..
+                request_id,
+                player_id,
+                edit,
             } => {
                 if player_id == session.id
+                    && request_id != 0
                     && let Some(t) = tutorials.as_deref_mut()
                 {
                     t.signal(tutorials::Signal::Edit(edit.block));
@@ -725,30 +730,11 @@ fn receive_network(
                 notice,
                 accepted,
             } => {
-                if let Some(panel) = &mut market {
-                    if accepted
-                        && work.active.is_none()
-                        && panel.active_work().is_some_and(|progress| {
-                            panel.ledger.as_ref().is_some_and(|old| {
-                                use rubblekin_core::economy::{WorkReward, resource_index};
-                                ledger.revision > old.revision
-                                    && match progress.offer.reward {
-                                        WorkReward::Coins(amount) => {
-                                            ledger.coins.checked_sub(old.coins) == Some(amount)
-                                        }
-                                        WorkReward::Cargo { kind, amount } => {
-                                            ledger.cargo[resource_index(kind)]
-                                                .checked_sub(old.cargo[resource_index(kind)])
-                                                == Some(amount)
-                                        }
-                                    }
-                            })
-                        })
-                        && let Some(t) = tutorials.as_deref_mut()
-                    {
-                        t.signal(tutorials::Signal::Finished(tutorials::Lesson::Work));
-                    }
-                    panel.work_reply(request_id, work, ledger, notice.clone(), accepted);
+                if let Some(panel) = &mut market
+                    && panel.work_reply(request_id, work, ledger, notice.clone(), accepted)
+                    && let Some(t) = tutorials.as_deref_mut()
+                {
+                    t.signal(tutorials::Signal::Finished(tutorials::Lesson::Work));
                 }
                 if !notice.is_empty() {
                     session.status = notice;

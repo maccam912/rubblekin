@@ -16,6 +16,8 @@ player-profiles.json
 
 # Keep only the curated screenshots linked from the project documentation.
 /artifacts/*
+!/artifacts/work-cargo-reward-touch.png
+!/artifacts/pictured-market-touch.png
 !/artifacts/paid-work-offer-touch.png
 !/artifacts/paid-work-progress-touch.png
 !/artifacts/paid-work-lesson-touch.png

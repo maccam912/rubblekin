@@ -46,6 +46,7 @@ pub(crate) struct MarketPanel {
     gesture: Option<Gesture>,
     focused: Option<Action>,
     pub(crate) completed_delivery: Option<rubblekin_core::economy::DeliveryContract>,
+    completed_work: Option<(WorkReward, Option<f64>)>,
 }
 
 impl Default for MarketPanel {
@@ -70,6 +71,7 @@ impl Default for MarketPanel {
             gesture: None,
             focused: None,
             completed_delivery: None,
+            completed_work: None,
         }
     }
 }
@@ -141,7 +143,41 @@ impl MarketPanel {
         ledger: PlayerEconomy,
         notice: String,
         accepted: bool,
-    ) {
+    ) -> bool {
+        let mut completed = false;
+        if (request_id == 0 || request_id > self.work_reply_id)
+            && accepted
+            && work.active.is_none()
+            && let Some(active) = &self.work.active
+            && let Some(old) = &self.ledger
+            && ledger.revision > old.revision
+            && ledger.delivery == old.delivery
+        {
+            let reward = match active.offer.reward {
+                WorkReward::Coins(coins)
+                    if ledger.coins.checked_sub(old.coins) == Some(coins)
+                        && ledger.cargo == old.cargo =>
+                {
+                    Some(WorkReward::Coins(coins))
+                }
+                WorkReward::Cargo { kind, .. } if ledger.coins == old.coins => {
+                    let index = resource_index(kind);
+                    ledger.cargo[index]
+                        .checked_sub(old.cargo[index])
+                        .filter(|amount| (1..=CARGO_CAPACITY).contains(amount))
+                        .filter(|_| {
+                            (0..RESOURCES.len())
+                                .all(|i| i == index || ledger.cargo[i] == old.cargo[i])
+                        })
+                        .map(|amount| WorkReward::Cargo { kind, amount })
+                }
+                _ => None,
+            };
+            if let Some(reward) = reward {
+                self.completed_work = Some((reward, None));
+                completed = true;
+            }
+        }
         if self
             .ledger
             .as_ref()
@@ -152,7 +188,7 @@ impl MarketPanel {
         // Requested responses cannot revive work after a newer cancellation.
         // Unsolicited progress/completion shares the same ordered TCP stream.
         if request_id != 0 && request_id <= self.work_reply_id {
-            return;
+            return false;
         }
         self.work_reply_id = self.work_reply_id.max(request_id);
         self.work = work;
@@ -167,6 +203,7 @@ impl MarketPanel {
         } else if !notice.is_empty() {
             self.notice = notice;
         }
+        completed
     }
 
     fn work_action(&self, action: Action) -> Option<WorkAction> {
@@ -211,7 +248,17 @@ impl MarketPanel {
         if self.work_seen_version != self.work_version {
             self.work_seen_version = self.work_version;
             self.work_received_at = now;
+            if let Some((_, expires)) = &mut self.completed_work
+                && expires.is_none()
+            {
+                *expires = Some(now + 4.);
+            }
         }
+    }
+
+    pub(crate) fn recent_reward(&self, now: f64) -> Option<WorkReward> {
+        self.completed_work
+            .and_then(|(reward, expires)| expires.filter(|end| now < *end).map(|_| reward))
     }
 
     pub(crate) fn nearby_work(&self, session: &Session, now: f64) -> Option<&WorkOffer> {
@@ -367,6 +414,26 @@ pub(crate) struct MarketRoot;
 struct Panel;
 #[derive(Component)]
 pub(crate) struct MarketScroll;
+
+#[derive(Component, Clone, Copy)]
+pub(crate) enum TradePicture {
+    Resource(ResourceKind),
+    Coins,
+    Arrow,
+}
+
+fn trade_picture(picture: TradePicture, size: f32) -> impl Bundle {
+    (
+        picture,
+        ImageNode::default(),
+        Node {
+            width: px(size),
+            height: px(size),
+            flex_shrink: 0.,
+            ..default()
+        },
+    )
+}
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Action {
     Close,
@@ -564,8 +631,11 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                     crate::tutorials::panel(panel, &font, crate::tutorials::Context::Market);
                     panel.spawn((Label::Title, Text::new("Cargo & work"), TextFont::from_font_size(24.).with_font(font.clone()),
                         TextColor(Color::srgb(0.95, 0.83, 0.56)), Node { flex_shrink: 0., ..default() }));
-                    panel.spawn((Label::Wallet, Text::new("Loading your cargo…"), TextFont::from_font_size(18.).with_font(font.clone()),
-                        TextColor(Color::srgb(0.9, 0.94, 0.86)), Node { flex_shrink: 0., ..default() }));
+                    panel.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
+                        row.spawn(trade_picture(TradePicture::Coins, 28.));
+                        row.spawn((Label::Wallet, Text::new("Loading your cargo…"), TextFont::from_font_size(18.).with_font(font.clone()),
+                            TextColor(Color::srgb(0.9, 0.94, 0.86))));
+                    });
                     panel.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
                         for action in [Action::Close, Action::Quantity(1), Action::Quantity(5), Action::Refresh] {
                             row.spawn(button(action)).with_child(label(action, &font));
@@ -607,10 +677,29 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                             body.spawn(Node { flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center,
                                 column_gap: px(8), row_gap: px(6), padding: UiRect::vertical(px(4)), flex_shrink: 0., ..default() })
                                 .with_children(|row| {
+                                    row.spawn(trade_picture(TradePicture::Resource(kind), 40.));
                                     row.spawn((Label::Goods(kind), Text::new(kind.name()), TextFont::from_font_size(16.).with_font(font.clone()),
-                                        TextColor(Color::srgb(0.90, 0.94, 0.86)), Node { min_width: px(220), flex_grow: 1., ..default() }));
+                                        TextColor(Color::srgb(0.90, 0.94, 0.86)), Node { min_width: px(160), flex_grow: 1., ..default() }));
                                     for action in [Action::Buy(kind), Action::Sell(kind)] {
-                                        row.spawn(button(action)).with_child(label(action, &font));
+                                        row.spawn(button(action)).insert(Node {
+                                            min_width: px(142), min_height: px(78),
+                                            padding: UiRect::axes(px(10), px(8)), border: UiRect::all(px(2)),
+                                            border_radius: BorderRadius::all(px(6)),
+                                            flex_direction: FlexDirection::Column, row_gap: px(4),
+                                            align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default()
+                                        }).with_children(|b| {
+                                            b.spawn(Node { align_items: AlignItems::Center, column_gap: px(4), ..default() }).with_children(|pictures| {
+                                                let (from, to) = if matches!(action, Action::Buy(_)) {
+                                                    (TradePicture::Coins, TradePicture::Resource(kind))
+                                                } else {
+                                                    (TradePicture::Resource(kind), TradePicture::Coins)
+                                                };
+                                                pictures.spawn(trade_picture(from, 28.));
+                                                pictures.spawn(trade_picture(TradePicture::Arrow, 20.));
+                                                pictures.spawn(trade_picture(to, 28.));
+                                            });
+                                            b.spawn(label(action, &font));
+                                        });
                                     }
                                 });
                         }
@@ -1106,11 +1195,13 @@ pub(crate) fn hud_text(
     text
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn refresh(
     panel: Res<MarketPanel>,
     session: Res<Session>,
     world: Res<VoxelWorld>,
+    pictures: Option<Res<crate::trade_pictures::TradePictures>>,
+    mut icons: Query<(&TradePicture, &mut ImageNode)>,
     mut roots: Query<&mut Node, With<MarketRoot>>,
     mut buttons: Query<
         (&Action, &mut Node, &mut BackgroundColor, &mut BorderColor),
@@ -1118,6 +1209,15 @@ pub(crate) fn refresh(
     >,
     mut labels: Query<(&Label, &mut Text)>,
 ) {
+    if let Some(pictures) = pictures {
+        for (picture, mut image) in &mut icons {
+            image.image = match picture {
+                TradePicture::Resource(kind) => pictures.resource(*kind),
+                TradePicture::Coins => pictures.coins.clone(),
+                TradePicture::Arrow => pictures.arrow.clone(),
+            };
+        }
+    }
     let nearby = nearby_market(&session, &world);
     let market = panel.available_market(nearby);
     for mut root in &mut roots {
@@ -1256,6 +1356,164 @@ pub(crate) fn refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn work_reward_picture_requires_confirmed_completion_and_actual_ledger_gain() {
+        for reward in [
+            WorkReward::Coins(2),
+            WorkReward::Cargo {
+                kind: ResourceKind::Stone,
+                amount: 1,
+            },
+        ] {
+            for accepted in [false, true] {
+                for paid in [false, true] {
+                    let old = PlayerEconomy {
+                        revision: 4,
+                        coins: 10,
+                        ..default()
+                    };
+                    let mut offer = work_offer();
+                    offer.reward = reward;
+                    let mut panel = MarketPanel {
+                        ledger: Some(old.clone()),
+                        ..default()
+                    };
+                    panel.work_reply(
+                        0,
+                        WorkState {
+                            offer: Some(offer.clone()),
+                            active: Some(WorkProgress {
+                                offer,
+                                elapsed_seconds: 4.,
+                            }),
+                        },
+                        old.clone(),
+                        String::new(),
+                        true,
+                    );
+                    let mut ledger = old;
+                    if paid {
+                        ledger.revision += 1;
+                        match reward {
+                            WorkReward::Coins(coins) => ledger.coins += coins,
+                            WorkReward::Cargo { kind, amount } => {
+                                ledger.cargo[resource_index(kind)] += amount
+                            }
+                        }
+                    }
+                    panel.work_reply(
+                        0,
+                        WorkState::default(),
+                        ledger.clone(),
+                        String::new(),
+                        accepted,
+                    );
+                    panel.observe_work_reply(10.);
+                    assert_eq!(
+                        panel.recent_reward(10.),
+                        (accepted && paid).then_some(reward)
+                    );
+                    // Unsolicited duplicate completion and passive reads cannot renew the receipt.
+                    panel.work_reply(0, WorkState::default(), ledger, String::new(), true);
+                    panel.observe_work_reply(13.);
+                    assert!(panel.recent_reward(14.).is_none());
+                    panel.clear();
+                    assert!(panel.recent_reward(10.).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn harvest_receipt_pictures_actual_reduced_yield_and_reconnect_does_not_replay_it() {
+        let old = PlayerEconomy {
+            revision: 8,
+            ..default()
+        };
+        let mut offer = work_offer();
+        offer.site.kind = WorkKind::HarvestField;
+        offer.reward = WorkReward::Cargo {
+            kind: ResourceKind::Food,
+            amount: 12,
+        };
+        let mut panel = MarketPanel::default();
+        panel.work_reply(
+            0,
+            WorkState {
+                offer: Some(offer.clone()),
+                active: Some(WorkProgress {
+                    offer,
+                    elapsed_seconds: 5.,
+                }),
+            },
+            old.clone(),
+            String::new(),
+            true,
+        );
+        let mut actual = old;
+        actual.revision += 1;
+        actual.cargo[resource_index(ResourceKind::Food)] = 6;
+        panel.work_reply(0, WorkState::default(), actual.clone(), String::new(), true);
+        panel.observe_work_reply(2.);
+        assert_eq!(
+            panel.recent_reward(2.),
+            Some(WorkReward::Cargo {
+                kind: ResourceKind::Food,
+                amount: 6
+            })
+        );
+        let mut rejoined = MarketPanel::default();
+        rejoined.work_reply(0, WorkState::default(), actual, String::new(), true);
+        rejoined.observe_work_reply(2.);
+        assert!(rejoined.recent_reward(2.).is_none());
+    }
+
+    #[test]
+    fn unrelated_or_stale_wallet_updates_cannot_picture_a_work_reward() {
+        for mode in 0..3 {
+            let old = PlayerEconomy {
+                revision: 5,
+                coins: 10,
+                ..default()
+            };
+            let offer = work_offer();
+            let mut panel = MarketPanel {
+                work_reply_id: 2,
+                ..default()
+            };
+            panel.work_reply(
+                0,
+                WorkState {
+                    offer: Some(offer.clone()),
+                    active: Some(WorkProgress {
+                        offer,
+                        elapsed_seconds: 4.,
+                    }),
+                },
+                old.clone(),
+                String::new(),
+                true,
+            );
+            let mut ledger = old;
+            ledger.coins += 2;
+            if mode != 0 {
+                ledger.revision += 1;
+            }
+            if mode == 1 {
+                ledger.cargo[0] = 1;
+            }
+            panel.work_reply(
+                if mode == 2 { 1 } else { 0 },
+                WorkState::default(),
+                ledger,
+                String::new(),
+                true,
+            );
+            panel.observe_work_reply(1.);
+            assert!(panel.recent_reward(1.).is_none());
+        }
+    }
+
     #[test]
     fn receiving_animation_requires_a_matching_confirmed_paid_delivery() {
         let job = offer();

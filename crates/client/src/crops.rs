@@ -138,6 +138,17 @@ pub(crate) fn visible_plant_parts(
         (position.y as f32 + 1.0) * CELL_SIZE,
         (position.z as f32 + 0.5) * CELL_SIZE,
     );
+    plant_parts(p, stage, kind).filter(move |_| visible)
+}
+
+/// The same food shapes serve field meshes, inspection and cargo pictures.
+pub(crate) fn plant_parts(
+    p: Vec3,
+    stage: u8,
+    kind: CropKind,
+) -> impl Iterator<Item = (Vec3, Vec3, [f32; 4])> {
+    let phase = stage.saturating_sub(1).min(5);
+    let height = 0.12 + f32::from(phase) * 0.14;
     let green = [0.35, 0.56, 0.20, 1.0];
     let mature = phase >= 4;
     let parts = match kind {
@@ -196,7 +207,7 @@ pub(crate) fn visible_plant_parts(
             ]
         }
     };
-    parts.into_iter().flatten().filter(move |_| visible)
+    parts.into_iter().flatten()
 }
 
 #[cfg(test)]

@@ -36,12 +36,17 @@ fn bounds(size: Vec2, touch: bool, teaching: Option<Rect>) -> Rect {
     card
 }
 
-fn offer<'a>(
+enum Cue<'a> {
+    Work(&'a WorkOffer, Option<f32>),
+    Reward(WorkReward),
+}
+
+fn cue<'a>(
     panel: &'a MarketPanel,
     session: &Session,
     world: &VoxelWorld,
     now: f64,
-) -> Option<(&'a WorkOffer, Option<f32>)> {
+) -> Option<Cue<'a>> {
     if session.help
         || session.inspector
         || session.observer.is_some()
@@ -52,17 +57,20 @@ fn offer<'a>(
         return None;
     }
     if let Some(active) = panel.active_work() {
-        return crate::work_animation::can_pose(session, active).then_some((
+        return crate::work_animation::can_pose(session, active).then_some(Cue::Work(
             &active.offer,
             Some((active.elapsed_seconds / active.offer.duration_seconds.max(0.01)).clamp(0., 1.)),
         ));
+    }
+    if let Some(reward) = panel.recent_reward(now) {
+        return Some(Cue::Reward(reward));
     }
     if crate::activities::touch_opportunity(session) {
         return None;
     }
     panel
         .contextual_work(session, world, now)
-        .map(|offer| (offer, None))
+        .map(|offer| Cue::Work(offer, None))
 }
 
 pub(crate) fn panel_at(
@@ -74,7 +82,7 @@ pub(crate) fn panel_at(
     now: f64,
     teaching: Option<Rect>,
 ) -> bool {
-    offer(panel, session, world, now).is_some() && bounds(size, true, teaching).contains(position)
+    cue(panel, session, world, now).is_some() && bounds(size, true, teaching).contains(position)
 }
 
 pub(crate) fn setup(
@@ -168,6 +176,7 @@ pub(crate) fn update(
     world: Res<VoxelWorld>,
     panel: Res<MarketPanel>,
     pictures: Res<Pictures>,
+    trade: Res<crate::trade_pictures::TradePictures>,
     time: Res<Time>,
     touch: Res<TouchControls>,
     tutorials: Res<crate::tutorials::Tutorials>,
@@ -199,7 +208,7 @@ pub(crate) fn update(
                 && !travel.open()
                 && !travel.input_blocked
         })
-        .and_then(|_| offer(&panel, &session, &world, time.elapsed_secs_f64()));
+        .and_then(|_| cue(&panel, &session, &world, time.elapsed_secs_f64()));
     for mut root in &mut roots {
         root.display = if visible.is_some() {
             Display::Flex
@@ -216,28 +225,48 @@ pub(crate) fn update(
             root.top = px(rect.min.y);
         }
     }
-    let Some((offer, fraction)) = visible else {
+    let Some(visible) = visible else {
         return;
     };
-    for mut image in &mut tools {
-        image.image = pictures.0[crate::work_tools::tool_index(offer.site.kind)].clone();
-    }
-    let reward = match offer.reward {
-        WorkReward::Coins(n) => format!("{n} coins"),
-        WorkReward::Cargo { kind, amount } => format!("{amount} {}", kind.name()),
+    let (picture, caption, fraction, target) = match visible {
+        Cue::Reward(reward) => {
+            let (picture, caption) = match reward {
+                WorkReward::Coins(coins) => (trade.coins.clone(), format!("Earned {coins} coins")),
+                WorkReward::Cargo { kind, amount } => (
+                    trade.resource(kind),
+                    format!("+{amount} {}\nSell at a market", kind.name()),
+                ),
+            };
+            (picture, caption, Some(1.), None)
+        }
+        Cue::Work(offer, fraction) => {
+            let reward = match offer.reward {
+                WorkReward::Coins(n) => format!("{n} coins"),
+                WorkReward::Cargo { kind, amount } => format!("{amount} {}", kind.name()),
+            };
+            let caption = format!(
+                "{}\n{} · {}",
+                title(offer.site.kind),
+                if fraction.is_some() {
+                    "Stay here"
+                } else if touch.enabled {
+                    "Work"
+                } else {
+                    "T: Work"
+                },
+                reward
+            );
+            (
+                pictures.0[crate::work_tools::tool_index(offer.site.kind)].clone(),
+                caption,
+                fraction,
+                Some(offer.position),
+            )
+        }
     };
-    let caption = format!(
-        "{}\n{} · {}",
-        title(offer.site.kind),
-        if fraction.is_some() {
-            "Stay here"
-        } else if touch.enabled {
-            "Work"
-        } else {
-            "T: Work"
-        },
-        reward
-    );
+    for mut image in &mut tools {
+        image.image = picture.clone();
+    }
     for mut text in &mut captions {
         if text.0 != caption {
             text.0.clone_from(&caption);
@@ -247,9 +276,11 @@ pub(crate) fn update(
         bar.width = percent(fraction.unwrap_or(0.) * 100.);
     }
     // Point out the actual authoritative target; no speculative distant job marker.
-    gizmos.cube(
-        Transform::from_translation(Vec3::from_array(offer.position) + Vec3::Y * 0.3)
-            .with_scale(Vec3::new(0.7, 0.6, 0.7)),
-        Color::srgb(0.95, 0.76, 0.30),
-    );
+    if let Some(position) = target {
+        gizmos.cube(
+            Transform::from_translation(Vec3::from_array(position) + Vec3::Y * 0.3)
+                .with_scale(Vec3::new(0.7, 0.6, 0.7)),
+            Color::srgb(0.95, 0.76, 0.30),
+        );
+    }
 }
