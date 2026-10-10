@@ -6,7 +6,9 @@ use crate::{
 };
 use rubblekin_core::{
     activities::*,
+    economy::resource_index,
     protocol::ServerMessage,
+    settlement::ResourceKind,
     world::{CELL_SIZE, World},
 };
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,16 @@ struct Record {
     slots: [Slot; 3],
     faces: [u8; 3],
     complete: bool,
+    #[serde(skip)]
+    working: Option<RepairWork>,
+}
+#[derive(Debug, Clone)]
+struct RepairWork {
+    profile: String,
+    start_position: [f32; 3],
+    started_at: Option<f64>,
+    elapsed_seconds: f32,
+    last_update: f64,
 }
 impl Record {
     fn new(plan: ActivityPlan) -> Self {
@@ -43,6 +55,7 @@ impl Record {
             slots: std::array::from_fn(|_| Slot::Home),
             faces,
             complete: false,
+            working: None,
         }
     }
 }
@@ -96,11 +109,13 @@ impl Activities {
                 ids.insert(p.id)
                     && match p.site_id {
                         None => {
-                            p.id == if p.kind == ActivityKind::SpilledSupplies {
-                                1
-                            } else {
-                                2
-                            }
+                            p.kind != ActivityKind::CartRepair
+                                && p.id
+                                    == if p.kind == ActivityKind::SpilledSupplies {
+                                        1
+                                    } else {
+                                        2
+                                    }
                         }
                         Some(id) => {
                             sites.insert(id)
@@ -151,11 +166,20 @@ impl Activities {
                             r.slots.iter().all(|s| *s == Slot::Home)
                                 && r.complete == (r.faces == p.answer)
                         }
+                        ActivityKind::CartRepair => {
+                            p.recipe_version >= 3
+                                && r.slots.iter().all(|s| !matches!(s, Slot::Held(_)))
+                                && (!matches!(r.slots[2], Slot::Placed(_))
+                                    || r.slots[..2].iter().all(|s| matches!(s, Slot::Placed(_))))
+                                && r.complete
+                                    == r.slots.iter().all(|s| matches!(s, Slot::Placed(_)))
+                        }
                     }
             })
     }
     pub fn recover(&mut self) {
         for r in &mut self.records {
+            r.working = None;
             let mut changed = false;
             for s in &mut r.slots {
                 if matches!(s, Slot::Held(_)) {
@@ -172,6 +196,10 @@ impl Activities {
         let mut changed = false;
         for r in &mut self.records {
             let mut local = false;
+            if r.working.as_ref().is_some_and(|w| w.profile == profile) {
+                r.working = None;
+                local = true;
+            }
             for s in &mut r.slots {
                 if matches!(s,Slot::Held(id) if id==profile) {
                     *s = Slot::Home;
@@ -198,6 +226,15 @@ impl Activities {
                 faces: r.faces,
                 complete: r.complete,
                 available: r.plan.points().all(|p| supported(world, *p)),
+                repair: r.working.as_ref().and_then(|w| {
+                    connections
+                        .iter()
+                        .find(|(_, c)| !c.dead && c.profile_id.as_ref() == Some(&w.profile))
+                        .map(|(id, _)| RepairProgress {
+                            player_id: *id,
+                            elapsed_seconds: w.elapsed_seconds,
+                        })
+                }),
                 props: std::array::from_fn(|i| match &r.slots[i] {
                     Slot::Home => PropState::Home,
                     Slot::Placed(_) => PropState::Placed,
@@ -223,6 +260,9 @@ impl Activities {
                 .iter()
                 .any(|s| matches!(s,Slot::Held(h) if h==profile))
         });
+        if self.is_working(profile) {
+            return Err("Finish your repair or step away first.".into());
+        }
         let r = self
             .records
             .iter_mut()
@@ -233,6 +273,12 @@ impl Activities {
         }
         if r.complete {
             return Err("This activity is already finished.".into());
+        }
+        if r.revision >= u64::MAX - 2 {
+            return Err("This activity cannot accept another change.".into());
+        }
+        if r.working.is_some() {
+            return Err("Someone is finishing this repair.".into());
         }
         if action == ActivityAction::Return {
             if !r
@@ -262,6 +308,12 @@ impl Activities {
             }
             ActivityAction::Turn(i) if r.plan.kind == ActivityKind::ShapeStones => {
                 (i as usize, r.plan.sockets.get(i as usize))
+            }
+            ActivityAction::Contribute(i) if r.plan.kind == ActivityKind::CartRepair && i < 2 => {
+                (i as usize, r.plan.sockets.get(i as usize))
+            }
+            ActivityAction::Hammer if r.plan.kind == ActivityKind::CartRepair => {
+                (2, r.plan.sockets.get(2))
             }
             _ => return Err("That action does not fit this activity.".into()),
         };
@@ -300,10 +352,39 @@ impl Activities {
                 r.faces[i] = (r.faces[i] + 1) % 3;
                 r.complete = r.faces == r.plan.answer;
             }
+            ActivityAction::Contribute(_) => {
+                if holding {
+                    return Err("Place or return your carried supply first.".into());
+                }
+                if r.slots[i] != Slot::Home {
+                    return Err("That part is already fitted. Your Timber stays in cargo.".into());
+                }
+                r.slots[i] = Slot::Placed(profile.into());
+                reward = 2;
+            }
+            ActivityAction::Hammer => {
+                if holding || !r.slots[..2].iter().all(|s| matches!(s, Slot::Placed(_))) {
+                    return Err(
+                        "Fit the wheel and plank first, then finish with the hammer.".into(),
+                    );
+                }
+                r.working = Some(RepairWork {
+                    profile: profile.into(),
+                    start_position: position,
+                    started_at: None,
+                    elapsed_seconds: 0.,
+                    last_update: 0.,
+                });
+            }
             ActivityAction::Return => unreachable!(),
         }
         r.revision += 1;
         Ok(reward)
+    }
+    pub(crate) fn is_working(&self, profile: &str) -> bool {
+        self.records
+            .iter()
+            .any(|r| r.working.as_ref().is_some_and(|w| w.profile == profile))
     }
 }
 pub(crate) fn send(
@@ -351,6 +432,93 @@ pub(crate) fn release_disconnected(
     }
     changed
 }
+/// Progress is transient; installed parts and their receipts are durable.
+/// Persist every completion before broadcasting it or its private wage.
+pub(crate) fn advance_repairs(
+    connections: &mut BTreeMap<u64, Connection>,
+    sim: &mut Simulation,
+    config: &ServerConfig,
+) -> io::Result<()> {
+    let mut changed = false;
+    let mut completed = false;
+    let mut replies = Vec::new();
+    for r in &mut sim.activities.records {
+        let Some(mut work) = r.working.take() else {
+            continue;
+        };
+        let participant = connections
+            .iter()
+            .find(|(_, c)| !c.dead && c.profile_id.as_ref() == Some(&work.profile));
+        let valid = participant.is_some_and(|(_, c)| {
+            c.player.as_ref().is_some_and(|p| {
+                c.active_work.is_none()
+                    && p.ride.is_none()
+                    && !p.gliding
+                    && p.body.on_ground
+                    && p.body
+                        .velocity
+                        .iter()
+                        .all(|v| v.is_finite() && v.abs() < 0.05)
+                    && distance(p.body.position, work.start_position) < 0.8
+                    && r.plan.points().all(|point| supported(&sim.world, *point))
+                    && can_interact(&sim.world, p.body.position, r.plan.sockets[2])
+            })
+        });
+        if !valid {
+            r.revision += 1;
+            changed = true;
+            if let Some((id, _)) = participant {
+                replies.push((
+                    *id,
+                    "Repair stopped. Fitted parts stay in place.".into(),
+                    false,
+                ));
+            }
+            continue;
+        }
+        let started_at = *work.started_at.get_or_insert(sim.world_time);
+        work.elapsed_seconds = (sim.world_time - started_at)
+            .max(0.)
+            .min(REPAIR_SECONDS as f64) as f32;
+        if work.elapsed_seconds >= REPAIR_SECONDS {
+            let ledger = &mut sim.profiles.get_mut(&work.profile).unwrap().ledger;
+            let id = *participant.unwrap().0;
+            if ledger.coins > MAX_COINS - 2 || ledger.revision == u64::MAX {
+                replies.push((
+                    id,
+                    "Your wallet cannot accept the repair wage. Fitted parts stay in place.".into(),
+                    false,
+                ));
+            } else {
+                ledger.coins += 2;
+                ledger.revision += 1;
+                r.slots[2] = Slot::Placed(work.profile);
+                r.complete = true;
+                completed = true;
+                replies.push((id, "Cart repaired: +2 coins".into(), true));
+            }
+            r.revision += 1;
+            changed = true;
+        } else {
+            if sim.world_time - work.last_update >= 0.25 {
+                work.last_update = sim.world_time;
+                changed = true;
+            }
+            r.working = Some(work);
+        }
+    }
+    if completed {
+        checkpoint_players(connections, sim);
+        sim.save(&config.save_path)?;
+    }
+    for (id, notice, accepted) in replies {
+        crate::send_market_state(connections, sim, id, 0, None, notice, accepted);
+    }
+    if changed {
+        broadcast(connections, sim);
+    }
+    Ok(())
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle(
     id: u64,
@@ -385,10 +553,35 @@ pub(crate) fn handle(
             .get(profile)
             .ok_or("Your saved progress is missing.")?
             .ledger;
-        if matches!(action, ActivityAction::Place(_))
-            && (ledger.coins > MAX_COINS - 2 || ledger.revision == u64::MAX)
+        if matches!(
+            action,
+            ActivityAction::Place(_) | ActivityAction::Contribute(_) | ActivityAction::Hammer
+        ) && (ledger.coins > MAX_COINS - 2 || ledger.revision == u64::MAX)
         {
             return Err("Your wallet cannot accept another reward.".into());
+        }
+        if matches!(action, ActivityAction::Contribute(_))
+            && ledger.cargo[resource_index(ResourceKind::Timber)] == 0
+        {
+            return Err(
+                "Needs 1 Timber from cargo. Buy it at a village market or gather timber salvage."
+                    .into(),
+            );
+        }
+        if c.active_work.is_some() {
+            return Err("Finish or cancel your current work first.".into());
+        }
+        if matches!(action, ActivityAction::Hammer)
+            && (!player.body.on_ground
+                || player
+                    .body
+                    .velocity
+                    .iter()
+                    .any(|v| !v.is_finite() || v.abs() > 0.05)
+                || player.ride.is_some()
+                || player.gliding)
+        {
+            return Err("Stand still on the ground beside the cart.".into());
         }
         let reward = sim.activities.apply(
             &sim.world,
@@ -400,6 +593,9 @@ pub(crate) fn handle(
         )?;
         if reward > 0 {
             let ledger = &mut sim.profiles.get_mut(profile).unwrap().ledger;
+            if matches!(action, ActivityAction::Contribute(_)) {
+                ledger.cargo[resource_index(ResourceKind::Timber)] -= 1;
+            }
             ledger.coins += reward;
             ledger.revision += 1;
         }
@@ -417,7 +613,11 @@ pub(crate) fn handle(
                     id,
                     0,
                     None,
-                    "Supply placed: +2 coins".into(),
+                    if matches!(action, ActivityAction::Contribute(_)) {
+                        "Part fitted: spent 1 Timber · +2 coins".into()
+                    } else {
+                        "Supply placed: +2 coins".into()
+                    },
                     true,
                 );
             }
@@ -735,6 +935,11 @@ mod tests {
         let world = World::generate(42, rubblekin_core::world::WorldGeneration::GeographyV6);
         let (_, mut activities, profiles) = fixture();
         activities.records = poi_plans(&world).into_iter().map(Record::new).collect();
+        // Repairs did not exist in recipe1. Only the earlier two families need
+        // migration; cart records are introduced separately by add_poi_plans.
+        activities
+            .records
+            .retain(|r| r.plan.kind != ActivityKind::CartRepair);
         let profile = profiles.keys().next().unwrap();
         for r in &mut activities.records {
             r.plan.recipe_version = 1;
@@ -755,7 +960,7 @@ mod tests {
         let mut restored: Activities = serde_json::from_slice(&bytes).unwrap();
         restored.recover();
         restored.add_poi_plans(&world);
-        assert_eq!(restored.records.len(), before.records.len());
+        assert_eq!(restored.records.len(), poi_plans(&world).len());
         assert!(restored.validate(&world, &profiles));
         for (old, new) in before.records.iter().zip(&restored.records) {
             assert_eq!(old.plan.id, new.plan.id);

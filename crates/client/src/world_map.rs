@@ -1366,6 +1366,7 @@ mod tests {
                 faces: [0; 3],
                 complete: false,
                 available: true,
+                repair: None,
             });
         let button = f
             .app

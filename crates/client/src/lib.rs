@@ -7,6 +7,7 @@ mod airship_motion_tests;
 mod airships;
 mod block_textures;
 mod capture;
+mod cart_repairs;
 mod crash_reporting;
 mod crops;
 mod follow_camera;
@@ -489,7 +490,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         work_animation::animate,
                         (work_tools::update, work_cues::update).chain(),
                         wildlife::update,
-                        (forage::update, activities::update, activities::update_demo).chain(),
+                        (
+                            forage::update,
+                            activities::update,
+                            cart_repairs::update,
+                            activities::update_demo,
+                        )
+                            .chain(),
                         (gliders::update_scene, gliders::animate_whips).chain(),
                         crops::update_crops,
                         inspection::update,

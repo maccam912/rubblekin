@@ -17,7 +17,7 @@ use crate::{
     villages::VillageLife,
 };
 
-const SAVE_VERSION: u32 = 9;
+const SAVE_VERSION: u32 = 10;
 pub(crate) const MAX_EDITS: usize = 100_000;
 
 /// The sidecar remains on disk; this guard releases its OS lock on drop.
@@ -123,7 +123,7 @@ impl Simulation {
                 path.display()
             ))
         })?;
-        if ![1, 2, 3, 4, 5, 6, 7, 8, SAVE_VERSION].contains(&save.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, SAVE_VERSION].contains(&save.version) {
             return Err(invalid(format!(
                 "Unsupported save version {}",
                 save.version

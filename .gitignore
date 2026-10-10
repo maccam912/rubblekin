@@ -125,3 +125,6 @@ __pycache__/
 Thumbs.db
 /.idea/
 /.vscode/
+
+!/artifacts/cart-repair-preview-touch.png
+!/artifacts/cart-repair-complete-touch.png

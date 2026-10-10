@@ -7,13 +7,15 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 pub const ACTIVITY_REACH: f32 = 2.8;
-pub const RECIPE_VERSION: u32 = 2;
+pub const RECIPE_VERSION: u32 = 3;
+pub const REPAIR_SECONDS: f32 = 6.;
 pub const MAX_PLANS: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActivityKind {
     SpilledSupplies,
     ShapeStones,
+    CartRepair,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActivityPlan {
@@ -54,6 +56,13 @@ pub struct ActivitySnapshot {
     pub faces: [u8; 3],
     pub complete: bool,
     pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair: Option<RepairProgress>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RepairProgress {
+    pub player_id: u64,
+    pub elapsed_seconds: f32,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActivityAction {
@@ -61,6 +70,9 @@ pub enum ActivityAction {
     Place(u8),
     Return,
     Turn(u8),
+    /// Fit a cart part using one unit of real Timber cargo.
+    Contribute(u8),
+    Hammer,
 }
 
 pub fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -218,6 +230,7 @@ pub fn site_kind(arrangement: SiteArrangement) -> Option<ActivityKind> {
         SiteArrangement::GrovePortal | SiteArrangement::StoneSpan | SiteArrangement::BrokenRibs => {
             Some(ActivityKind::ShapeStones)
         }
+        SiteArrangement::ExtractionFace => Some(ActivityKind::CartRepair),
         _ => None,
     }
 }
@@ -276,6 +289,13 @@ pub fn at_site(world: &World, site: &SitePlan) -> Option<ActivityPlan> {
             // control. One/two/three raised pips link the pairs without text.
             let clues = [point(0.32, 1.4)?, point(0.62, -1.4)?, point(0.92, 1.4)?];
             (sockets, sockets, Some(clues))
+        }
+        (ActivityKind::CartRepair, _) => {
+            let sockets = [point(0.15, -0.9)?, point(0.15, 0.9)?, point(0.15, 0.)?];
+            if sockets.iter().any(|p| (p[1] - sockets[2][1]).abs() > 0.1) {
+                return None;
+            }
+            (sockets, sockets, None)
         }
     };
     // Verify approach and return for every piece, plus the actual carried route.
@@ -347,7 +367,11 @@ mod tests {
             );
             let sites = &world.settlements().unwrap().composed_sites;
             assert!(activities.len() < sites.len() / 2);
-            for kind in [ActivityKind::SpilledSupplies, ActivityKind::ShapeStones] {
+            for kind in [
+                ActivityKind::SpilledSupplies,
+                ActivityKind::ShapeStones,
+                ActivityKind::CartRepair,
+            ] {
                 assert!(
                     activities.iter().any(|p| p.kind == kind),
                     "seed {seed} needs both activity families"
@@ -394,10 +418,15 @@ mod tests {
                         "The rack belongs on the quarry floor"
                     );
                 }
-                assert!(
-                    distance(p.objects[0], p.objects[2]) > 12.,
-                    "Use the site, not a single pad"
-                );
+                if p.kind == ActivityKind::CartRepair {
+                    assert!(distance(p.sockets[0], p.sockets[1]) > 1.5);
+                    assert!(p.points().all(|v| (v[1] - p.sockets[2][1]).abs() < 0.1));
+                } else {
+                    assert!(
+                        distance(p.objects[0], p.objects[2]) > 12.,
+                        "Use the site, not a single pad"
+                    );
+                }
                 for v in p.points() {
                     assert!(supported(&world, *v));
                     assert!(walk(&world, site.entrance(), *v));

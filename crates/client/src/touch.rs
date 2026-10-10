@@ -1693,6 +1693,7 @@ mod activity_touch_tests {
             faces: [0; 3],
             complete: false,
             available: true,
+            repair: None,
         }];
         let layout = Layout::for_session(Vec2::new(840., 400.), &session, false);
         for action in [Action::Activity, Action::ActivityDemo] {

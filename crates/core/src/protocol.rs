@@ -8,7 +8,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 // Composed POI geometry and visual activity state require matching rebuilt peers.
-pub const PROTOCOL_VERSION: u32 = 26;
+pub const PROTOCOL_VERSION: u32 = 27;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;

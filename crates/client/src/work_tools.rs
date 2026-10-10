@@ -90,10 +90,7 @@ pub(crate) fn update(
         *visibility = Visibility::Hidden;
     }
     let Some(session) = session else { return };
-    let Some(work) = panel
-        .active_work()
-        .filter(|work| crate::work_animation::can_pose(&session, work))
-    else {
+    let Some((kind, _)) = crate::work_animation::active_pose(&session, &panel) else {
         return;
     };
     let Some(avatar) = avatars.players.get(&session.id) else {
@@ -113,7 +110,7 @@ pub(crate) fn update(
             }),
         )
     });
-    let handle = handles[tool_index(work.offer.site.kind)].clone();
+    let handle = handles[tool_index(kind)].clone();
     if let Some((entity, mut mesh, mut visibility, parent)) = tools.iter_mut().next() {
         if mesh.0 != handle {
             mesh.0 = handle;

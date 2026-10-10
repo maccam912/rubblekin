@@ -73,7 +73,8 @@ impl Client {
         });
         let reply = self.until(|m| matches!(m, ServerMessage::AdminCommandResult { .. }));
         assert!(
-            matches!(reply,ServerMessage::AdminCommandResult {text} if text.contains("Teleported"))
+            matches!(reply,ServerMessage::AdminCommandResult {ref text} if text.contains("Teleported")),
+            "{reply:?}"
         );
     }
     fn action(
@@ -96,8 +97,14 @@ impl Client {
             ServerMessage::ActivityState {
                 accepted,
                 activities,
+                notice,
                 ..
-            } => (accepted, activities),
+            } => {
+                if !accepted {
+                    eprintln!("Activity {action:?} rejected: {notice}");
+                }
+                (accepted, activities)
+            }
             _ => unreachable!(),
         }
     }
@@ -107,6 +114,248 @@ impl Drop for Save {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+#[test]
+fn cart_repairs_spend_real_cargo_share_parts_and_pay_only_durable_contributions() {
+    let save = Save(std::env::temp_dir().join(format!("rubblekin-cart-{}-{}",
+        std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())));
+    let config = ServerConfig {
+        bind_addr: "127.0.0.1:0".into(),
+        save_path: save.0.join("world.json"),
+        seed: 42,
+        generation: WorldGeneration::GeographyV6,
+        allow_admin: true,
+    };
+    let p = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let q = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let server = spawn(config.clone()).unwrap();
+    let mut first = Client::connect(server.addr, p);
+    let states = first.state();
+    let index = states
+        .iter()
+        .position(|a| a.plan.kind == ActivityKind::CartRepair)
+        .expect("Seed42 needs a supported cart repair");
+    let plan = states[index].plan.clone();
+    let mut second = Client::connect(server.addr, q);
+    second.state();
+    first.tp(plan.sockets[0]);
+    assert!(
+        !first
+            .action(&states[index], ActivityAction::Contribute(0))
+            .0,
+        "No free parts or creative-block spending"
+    );
+    assert!(!first.action(&states[index], ActivityAction::Hammer).0);
+    drop(first);
+    drop(second);
+    server.stop().unwrap();
+    // Seed actual tradable Timber in two independent ledgers; existing market
+    // tests cover earning and buying it. Never seed prop ownership as cargo.
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    saved["profiles"][p]["ledger"]["cargo"][1] = 2.into();
+    saved["profiles"][q]["ledger"]["cargo"][1] = 1.into();
+    fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let mut first = Client::connect(server.addr, p);
+    let mut states = first.state();
+    let mut second = Client::connect(server.addr, q);
+    second.state();
+    assert!(
+        !first
+            .action(&states[index], ActivityAction::Contribute(2))
+            .0
+    );
+    let stale = states[index].clone();
+    first.tp(plan.sockets[0]);
+    let (ok, s) = first.action(&states[index], ActivityAction::Contribute(0));
+    assert!(ok);
+    states = s;
+    let spent: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(spent["profiles"][p]["ledger"]["cargo"][1], 1);
+    assert_eq!(spent["profiles"][p]["ledger"]["coins"], 2);
+    second.tp(plan.sockets[1]);
+    assert!(
+        !second.action(&stale, ActivityAction::Contribute(0)).0,
+        "Stale peer cannot spend or repay"
+    );
+    assert!(
+        !second
+            .action(&states[index], ActivityAction::Contribute(0))
+            .0
+    );
+    second.tp(plan.sockets[1]);
+    let (ok, s) = second.action(&states[index], ActivityAction::Contribute(1));
+    assert!(ok);
+    states = s;
+    first.tp(plan.sockets[2]);
+    thread::sleep(Duration::from_millis(600));
+    let (ok, s) = first.action(&states[index], ActivityAction::Hammer);
+    assert!(ok);
+    states = s;
+    assert!(
+        states[index]
+            .repair
+            .is_some_and(|w| w.player_id == first.id)
+    );
+    assert!(
+        !second.action(&states[index], ActivityAction::Hammer).0,
+        "Only one hammer worker"
+    );
+    first.tp(plan.objects[0]);
+    states = match first.until(|m| matches!(m, ServerMessage::ActivityState { activities, .. } if activities[index].repair.is_none())) {
+        ServerMessage::ActivityState { activities, .. } => activities, _ => unreachable!()
+    };
+    assert!(!states[index].complete);
+    assert_eq!(&states[index].props[..2], &[PropState::Placed; 2]);
+    second.tp(plan.sockets[2]);
+    thread::sleep(Duration::from_millis(600));
+    let (ok, _) = second.action(&states[index], ActivityAction::Hammer);
+    assert!(ok);
+    drop(second);
+    first.until(|m| matches!(m,ServerMessage::ActivityState {activities,..} if activities[index].repair.is_none()));
+    drop(first);
+    server.stop().unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let mut first = Client::connect(server.addr, p);
+    let mut states = first.state();
+    assert!(states[index].repair.is_none());
+    assert_eq!(&states[index].props[..2], &[PropState::Placed; 2]);
+    first.tp(plan.sockets[2]);
+    thread::sleep(Duration::from_millis(600));
+    let (ok, _) = first.action(&states[index], ActivityAction::Hammer);
+    assert!(ok);
+    states = match first.until(
+        |m| matches!(m,ServerMessage::ActivityState {activities,..} if activities[index].complete),
+    ) {
+        ServerMessage::ActivityState { activities, .. } => activities,
+        _ => unreachable!(),
+    };
+    // Completion has already reached disk when the client sees it.
+    let finished: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(finished["profiles"][p]["ledger"]["coins"], 4);
+    assert_eq!(finished["profiles"][q]["ledger"]["coins"], 2);
+    assert_eq!(finished["profiles"][p]["ledger"]["cargo"][1], 1);
+    assert_eq!(finished["profiles"][q]["ledger"]["cargo"][1], 0);
+    assert!(states[index].repair.is_none());
+    assert!(!first.action(&states[index], ActivityAction::Hammer).0);
+    assert!(
+        !first
+            .action(&states[index], ActivityAction::Contribute(0))
+            .0
+    );
+    drop(first);
+    server.stop().unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let mut first = Client::connect(server.addr, p);
+    let restored = first.state();
+    assert!(restored[index].complete);
+    assert!(!first.action(&restored[index], ActivityAction::Hammer).0);
+    drop(first);
+    server.stop().unwrap();
+    let after: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(
+        after["profiles"][p]["ledger"],
+        finished["profiles"][p]["ledger"]
+    );
+    assert_eq!(
+        after["profiles"][q]["ledger"],
+        finished["profiles"][q]["ledger"]
+    );
+    // Reject impossible hammer receipts instead of silently rebuilding a cart.
+    let mut bad = after;
+    bad["activities"]["records"][index]["slots"][0] = "Home".into();
+    let bytes = serde_json::to_vec(&bad).unwrap();
+    fs::write(&config.save_path, &bytes).unwrap();
+    assert!(spawn(config.clone()).is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), bytes);
+}
+#[test]
+fn failed_cart_save_never_confirms_spent_cargo_or_a_wage() {
+    let save = Save(std::env::temp_dir().join(format!(
+            "rubblekin-cart-save-failure-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+    let config = ServerConfig {
+        bind_addr: "127.0.0.1:0".into(),
+        save_path: save.0.join("world.json"),
+        seed: 42,
+        generation: WorldGeneration::GeographyV6,
+        allow_admin: true,
+    };
+    let profile = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let server = spawn(config.clone()).unwrap();
+    let mut client = Client::connect(server.addr, profile);
+    client.state();
+    drop(client);
+    server.stop().unwrap();
+    let mut saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    saved["profiles"][profile]["ledger"]["cargo"][1] = 1.into();
+    fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let mut client = Client::connect(server.addr, profile);
+    let states = client.state();
+    let a = states
+        .iter()
+        .find(|a| a.plan.kind == ActivityKind::CartRepair)
+        .unwrap();
+    client.tp(a.plan.sockets[0]);
+    let before = fs::read(&config.save_path).unwrap();
+    let temporary = save
+        .0
+        .join(format!(".world.json.{}.tmp", std::process::id()));
+    fs::create_dir(&temporary).unwrap();
+    thread::sleep(Duration::from_millis(160));
+    client.send(ClientMessage::Activity {
+        request_id: 1,
+        activity_id: a.plan.id,
+        revision: a.revision,
+        action: ActivityAction::Contribute(0),
+    });
+    loop {
+        let mut line = String::new();
+        match client.reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let m: ServerMessage = serde_json::from_str(&line).unwrap();
+                assert!(!matches!(
+                    m,
+                    ServerMessage::ActivityState {
+                        request_id: 1,
+                        accepted: true,
+                        ..
+                    }
+                ));
+                assert!(
+                    !matches!(m,ServerMessage::MarketState {ledger,..} if ledger.cargo[1]==0 || ledger.coins>0)
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break,
+            Err(e) => panic!("Expected save-failure disconnect: {e}"),
+        }
+    }
+    assert!(server.stop().is_err());
+    assert_eq!(fs::read(&config.save_path).unwrap(), before);
+    fs::remove_dir(&temporary).unwrap();
+    let server = spawn(config.clone()).unwrap();
+    let mut client = Client::connect(server.addr, profile);
+    let states = client.state();
+    let restored = states.iter().find(|s| s.plan.id == a.plan.id).unwrap();
+    assert_eq!(restored.props, [PropState::Home; 3]);
+    let reply = client.until(|m| matches!(m, ServerMessage::MarketState { .. }));
+    assert!(
+        matches!(reply,ServerMessage::MarketState {ledger,..} if ledger.cargo[1]==1 && ledger.coins==0)
+    );
+    drop(client);
+    server.stop().unwrap();
 }
 #[test]
 fn old_save9_gains_poi_scenes_and_their_identity_and_receipts_survive_restart() {
@@ -149,7 +398,7 @@ fn old_save9_gains_poi_scenes_and_their_identity_and_receipts_survive_restart() 
     old["activities"]["records"] = records.into();
     old["activities"]["records"][0]["slots"][0] = serde_json::json!({"Placed":profile});
     old["profiles"][profile]["ledger"]["coins"] = 2.into();
-    assert_eq!(old["version"], 9);
+    old["version"] = 9.into();
     fs::write(&config.save_path, serde_json::to_vec(&old).unwrap()).unwrap();
     let server = spawn(config.clone()).unwrap();
     let mut client = Client::connect(server.addr, profile);

@@ -545,6 +545,7 @@ fn run(
         let wildlife_elapsed = wildlife_started.elapsed();
         sim.world_time = next_world_time;
         advance_local_work(&mut connections, &mut sim, config)?;
+        activities::advance_repairs(&mut connections, &mut sim, config)?;
         checkpoint_players(&connections, &mut sim);
         let state = ServerMessage::State {
             gliders: sim.gliders.flights.clone(),
@@ -1462,7 +1463,11 @@ fn handle_work(
                 })
             }
             WorkAction::Start { site } => {
-                if connection.active_work.is_some() {
+                if connection.active_work.is_some()
+                    || sim
+                        .activities
+                        .is_working(connection.profile_id.as_ref().unwrap())
+                {
                     return Err("Finish or cancel your current work first.".into());
                 }
                 let active = if site.kind == WorkKind::GatherForage {

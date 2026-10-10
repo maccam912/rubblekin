@@ -5,6 +5,9 @@ use rubblekin_core::economy::{WORK_REACH, WorkKind, WorkProgress};
 use crate::{Avatar, Avatars, Limb, Session, market::MarketPanel};
 
 pub(crate) fn can_pose(session: &Session, work: &WorkProgress) -> bool {
+    can_pose_at(session, work.offer.position)
+}
+fn can_pose_at(session: &Session, position: [f32; 3]) -> bool {
     session.observer.is_none()
         && !session.flying
         && session.ride.is_none()
@@ -15,12 +18,23 @@ pub(crate) fn can_pose(session: &Session, work: &WorkProgress) -> bool {
             .iter()
             .all(|speed| speed.is_finite() && speed.abs() < 0.05)
         && Vec2::new(
-            session.body.position[0] - work.offer.position[0],
-            session.body.position[2] - work.offer.position[2],
+            session.body.position[0] - position[0],
+            session.body.position[2] - position[2],
         )
         .length_squared()
             <= WORK_REACH.powi(2)
-        && (session.body.position[1] - work.offer.position[1]).abs() <= 1.5
+        && (session.body.position[1] - position[1]).abs() <= 1.5
+}
+pub(crate) fn active_pose(session: &Session, market: &MarketPanel) -> Option<(WorkKind, [f32; 3])> {
+    market
+        .active_work()
+        .filter(|work| can_pose(session, work))
+        .map(|work| (work.offer.site.kind, work.offer.position))
+        .or_else(|| {
+            crate::cart_repairs::pose(session)
+                .filter(|p| can_pose_at(session, *p))
+                .map(|p| (WorkKind::WorkshopMaintenance, p))
+        })
 }
 
 fn arm_angle(kind: WorkKind, phase: f32, limb_phase: f32) -> f32 {
@@ -45,14 +59,14 @@ pub(crate) fn animate(
     mut bodies: Query<&mut Transform, With<Avatar>>,
     mut limbs: Query<(&mut Transform, &Limb, &ChildOf), Without<Avatar>>,
 ) {
-    let Some(work) = market.active_work().filter(|work| can_pose(&session, work)) else {
+    let Some((kind, position)) = active_pose(&session, &market) else {
         return;
     };
     let Some(entity) = avatars.players.get(&session.id) else {
         return;
     };
     if let Ok(mut transform) = bodies.get_mut(*entity) {
-        let delta = Vec3::from_array(work.offer.position) - Vec3::from_array(session.body.position);
+        let delta = Vec3::from_array(position) - Vec3::from_array(session.body.position);
         if delta.x * delta.x + delta.z * delta.z > 0.03 {
             transform.rotation = Quat::from_rotation_y((-delta.x).atan2(-delta.z));
         }
@@ -60,11 +74,8 @@ pub(crate) fn animate(
     for (mut transform, limb, parent) in &mut limbs {
         if limb.arm && parent.parent() == *entity {
             // A continuous visual cycle, independent of reward/progress timing.
-            transform.rotation = Quat::from_rotation_x(arm_angle(
-                work.offer.site.kind,
-                time.elapsed_secs() * 4.,
-                limb.phase,
-            ));
+            transform.rotation =
+                Quat::from_rotation_x(arm_angle(kind, time.elapsed_secs() * 4., limb.phase));
         }
     }
 }
@@ -222,6 +233,71 @@ mod tests {
             arm_rotations(&mut app, id)
                 .iter()
                 .all(|rotation| *rotation == Quat::IDENTITY)
+        );
+    }
+
+    #[test]
+    fn confirmed_repair_uses_the_hammer_pose_without_a_private_work_offer() {
+        let (mut app, work) = scene();
+        let session = app.world_mut().resource_mut::<Session>().into_inner();
+        let id = session.id;
+        session.activities = vec![rubblekin_core::activities::ActivitySnapshot {
+            plan: rubblekin_core::activities::ActivityPlan {
+                id: 10,
+                recipe_version: rubblekin_core::activities::RECIPE_VERSION,
+                kind: rubblekin_core::activities::ActivityKind::CartRepair,
+                site_id: Some(10),
+                objects: [work.offer.position; 3],
+                sockets: [work.offer.position; 3],
+                clues: None,
+                answer: [0, 1, 2],
+            },
+            revision: 2,
+            props: [
+                rubblekin_core::activities::PropState::Placed,
+                rubblekin_core::activities::PropState::Placed,
+                rubblekin_core::activities::PropState::Home,
+            ],
+            faces: [0; 3],
+            complete: false,
+            available: true,
+            repair: Some(rubblekin_core::activities::RepairProgress {
+                player_id: id,
+                elapsed_seconds: 2.,
+            }),
+        }];
+        app.add_systems(Update, crate::work_tools::update.after(animate));
+        app.update();
+        assert!(
+            app.world()
+                .resource::<MarketPanel>()
+                .active_work()
+                .is_none()
+        );
+        assert!(
+            arm_rotations(&mut app, id)
+                .iter()
+                .all(|r| *r != Quat::IDENTITY)
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<crate::work_tools::WorkTool>>()
+                .iter(app.world())
+                .count(),
+            1
+        );
+        app.world_mut().resource_mut::<Session>().activities[0].repair = None;
+        app.update();
+        assert!(
+            arm_rotations(&mut app, id)
+                .iter()
+                .all(|r| *r == Quat::IDENTITY)
+        );
+        assert!(
+            app.world_mut()
+                .query_filtered::<&Visibility, With<crate::work_tools::WorkTool>>()
+                .iter(app.world())
+                .all(|v| *v == Visibility::Hidden)
         );
     }
 

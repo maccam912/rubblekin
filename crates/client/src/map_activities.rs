@@ -184,6 +184,14 @@ fn description(
                 .filter(|(face, answer)| **face == *answer)
                 .count(),
         ),
+        ActivityKind::CartRepair => (
+            "Repair cart",
+            activity
+                .props
+                .iter()
+                .filter(|p| **p == PropState::Placed)
+                .count(),
+        ),
     };
     let place = world
         .settlements()
@@ -371,6 +379,7 @@ mod tests {
             faces: [0; 3],
             complete: false,
             available: true,
+            repair: None,
         };
         for (id, distance, available) in [
             (9, 20., true),

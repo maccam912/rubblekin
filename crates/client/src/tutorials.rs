@@ -265,6 +265,9 @@ impl Tutorials {
                         self.finish(Lesson::Stones);
                     }
                 }
+                // Cargo repair has its own concrete cost/progress card. It is
+                // not a carried-supply lesson or a creative-building action.
+                ActivityAction::Contribute(_) | ActivityAction::Hammer => {}
             },
         }
     }

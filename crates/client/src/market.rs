@@ -2580,6 +2580,7 @@ mod tests {
             ],
             complete: false,
             available: true,
+            repair: None,
         };
         activity.plan.objects = [[10000.; 3]; 3];
         activity.plan.sockets = [[10000.; 3]; 3];
