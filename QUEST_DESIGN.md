@@ -14,6 +14,8 @@ This remains a prototype of shared finite scenes, using the persistent-outcome r
 
 Picture parcels now wrap the existing delivery contract in source-derived destination pictures, distinct town emblems repeated on parcel/market/station/map, visible back-carried parcels, a pinned destination picture and T/touch handover at the actual market. Only a confirmed paid handover produces the receiving parcel animation. Ten village emblems differ by shape; these first pictures need family review.
 
+The map now offers an Activities view alongside Towns. Three nearby available activities use the same object pictures as the local cards, with their real shared contribution progress or Done state. Choosing a picture centers and zooms the map on that activity's first supported object; it does not accept a task or award a keepsake. It is navigation for the existing supplies and stones, separate from the proposed picture expeditions.
+
 The complete eleven-family design is not implemented. Picture expeditions, keepsakes/journal, expressive helpers, further activity families and regional activity variety remain next work. Personal once-per-place postcards without coin rewards are recommended for expeditions, pending the user’s feedback. The initial art and shared-state behavior need family feedback, especially text-free and muted Low-graphics play. [DESIGN.md](DESIGN.md) records verification and remaining limits.
 
 ## Understanding the goal without reading

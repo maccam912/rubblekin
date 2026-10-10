@@ -183,6 +183,12 @@ pub(crate) struct Scene {
     demonstration: Option<Demonstration>,
 }
 impl Scene {
+    pub(crate) fn map_picture(&self, kind: ActivityKind) -> Handle<Image> {
+        match kind {
+            ActivityKind::SpilledSupplies => self.supply_pictures[0].clone(),
+            ActivityKind::ShapeStones => self.symbol_pictures[0].clone(),
+        }
+    }
     pub(crate) fn demonstrating(&self) -> bool {
         self.demonstration.is_some()
     }

@@ -20,6 +20,8 @@ pub(crate) struct WorldMap {
     pub input_blocked: bool,
     pub just_closed: bool,
     pub requested: bool,
+    pub(crate) activities: bool,
+    pub(crate) selected_activity: Option<u64>,
     zoom: f32,
     center: Vec2,
     drag: Option<Vec2>,
@@ -32,6 +34,8 @@ impl Default for WorldMap {
             input_blocked: false,
             just_closed: false,
             requested: false,
+            activities: false,
+            selected_activity: None,
             zoom: 1.,
             center: Vec2::splat(0.5),
             drag: None,
@@ -54,7 +58,7 @@ impl WorldMap {
         let center = self.center.clamp(Vec2::splat(half), Vec2::splat(1. - half));
         Rect::from_center_size(center, Vec2::splat(2. * half))
     }
-    fn point(&self, uv: Vec2, side: f32) -> Option<Vec2> {
+    pub(super) fn point(&self, uv: Vec2, side: f32) -> Option<Vec2> {
         let view = self.view();
         view.contains(uv)
             .then_some((uv - view.min) / view.size() * side)
@@ -82,6 +86,15 @@ impl WorldMap {
             MapAction::WholeWorld => {
                 self.zoom = 1.;
                 self.center = Vec2::splat(0.5);
+            }
+            MapAction::Towns => self.activities = false,
+            MapAction::Activities => self.activities = true,
+            MapAction::Activity(id) => {
+                self.activities = true;
+                self.selected_activity = Some(id);
+                self.zoom = self.zoom.max(4.);
+                self.center = player;
+                self.center = self.view().center();
             }
         }
     }
@@ -175,6 +188,9 @@ pub(super) enum MapAction {
     ZoomOut,
     Center,
     WholeWorld,
+    Towns,
+    Activities,
+    Activity(u64),
 }
 #[derive(Component)]
 pub(super) struct MapSidebar;
@@ -191,7 +207,7 @@ fn label(value: impl Into<String>, font: &Handle<Font>, size: f32) -> impl Bundl
         TextColor(ink()),
     )
 }
-fn layout(window: &Window) -> (f32, bool) {
+pub(super) fn layout(window: &Window) -> (f32, bool) {
     let compact = window.height() < 550.;
     (
         (window.height() - if compact { 144. } else { 184. })
@@ -200,7 +216,7 @@ fn layout(window: &Window) -> (f32, bool) {
         compact,
     )
 }
-fn position(session: &Session) -> [f32; 3] {
+pub(super) fn position(session: &Session) -> [f32; 3] {
     session
         .observer
         .as_ref()
@@ -327,6 +343,7 @@ pub(crate) fn setup(
             .with_children(|header| {
                 crate::tutorials::panel(header, &font, crate::tutorials::Context::Map);
                 header.spawn((MapHeading, label("WORLD MAP  /  N at top", &font, 23.)));
+                crate::map_activities::tabs(header, &font);
                 header
                     .spawn((
                         (Button, ActivateOnPress, Hovered::default()),
@@ -358,6 +375,7 @@ pub(crate) fn setup(
                         },
                     ))
                     .with_children(|canvas| {
+                        crate::map_activities::markers(canvas);
                         if let Some(plan) = world.0.settlements() {
                             for (index, site) in plan.composed_sites.iter().enumerate() {
                                 canvas
@@ -536,25 +554,41 @@ pub(crate) fn setup(
                         },
                     ))
                     .with_children(|sidebar| {
-                        if towns.iter().any(|town| !landmark_badge(town).is_empty()) {
-                            sidebar.spawn(label("TOWNS · W: windmill · L: lookout", &font, 14.));
-                        } else {
-                            sidebar.spawn(label("TOWNS", &font, 20.));
-                        }
-                        if towns.is_empty() {
-                            sidebar.spawn(label("No towns in this world.", &font, 16.));
-                        }
-                        for index in 0..towns.len() {
-                            sidebar.spawn((MapTownDistance(index), label("", &font, 16.)));
-                        }
-                        sidebar.spawn((
-                            MapPosition,
-                            label("", &font, 15.),
-                            Node {
-                                margin: UiRect::top(px(8)),
-                                ..default()
-                            },
-                        ));
+                        crate::map_activities::sidebar(sidebar, &font);
+                        sidebar
+                            .spawn((
+                                crate::map_activities::TownContent,
+                                Node {
+                                    flex_direction: FlexDirection::Column,
+                                    row_gap: px(2),
+                                    ..default()
+                                },
+                            ))
+                            .with_children(|sidebar| {
+                                if towns.iter().any(|town| !landmark_badge(town).is_empty()) {
+                                    sidebar.spawn(label(
+                                        "TOWNS · W: windmill · L: lookout",
+                                        &font,
+                                        14.,
+                                    ));
+                                } else {
+                                    sidebar.spawn(label("TOWNS", &font, 20.));
+                                }
+                                if towns.is_empty() {
+                                    sidebar.spawn(label("No towns in this world.", &font, 16.));
+                                }
+                                for index in 0..towns.len() {
+                                    sidebar.spawn((MapTownDistance(index), label("", &font, 16.)));
+                                }
+                                sidebar.spawn((
+                                    MapPosition,
+                                    label("", &font, 15.),
+                                    Node {
+                                        margin: UiRect::top(px(8)),
+                                        ..default()
+                                    },
+                                ));
+                            });
                     });
                 });
             root.spawn(Node {
@@ -606,7 +640,13 @@ pub(crate) fn read(
     mut native: MessageReader<MenuKey>,
     mut fingers: MessageReader<TouchInput>,
     buttons: Query<&MapAction, Changed<crate::ui::Activated>>,
-    targets: Query<(&MapAction, &ComputedNode, &UiGlobalTransform)>,
+    targets: Query<(
+        &MapAction,
+        &ComputedNode,
+        &UiGlobalTransform,
+        &Node,
+        Option<&InheritedVisibility>,
+    )>,
     canvas: Query<(&ComputedNode, &UiGlobalTransform), With<MapCanvas>>,
 ) {
     let (pause, console, dialog, market) = modals;
@@ -627,10 +667,18 @@ pub(crate) fn read(
     let touch_action = events.iter().find_map(|finger| {
         (was_open && finger.phase == TouchPhase::Started)
             .then(|| {
-                targets.iter().find_map(|(action, node, transform)| {
-                    node.contains_point(*transform, finger.position * window.scale_factor())
+                targets
+                    .iter()
+                    .find_map(|(action, node, transform, style, visible)| {
+                        (style.display != Display::None
+                            && visible.is_none_or(|v| v.get())
+                            && node.size.min_element() > 0.
+                            && node.contains_point(
+                                *transform,
+                                finger.position * window.scale_factor(),
+                            ))
                         .then_some(*action)
-                })
+                    })
             })
             .flatten()
     });
@@ -672,7 +720,17 @@ pub(crate) fn read(
     }
     let player = map_uv(&world.0, position(&session));
     if let Some(action) = action {
-        map.action(action, player);
+        if let MapAction::Activity(id) = action {
+            if let Some(activity) = session
+                .activities
+                .iter()
+                .find(|a| a.plan.id == id && a.available)
+            {
+                map.action(action, map_uv(&world.0, activity.plan.objects[0]));
+            }
+        } else {
+            map.action(action, player);
+        }
     } else if keys.just_pressed(KeyCode::KeyR) {
         map.action(MapAction::WholeWorld, player);
     } else if keys.just_pressed(KeyCode::KeyC) {
@@ -1256,6 +1314,7 @@ mod tests {
             .world_mut()
             .spawn((
                 MapAction::Close,
+                InheritedVisibility::VISIBLE,
                 Hovered::default(),
                 Node::default(),
                 ComputedNode {
@@ -1286,6 +1345,72 @@ mod tests {
             keys.press(key);
         }
         fixture.app.update();
+    }
+
+    #[test]
+    fn activity_map_touch_centers_the_stable_actual_start_and_ignores_hidden_or_missing_targets() {
+        use rubblekin_core::activities::{self, ActivitySnapshot, PropState};
+        let mut f = fixture();
+        let world = &f.app.world().resource::<VoxelWorld>().0;
+        let mut plan = activities::plans(world).remove(0);
+        plan.id = 77;
+        let uv = map_uv(world, plan.objects[0]);
+        f.app
+            .world_mut()
+            .resource_mut::<Session>()
+            .activities
+            .push(ActivitySnapshot {
+                plan,
+                revision: 1,
+                props: [PropState::Home; 3],
+                faces: [0; 3],
+                complete: false,
+                available: true,
+            });
+        let button = f
+            .app
+            .world_mut()
+            .spawn((
+                MapAction::Activity(77),
+                InheritedVisibility::VISIBLE,
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(100., 60.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(600., 100.),
+            ))
+            .id();
+        press(&mut f, KeyCode::KeyM);
+        clear_keys(&mut f);
+        let tap = |f: &mut Fixture| {
+            f.app.world_mut().write_message(TouchInput {
+                id: 5,
+                phase: TouchPhase::Started,
+                position: Vec2::new(600., 100.),
+                window: f.window,
+                force: None,
+            });
+            f.app.update();
+        };
+        f.app.world_mut().get_mut::<Node>(button).unwrap().display = Display::None;
+        tap(&mut f);
+        assert!(!f.app.world().resource::<WorldMap>().activities);
+        f.app.world_mut().get_mut::<Node>(button).unwrap().display = Display::Flex;
+        tap(&mut f);
+        let map = f.app.world().resource::<WorldMap>();
+        assert_eq!(map.selected_activity, Some(77));
+        assert!(map.activities && map.input_blocked);
+        assert_eq!(map.zoom, 4.);
+        assert_eq!(map.center, uv.clamp(Vec2::splat(0.125), Vec2::splat(0.875)));
+        let before = map.center;
+        f.app
+            .world_mut()
+            .resource_mut::<Session>()
+            .activities
+            .clear();
+        tap(&mut f);
+        assert_eq!(f.app.world().resource::<WorldMap>().center, before);
     }
 
     #[test]
@@ -1777,6 +1902,8 @@ mod tests {
             .world_mut()
             .spawn((
                 MapAction::ZoomIn,
+                Node::default(),
+                InheritedVisibility::VISIBLE,
                 crate::ui::Activated,
                 ComputedNode {
                     size: Vec2::new(100., 40.),
@@ -1891,6 +2018,8 @@ mod tests {
             .world_mut()
             .spawn((
                 MapAction::ZoomIn,
+                Node::default(),
+                InheritedVisibility::VISIBLE,
                 crate::ui::Activated,
                 ComputedNode {
                     size: Vec2::new(100., 40.),

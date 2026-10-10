@@ -19,6 +19,7 @@ mod inspection_details;
 mod inventory;
 mod join;
 mod join_preferences;
+mod map_activities;
 mod market;
 mod network;
 mod observer;
@@ -498,7 +499,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         pause::refresh,
                         gliders::refresh,
                         admin_console::refresh,
-                        world_map::refresh,
+                        (world_map::refresh, map_activities::refresh).chain(),
                         (market::refresh, parcels::update).chain(),
                         (inventory::refresh, tutorials::update).chain(),
                         join::leave_world,

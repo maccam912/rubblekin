@@ -20,6 +20,8 @@ Each prompt contains a short explanation and one next action. Desktop and touch 
 
 Inventory, map, cargo and station prompts sit inside their panels. Supply and stone prompts use the existing picture card. World prompts avoid the hotbar and touch buttons. The paid-work picture and progress bar move below the first-use world lesson while it is visible. A confirmed payment then shows its actual coin or cargo picture; resource pictures also identify the buy/sell exchange in Cargo. In the compact inventory, Search appears after the hotbar lesson is completed or skipped, leaving space for the block pictures and six slots.
 
+The map's Activities view shows the three nearest available supply/puzzle activities, with their object pictures and real shared progress. Choosing a picture centers the map on its start. Towns restores the settlement list; this navigation does not accept an expedition or award a postcard.
+
 Tap/click **Skip**, or press **F3**, to dismiss the visible lesson. **Menu → Teach me again** clears tutorial completion for the current character on this device; the next interaction reintroduces the appropriate lesson. The full Controls reference remains available from Menu/H. Player sessions start with that reference and the inspector closed; observers retain their previous reference.
 
 Completed and skipped lessons save atomically in `tutorials.json` beside client preferences. Names share the same case-insensitive slot across worlds on this device. Other character slots are retained, concurrent writes merge completed lessons, and malformed files are left untouched. Unfinished steps are session-local and start again after reconnecting. Tutorial state sends no network requests and changes no server save or protocol.
