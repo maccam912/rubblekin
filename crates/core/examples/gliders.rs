@@ -21,7 +21,7 @@ fn main() {
                 .iter()
                 .filter(|other| {
                     other.village_id != station.village_id
-                        && reachable(station.position, other.position)
+                        && reachable(station.position, other.landing_position)
                 })
                 .map(|other| {
                     match GliderFlight::plan(
@@ -29,7 +29,7 @@ fn main() {
                         station,
                         GliderDestination::Village(other.village_id),
                         other.name.clone(),
-                        other.position,
+                        other.landing_position,
                         1,
                         0.0,
                     ) {
@@ -38,7 +38,7 @@ fn main() {
                     }
                 })
                 .collect();
-            json!({"id":station.village_id,"name":station.name,"position":station.position,"destinations":destinations})
+            json!({"id":station.village_id,"name":station.name,"position":station.position,"landing_position":station.landing_position,"destinations":destinations})
         })
         .collect();
     println!(

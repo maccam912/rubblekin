@@ -7,9 +7,9 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-// Portable world generation changes village identities; old clients must not
-// address stations or simulate terrain against a rebuilt server.
-pub const PROTOCOL_VERSION: u32 = 29;
+// Portable world generation and outskirts whip stations require peers to
+// agree on village identities, launch markers and terrain.
+pub const PROTOCOL_VERSION: u32 = 30;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;

@@ -3133,7 +3133,7 @@ fn creative_catalog_blocks_replicate_and_survive_server_restart() {
 
 #[test]
 fn live_seed_mossvale_can_board_and_launch_over_tcp() {
-    use rubblekin_core::gliders::{GliderAction, GliderDestination};
+    use rubblekin_core::gliders::{GliderAction, GliderDestination, stations};
     let save = TestSave::new();
     let mut config = save.config(true);
     config.seed = 2_689_504_302;
@@ -3153,6 +3153,22 @@ fn live_seed_mossvale_can_board_and_launch_over_tcp() {
     // server assigned ID 2 to Birchvale, 15.6 km from this station, and rejected
     // every destination with "Move closer to the whip station to board."
     client.teleport([-386.25, 183.5, 7808.25]);
+    let world = World::generate(2_689_504_302, WorldGeneration::GeographyV6);
+    let stops = stations(&world);
+    let mossvale = stops.iter().find(|s| s.village_id == 2).unwrap();
+    assert_eq!(mossvale.name, "Mossvale");
+    assert_eq!(mossvale.landing_position, [-386.25, 183.5, 7808.25]);
+    client.send(ClientMessage::Glider {
+        action: GliderAction::Board {
+            station_id: 2,
+            destination: GliderDestination::Village(0),
+        },
+    });
+    let refused = client.until(|m| matches!(m, ServerMessage::Notice { .. }));
+    assert!(matches!(refused, ServerMessage::Notice { text } if text.contains("Move closer")));
+    client.teleport(mossvale.position);
+    // The deliberately refused request still consumes the 200 ms action gate.
+    thread::sleep(Duration::from_millis(220));
     client.send(ClientMessage::Glider {
         action: GliderAction::Board {
             station_id: 2,
@@ -3185,6 +3201,13 @@ fn live_seed_mossvale_can_board_and_launch_over_tcp() {
         assert_eq!(player.glider_ride.unwrap().carriage_id, flight.id);
         assert_eq!(flight.destination_name, "Fernvale");
         assert_eq!(flight.destination, GliderDestination::Village(0));
+        assert_eq!(flight.from[0], mossvale.position[0]);
+        assert_eq!(flight.from[2], mossvale.position[2]);
+        let fernvale = stops.iter().find(|s| s.village_id == 0).unwrap();
+        assert!(
+            rubblekin_core::gliders::horizontal_distance(flight.to, fernvale.landing_position)
+                <= 46.0
+        );
     }
     server.stop().unwrap();
 }

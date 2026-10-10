@@ -93,7 +93,7 @@ pub(crate) fn handle(
                         .stations
                         .iter()
                         .find(|s| s.village_id == v && v != station_id)
-                        .map(|s| (s.name.clone(), s.position)),
+                        .map(|s| (s.name.clone(), s.landing_position)),
                     GliderDestination::Player(other) => connections
                         .get(&other)
                         .filter(|c| !c.dead && other != id)
@@ -186,7 +186,7 @@ pub(crate) fn handle(
                     .stations
                     .iter()
                     .find(|s| s.village_id == v)
-                    .map(|s| s.position),
+                    .map(|s| s.landing_position),
                 GliderDestination::Player(other) => connections
                     .get(&other)
                     .filter(|c| !c.dead)
@@ -418,7 +418,8 @@ mod tests {
                 .is_none()
         );
         let p = f.connections[&2].player.as_ref().unwrap().body.position;
-        assert!(horizontal_distance(p, f.sim.gliders.stations[1].position) < 60.0);
+        assert!(horizontal_distance(p, f.sim.gliders.stations[1].landing_position) < 60.0);
+        assert!(horizontal_distance(p, f.sim.gliders.stations[1].position) > STATION_REACH);
         for c in f.connections.values_mut() {
             c.dead = true;
         }

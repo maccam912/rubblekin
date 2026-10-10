@@ -55,7 +55,7 @@ fn android_and_server_generate_the_same_station_ids_and_terrain() {
         let mut snapshot = json!({
             "seed": seed,
             "geography": geography_fingerprint(&world),
-            "stations": stops.iter().map(|s| json!([s.village_id, s.name, s.position])).collect::<Vec<_>>()
+            "stations": stops.iter().map(|s| json!([s.village_id, s.name, s.position, s.landing_position])).collect::<Vec<_>>()
         });
         if seed == 2_689_504_302 {
             let mossvale = stops
@@ -65,14 +65,15 @@ fn android_and_server_generate_the_same_station_ids_and_terrain() {
             assert_eq!(mossvale.village_id, 2);
             let mut routes = Vec::new();
             for destination in stops.iter().filter(|s| {
-                s.village_id != mossvale.village_id && reachable(mossvale.position, s.position)
+                s.village_id != mossvale.village_id
+                    && reachable(mossvale.position, s.landing_position)
             }) {
                 let flight = GliderFlight::plan(
                     &world,
                     mossvale,
                     GliderDestination::Village(destination.village_id),
                     destination.name.clone(),
-                    destination.position,
+                    destination.landing_position,
                     1,
                     0.,
                 )

@@ -348,14 +348,15 @@ fn targets(session: &Session, station: &WhipStation) -> Vec<(String, GliderDesti
             .whip_stations
             .iter()
             .filter(|s| {
-                s.village_id != station.village_id && reachable(station.position, s.position)
+                s.village_id != station.village_id
+                    && reachable(station.position, s.landing_position)
             })
             .map(|s| {
                 (
                     format!(
                         "{} · {:.1} km",
                         s.name,
-                        horizontal_distance(station.position, s.position) / 1000.0
+                        horizontal_distance(station.position, s.landing_position) / 1000.0
                     ),
                     GliderDestination::Village(s.village_id),
                 )
@@ -901,6 +902,7 @@ mod tests {
             village_id: 1,
             name: "Test".into(),
             position: session.body.position,
+            landing_position: session.body.position,
         };
         session.gliders.push(GliderFlight {
             id: 2,
@@ -940,6 +942,7 @@ mod tests {
             village_id: 1,
             name: "Test".into(),
             position: world.spawn_position(),
+            landing_position: world.spawn_position(),
         };
         let mut friend = session.players[0].clone();
         friend.id = 2;

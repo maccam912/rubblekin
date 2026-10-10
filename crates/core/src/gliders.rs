@@ -19,17 +19,32 @@ pub const CARRIAGE_VISIBILITY: f32 = 1_000.0;
 pub struct WhipStation {
     pub village_id: u32,
     pub name: String,
+    /// Launch beside an existing outgoing road, clear of town buildings/crops.
     pub position: [f32; 3],
+    /// Arrivals still aim for the central street near the storehouse.
+    pub landing_position: [f32; 3],
 }
 
 pub fn stations(world: &World) -> Vec<WhipStation> {
     world.settlements().map_or_else(Vec::new, |plan| {
         plan.villages
             .iter()
-            .map(|v| WhipStation {
-                village_id: v.id,
-                name: v.name.clone(),
-                position: crate::airships::port(world, v).position,
+            .map(|v| {
+                let port = crate::airships::port(world, v);
+                // The original side berths already have clear footprints and
+                // a walkable branch from town. Reuse the first one's ground
+                // rather than covering the central street with the tall whip.
+                let mut position = crate::airship_landings::landings(world, v, &port, 1)
+                    .first()
+                    .expect("village has a clear roadside launch berth")
+                    .position;
+                position[1] -= 0.35;
+                WhipStation {
+                    village_id: v.id,
+                    name: v.name.clone(),
+                    position,
+                    landing_position: port.position,
+                }
             })
             .collect()
     })
@@ -381,6 +396,36 @@ pub fn move_with_gliders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn walk(world: &World, body: &mut Body, target: [f32; 3]) {
+        for _ in 0..360 {
+            let run = horizontal_distance(body.position, target);
+            if run < 0.15 && body.on_ground {
+                return;
+            }
+            let speed = (run / 0.13).min(0.6);
+            let direction = if run > 0.03 {
+                [
+                    (target[0] - body.position[0]) / run * speed,
+                    (target[2] - body.position[2]) / run * speed,
+                ]
+            } else {
+                [0.0; 2]
+            };
+            crate::physics::move_character(
+                world,
+                body,
+                MoveInput {
+                    direction,
+                    ..Default::default()
+                },
+                1.0 / 30.0,
+            );
+        }
+        panic!(
+            "station approach blocked: {:?} -> {target:?}",
+            body.position
+        );
+    }
     #[test]
     fn range_requires_multiple_hops_and_seats_are_separated() {
         assert!(reachable([0.0; 3], [15_999.0, 500.0, 0.0]));
@@ -420,34 +465,97 @@ mod tests {
     }
     #[test]
     fn stations_have_reachable_landings_and_launches_clear_landforms() {
-        for seed in [42, 7, 99] {
+        for seed in [42, 7, 99, 43, 123, 2_689_504_302, 2_129_398_673] {
             let world = World::generate(seed, crate::world::WorldGeneration::GeographyV6);
             let stops = stations(&world);
             assert_eq!(stops.len(), world.settlements().unwrap().villages.len());
             for station in &stops {
+                let village = world
+                    .settlements()
+                    .unwrap()
+                    .villages
+                    .iter()
+                    .find(|v| v.id == station.village_id)
+                    .unwrap();
+                assert!(
+                    horizontal_distance(station.position, village.center) > 40.0,
+                    "seed {seed}: {} launch still occupies the town center",
+                    station.name
+                );
+                assert_eq!(
+                    station.landing_position,
+                    crate::airships::port(&world, village).position
+                );
+                assert!(
+                    horizontal_distance(station.position, station.landing_position) > STATION_REACH
+                );
                 assert!(character_position_is_clear(&world, station.position, &[]));
+                let berth = crate::airship_landings::landings(
+                    &world,
+                    village,
+                    &crate::airships::port(&world, village),
+                    1,
+                )
+                .remove(0);
+                let mut body = Body::new(station.landing_position);
+                body.on_ground = true;
+                let mut walked = Vec::new();
+                for &point in &berth.approach {
+                    walk(&world, &mut body, point);
+                    walked.push(point);
+                    if distance(body.position, station.position) <= STATION_REACH {
+                        break;
+                    }
+                }
+                assert!(distance(body.position, station.position) <= STATION_REACH);
+                for point in walked.into_iter().rev() {
+                    walk(&world, &mut body, point);
+                }
+                assert!(distance(body.position, station.landing_position) < 0.6);
+                // Include the offset tower/winch, not just the carriage feet.
+                for dx in [-2.0, 0.0, 4.0, 6.0, 8.0] {
+                    for dz in [-2.5, 0.0, 2.5] {
+                        assert!(
+                            world.original_surface_height(
+                                station.position[0] + dx,
+                                station.position[2] + dz
+                            ) <= station.position[1] + 0.01
+                        );
+                    }
+                }
                 let other = stops
                     .iter()
                     .filter(|s| s.village_id != station.village_id)
                     .min_by(|a, b| {
-                        horizontal_distance(station.position, a.position)
-                            .total_cmp(&horizontal_distance(station.position, b.position))
+                        horizontal_distance(station.position, a.landing_position)
+                            .total_cmp(&horizontal_distance(station.position, b.landing_position))
                     })
                     .unwrap();
-                assert!(reachable(station.position, other.position));
+                assert!(reachable(station.position, other.landing_position));
                 let mut f = GliderFlight::plan(
                     &world,
                     station,
                     GliderDestination::Village(other.village_id),
                     other.name.clone(),
-                    other.position,
+                    other.landing_position,
                     1,
                     0.0,
                 )
                 .unwrap_or_else(|error| {
                     panic!("seed {seed} {} -> {}: {error}", station.name, other.name)
                 });
+                assert!(horizontal_distance(f.to, other.landing_position) <= 46.0);
                 f.started_at = Some(0.0);
+                for i in 0..=32 {
+                    let pose = f.pose(LAUNCH_SECONDS * i as f64 / 32.0);
+                    for seat in 0..GLIDER_SEATS {
+                        assert!(character_position_is_clear(
+                            &world,
+                            seat_position(pose, seat),
+                            &[]
+                        ));
+                    }
+                }
                 for i in 0..=100 {
                     let p = f
                         .pose(LAUNCH_SECONDS + (f.duration - LAUNCH_SECONDS) * i as f64 / 100.0)
@@ -471,6 +579,15 @@ mod tests {
                     }
                 }
             }
+            let mut edited = world.clone();
+            let s = &stops[0];
+            let p = crate::world::BlockPos::new(
+                (s.position[0] / CELL_SIZE).floor() as i32,
+                (s.position[1] / CELL_SIZE).floor() as i32,
+                (s.position[2] / CELL_SIZE).floor() as i32,
+            );
+            edited.set_block(p, crate::world::Block::Stone).unwrap();
+            assert_eq!(stations(&edited)[0].position, s.position);
         }
     }
 }
