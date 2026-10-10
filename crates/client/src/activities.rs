@@ -373,7 +373,9 @@ fn target(session: &Session, world: &rubblekin_core::world::World) -> Option<Tar
         .activities
         .iter()
         .filter(|a| {
-            !a.complete && (hold.is_none() || hold.is_some_and(|(h, _)| h.plan.id == a.plan.id))
+            !a.complete
+                && a.available
+                && (hold.is_none() || hold.is_some_and(|(h, _)| h.plan.id == a.plan.id))
         })
         .flat_map(|a| {
             (0..3).filter_map(move |i| {
@@ -445,6 +447,31 @@ fn focused<'a>(
                     nearest(a).total_cmp(&nearest(b))
                 })
         })
+}
+pub(crate) struct TouchActivity {
+    pub use_label: Option<&'static str>,
+    pub return_supply: bool,
+    pub hint: bool,
+    pub demonstrate: bool,
+}
+pub(crate) fn touch_activity(
+    session: &Session,
+    world: &rubblekin_core::world::World,
+) -> TouchActivity {
+    let focused = focused(session, world);
+    TouchActivity {
+        use_label: target(session, world).map(|t| match t.action {
+            ActivityAction::Take(_) => "Take",
+            ActivityAction::Place(_) => "Place",
+            ActivityAction::Turn(_) => "Turn",
+            ActivityAction::Contribute(_) => "Fit",
+            ActivityAction::Hammer => "Hammer",
+            ActivityAction::Return => unreachable!(),
+        }),
+        return_supply: carried(session).is_some(),
+        hint: focused.is_some_and(|a| a.available && !a.complete),
+        demonstrate: focused.is_some_and(|a| a.available),
+    }
 }
 pub(crate) fn touch_opportunity(session: &Session) -> bool {
     session.observer.is_none()
@@ -1056,12 +1083,12 @@ pub(crate) fn update(
                     format!("Hammering {:.1} / 6s\n{instruction}", w.elapsed_seconds)
                 } else if a.props[..2].iter().all(|p| *p == PropState::Placed) {
                     if touch.enabled {
-                        "Use: finish with hammer".into()
+                        "Hammer: finish the cart".into()
                     } else {
                         "T: finish with hammer".into()
                     }
                 } else if touch.enabled {
-                    "Use: fit part · Show me".into()
+                    "Fit part · Show me".into()
                 } else {
                     "T: fit part · J: show me".into()
                 }
@@ -1073,13 +1100,13 @@ pub(crate) fn update(
                 } else if scene.pending.is_some() {
                     "…"
                 } else if hold.is_some() && touch.enabled {
-                    "Use: place · Return: put back"
+                    "Place · Return: put back"
                 } else if hold.is_some() {
                     "T: place · Backspace: return · J: show me"
                 } else if touch.enabled && a.plan.kind == ActivityKind::ShapeStones {
-                    "Use: turn · Hint: next piece"
+                    "Turn · Hint: next piece"
                 } else if touch.enabled {
-                    "Use: take / place · Hint"
+                    "Take / Place · Hint"
                 } else if a.plan.kind == ActivityKind::ShapeStones {
                     "T: turn · Y: hint · J: show me"
                 } else {

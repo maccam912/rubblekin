@@ -81,8 +81,8 @@ pub(crate) fn sidebar(parent: &mut ChildSpawnerCommands, font: &Handle<Font>) {
             },
         ))
         .with_children(|body| {
-            body.spawn(label("NEAREST ACTIVITIES", font, 15.));
-            body.spawn(label("Choose a picture to see its start.", font, 13.));
+            body.spawn(label("NEXT ACTIVITIES", font, 15.));
+            body.spawn(label("Unfinished first · Choose a picture.", font, 13.));
             for i in 0..3 {
                 body.spawn((
                     ActivityRow(i),
@@ -153,9 +153,11 @@ fn nearest(session: &Session) -> Vec<&ActivitySnapshot> {
         let distance = |a: &ActivitySnapshot| {
             (a.plan.objects[0][0] - you[0]).hypot(a.plan.objects[0][2] - you[2])
         };
-        distance(a)
-            .total_cmp(&distance(b))
-            .then(a.plan.id.cmp(&b.plan.id))
+        a.complete.cmp(&b.complete).then_with(|| {
+            distance(a)
+                .total_cmp(&distance(b))
+                .then(a.plan.id.cmp(&b.plan.id))
+        })
     });
     activities.truncate(MAX_PLANS);
     activities
@@ -411,6 +413,31 @@ mod tests {
                 .map(|a| a.plan.id)
                 .collect::<Vec<_>>(),
             [4, 9, 8]
+        );
+        // A near finished place must not displace the next useful destination.
+        session
+            .activities
+            .iter_mut()
+            .find(|a| a.plan.id == 4)
+            .unwrap()
+            .complete = true;
+        assert_eq!(
+            nearest(&session)
+                .iter()
+                .map(|a| a.plan.id)
+                .collect::<Vec<_>>(),
+            [9, 8, 4]
+        );
+        for a in &mut session.activities {
+            a.complete = true;
+        }
+        assert_eq!(
+            nearest(&session)
+                .iter()
+                .map(|a| a.plan.id)
+                .collect::<Vec<_>>(),
+            [4, 9, 8],
+            "Finished sites remain visitable and ordered by distance"
         );
         let mut a = snapshot;
         a.plan.kind = ActivityKind::SpilledSupplies;

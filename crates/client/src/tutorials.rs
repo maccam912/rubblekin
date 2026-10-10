@@ -112,19 +112,19 @@ impl Lesson {
                 "Find the matching market sign, then press T there. There is no time limit."
             }
             (Self::Supplies, 0, true) => {
-                "Tap Use beside a loose supply. Show me demonstrates the matching place."
+                "Tap Take beside a loose supply. Show me demonstrates the matching place."
             }
             (Self::Supplies, 0, false) => {
                 "T takes a loose supply. J demonstrates the matching place."
             }
             (Self::Supplies, _, true) => {
-                "Carry to the matching outline, then Use. Return puts it back."
+                "Carry to the matching outline, then Place. Return puts it back."
             }
             (Self::Supplies, _, false) => {
                 "Carry it to its matching outline, then T. Backspace puts it safely back."
             }
             (Self::Stones, _, true) => {
-                "Find its matching dotted picture along the route. Use turns; Hint guides."
+                "Find its matching dotted picture along the route. Turn changes the stone; Hint guides."
             }
             (Self::Stones, _, false) => {
                 "Find its matching dotted picture along the route. T turns; Y guides; J shows."

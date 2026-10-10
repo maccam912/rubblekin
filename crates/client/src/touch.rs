@@ -115,7 +115,12 @@ impl Layout {
         });
     }
 
-    fn for_session(size: Vec2, session: &Session, menu_open: bool) -> Self {
+    fn for_session(
+        size: Vec2,
+        session: &Session,
+        menu_open: bool,
+        world: Option<&rubblekin_core::world::World>,
+    ) -> Self {
         let mut layout = Self::new(size, session.observer.is_some(), session.flying, menu_open);
         layout.set_hotbar(&session.hotbar);
         if session.gliding {
@@ -145,38 +150,49 @@ impl Layout {
         if !menu_open
             && !session.help
             && !session.inspector
-            && crate::activities::touch_opportunity(session)
+            && session.observer.is_none()
             && !session.gliding
+            && session.ride.is_none()
+            && let Some(world) = world
         {
             let s = layout.scale;
+            let activity = crate::activities::touch_activity(session, world);
             let delivering = session.parcel_market.is_some_and(|market| {
                 rubblekin_core::economy::can_reach_market(session.body.position, market)
-            }) && !session.activities.iter().any(|a| {
-                a.props
-                    .contains(&rubblekin_core::activities::PropState::Held(session.id))
-            });
+            }) && !crate::activities::has_action(session, world);
             for (index, action, label) in [
-                (0., Action::Activity, "Use"),
-                (1., Action::ActivityReturn, "Return"),
-                (2., Action::ActivityHint, "Hint"),
+                (
+                    0.,
+                    Action::Activity,
+                    if delivering {
+                        Some("Deliver")
+                    } else {
+                        activity.use_label
+                    },
+                ),
+                (
+                    1.,
+                    Action::ActivityReturn,
+                    activity.return_supply.then_some("Return"),
+                ),
+                (2., Action::ActivityHint, activity.hint.then_some("Hint")),
             ] {
                 if delivering && index > 0. {
                     continue;
                 }
+                let Some(label) = label else {
+                    continue;
+                };
                 layout.regions.push(Region {
                     action,
                     rect: Rect::from_corners(
                         Vec2::new(size.x - (328. - index * 80.) * s, 70. * s),
                         Vec2::new(size.x - (256. - index * 80.) * s, 118. * s),
                     ),
-                    label: if delivering {
-                        "Deliver".into()
-                    } else {
-                        label.into()
-                    },
+                    label: label.into(),
                 });
             }
-            if !delivering {
+            if !delivering && activity.demonstrate {
                 layout.regions.push(Region {
                     action: Action::ActivityDemo,
                     rect: Rect::from_corners(
@@ -636,7 +652,12 @@ pub fn read(
     let mut received_touch = false;
     for event in events.read().filter(|event| event.window == window_entity) {
         received_touch = true;
-        let mut layout = Layout::for_session(size, &session, controls.menu_open);
+        let mut layout = Layout::for_session(
+            size,
+            &session,
+            controls.menu_open,
+            world.as_deref().map(|w| &w.0),
+        );
         if let Some((panel, world)) = market.as_deref().zip(world.as_deref()) {
             layout.work(
                 panel,
@@ -697,7 +718,12 @@ pub fn read(
                 None
             };
             if let Some(phase) = phase {
-                let mut layout = Layout::for_session(size, &session, controls.menu_open);
+                let mut layout = Layout::for_session(
+                    size,
+                    &session,
+                    controls.menu_open,
+                    world.as_deref().map(|w| &w.0),
+                );
                 if let Some((panel, world)) = market.as_deref().zip(world.as_deref()) {
                     layout.work(
                         panel,
@@ -752,7 +778,12 @@ pub fn read(
             controls.contacts.remove(&id);
         }
     }
-    let mut layout = Layout::for_session(size, &session, controls.menu_open);
+    let mut layout = Layout::for_session(
+        size,
+        &session,
+        controls.menu_open,
+        world.as_deref().map(|w| &w.0),
+    );
     if let Some((panel, world)) = market.as_deref().zip(world.as_deref()) {
         layout.work(
             panel,
@@ -905,6 +936,7 @@ pub fn refresh(
         Vec2::new(window.width(), window.height()),
         &session,
         controls.menu_open,
+        Some(&world.0),
     );
     if let Some(panel) = &market {
         layout.work(panel, &session, &world, time.elapsed_secs_f64());
@@ -1367,6 +1399,7 @@ mod tests {
                 Vec2::new(840., 400.),
                 app.world().resource::<Session>(),
                 false,
+                Some(&app.world().resource::<crate::VoxelWorld>().0),
             );
             let position = action_position(&layout, action);
             app.world_mut().resource_mut::<Session>().edit_clock = 0.;
@@ -1673,6 +1706,114 @@ mod tests {
 mod activity_touch_tests {
     use super::*;
     #[test]
+    fn only_real_activity_steps_have_buttons_and_a_far_carried_supply_can_be_returned() {
+        use rubblekin_core::activities::*;
+        let (world, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(rubblekin_core::protocol::SessionMode::Player),
+            "touch steps".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            rubblekin_core::protocol::SessionMode::Player,
+        )
+        .unwrap();
+        let plan = review_plans(&world)[0].clone();
+        session.body.position = plan.objects[0];
+        session.help = false;
+        session.inspector = false;
+        session.activities = vec![ActivitySnapshot {
+            plan,
+            revision: 0,
+            props: [PropState::Home; 3],
+            faces: [0; 3],
+            complete: false,
+            available: true,
+            repair: None,
+        }];
+        let buttons = |s: &Session| {
+            Layout::for_session(Vec2::new(840., 400.), s, false, Some(&world)).regions
+        };
+        let label = |s: &Session| {
+            buttons(s)
+                .into_iter()
+                .find(|r| r.action == Action::Activity)
+                .map(|r| r.label)
+        };
+        assert_eq!(label(&session).as_deref(), Some("Take"));
+        assert!(
+            !buttons(&session)
+                .iter()
+                .any(|r| r.action == Action::ActivityReturn)
+        );
+        session.activities[0].props[0] = PropState::Held(session.id);
+        session.body.position = session.activities[0].plan.sockets[0];
+        assert_eq!(label(&session).as_deref(), Some("Place"));
+        session.body.position[0] += 1000.;
+        let far = buttons(&session);
+        assert!(!far.iter().any(|r| r.action == Action::Activity));
+        let back = far
+            .iter()
+            .find(|r| r.action == Action::ActivityReturn)
+            .unwrap();
+        let layout = Layout::for_session(Vec2::new(840., 400.), &session, false, Some(&world));
+        let mut input = TouchControls::default();
+        input.route(
+            &TouchInput {
+                phase: TouchPhase::Started,
+                position: back.rect.center(),
+                force: None,
+                id: 5,
+                window: Entity::PLACEHOLDER,
+            },
+            &layout,
+        );
+        assert!(
+            input.activity_return,
+            "Return remains an actual reachable touch action far from the site"
+        );
+        session.activities[0].available = false;
+        assert!(
+            buttons(&session)
+                .iter()
+                .any(|r| r.action == Action::ActivityReturn)
+        );
+        assert!(!buttons(&session).iter().any(|r| matches!(
+            r.action,
+            Action::Activity | Action::ActivityHint | Action::ActivityDemo
+        )));
+        let a = &mut session.activities[0];
+        a.available = true;
+        a.props = [PropState::Placed; 3];
+        a.complete = true;
+        session.body.position = a.plan.sockets[0];
+        let done = buttons(&session);
+        assert!(!done.iter().any(|r| matches!(
+            r.action,
+            Action::Activity | Action::ActivityReturn | Action::ActivityHint
+        )));
+        assert!(done.iter().any(|r| r.action == Action::ActivityDemo));
+        let a = &mut session.activities[0];
+        a.plan.kind = ActivityKind::CartRepair;
+        a.complete = false;
+        a.props = [PropState::Home; 3];
+        assert_eq!(label(&session).as_deref(), Some("Fit"));
+        session.activities[0].props[..2].fill(PropState::Placed);
+        session.body.position = session.activities[0].plan.sockets[2];
+        assert_eq!(label(&session).as_deref(), Some("Hammer"));
+        session.activities[0].repair = Some(RepairProgress {
+            player_id: session.id,
+            elapsed_seconds: 2.,
+        });
+        assert!(
+            label(&session).is_none(),
+            "A confirmed busy repair has no start button"
+        );
+        assert!(
+            !buttons(&session)
+                .iter()
+                .any(|r| r.action == Action::ActivityReturn)
+        );
+    }
+    #[test]
     fn activity_buttons_use_the_shared_layout_and_cancel_with_the_contact_or_menu() {
         let (world, mut session) = crate::join::session_from_welcome(
             crate::join::tests::welcome(rubblekin_core::protocol::SessionMode::Player),
@@ -1695,7 +1836,7 @@ mod activity_touch_tests {
             available: true,
             repair: None,
         }];
-        let layout = Layout::for_session(Vec2::new(840., 400.), &session, false);
+        let layout = Layout::for_session(Vec2::new(840., 400.), &session, false, Some(&world));
         for action in [Action::Activity, Action::ActivityDemo] {
             let region = layout.regions.iter().find(|r| r.action == action).unwrap();
             assert!(region.rect.width() >= 48. && region.rect.height() >= 48.);
@@ -1738,14 +1879,14 @@ mod activity_touch_tests {
                 && !input.activity_demo
         );
         assert!(
-            !Layout::for_session(Vec2::new(840., 400.), &session, true)
+            !Layout::for_session(Vec2::new(840., 400.), &session, true, Some(&world))
                 .regions
                 .iter()
                 .any(|r| r.action == Action::Activity)
         );
         session.help = true;
         assert!(
-            !Layout::for_session(Vec2::new(840., 400.), &session, false)
+            !Layout::for_session(Vec2::new(840., 400.), &session, false, Some(&world))
                 .regions
                 .iter()
                 .any(|r| r.action == Action::ActivityDemo)
