@@ -26,6 +26,7 @@ use crate::{
 #[derive(Resource, Default)]
 pub struct PauseMenu {
     pub open: bool,
+    pub vehicles: bool,
     pub leave: bool,
     /// Includes the closing frame, so Resume cannot also dig, jump, or look.
     pub input_blocked: bool,
@@ -40,6 +41,10 @@ pub struct PauseMenu {
 pub(super) struct PauseRoot;
 #[derive(Component)]
 pub(super) struct PauseContent;
+#[derive(Component)]
+pub(super) struct PauseGraphics;
+#[derive(Component)]
+pub(super) struct VehicleChoices;
 #[derive(Component)]
 pub(super) struct PauseActions;
 #[derive(Component)]
@@ -156,6 +161,10 @@ pub(super) enum Action {
     Inspect,
     Controls,
     Tutorials,
+    Vehicles,
+    VehicleBack,
+    Vehicle(rubblekin_core::vehicles::VehicleKind),
+    Dismount,
     ReturnSpawn,
     NextVillage,
     Leave,
@@ -202,6 +211,7 @@ pub fn setup(
     session: Res<Session>,
     touch: Res<TouchControls>,
     mut pause: ResMut<PauseMenu>,
+    pictures: Res<crate::vehicles::Pictures>,
 ) {
     *pause = PauseMenu::default();
     let font = fonts.add(Font::from_bytes(
@@ -256,7 +266,7 @@ pub fn setup(
                         ..default()
                     },
                 )).with_children(|content| {
-                    content.spawn((Node {
+                    content.spawn((PauseGraphics, Node {
                         flex_direction: FlexDirection::Column,
                         flex_grow: 1.,
                         min_width: px(0),
@@ -303,6 +313,10 @@ pub fn setup(
                             row.spawn(button(Action::Controls, percent(50))).with_child(label("Controls", &font, 16.));
                         });
                         if session.observer.is_none() {
+                            actions.spawn(button(Action::Vehicles,percent(100))).with_children(|row| {
+                                row.spawn((ImageNode::new(pictures.0[0].clone()),Node{width:px(32),height:px(32),..default()}));
+                                row.spawn(label("Vehicles", &font,18.));
+                            });
                             actions.spawn(button(Action::Tutorials, percent(100))).with_child(label("Teach me again", &font, 16.));
                         }
                         if session.observer.is_some() {
@@ -312,6 +326,27 @@ pub fn setup(
                         actions.spawn(button(Action::Leave, percent(100))).with_child(label("Leave world", &font, 18.));
                         actions.spawn((Text::new(if touch.enabled { "Tap to choose\nSwipe blank space to scroll" } else { "Esc  resume\nTab / Shift+Tab  select\nEnter  activate\nSelected bar: Left / Right\nHome / End  minimum / maximum\nRelease keys to apply\nScroll if needed" }), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
                     });
+                    if session.observer.is_none() {
+                        content.spawn((VehicleChoices,Node{display:Display::None,width:percent(100),flex_direction:FlexDirection::Column,row_gap:px(12),..default()})).with_children(|choices| {
+                            choices.spawn(label("Choose a vehicle · Free to use", &font,20.));
+                            choices.spawn((Node{column_gap:px(10),..default()},)).with_children(|row| {
+                                for (i,kind) in rubblekin_core::vehicles::VehicleKind::ALL.into_iter().enumerate() {
+                                    let bundle=button(Action::Vehicle(kind),percent(33.33));
+                                    // Each button contains its complete model picture and name.
+                                    row.spawn(bundle).insert(Node{width:percent(33.33),min_height:px(130),padding:UiRect::all(px(8)),flex_direction:FlexDirection::Column,align_items:AlignItems::Center,justify_content:JustifyContent::Center,row_gap:px(6),..default()}).with_children(|card| {
+                                        card.spawn((ImageNode::new(pictures.0[i].clone()),Node{width:px(72),height:px(72),..default()}));
+                                        card.spawn(label(kind.name(), &font,18.));
+                                    });
+                                }
+                            });
+                            choices.spawn(label("Bike: dry ground · Boats: wade into clear water
+Move to steer · Jump brakes · Sprint pedals / paddles", &font,14.));
+                            choices.spawn((Node{column_gap:px(10),..default()},)).with_children(|row| {
+                                row.spawn(button(Action::VehicleBack,percent(50))).with_child(label("Back", &font,16.));
+                                row.spawn(button(Action::Dismount,percent(50))).with_child(label("Leave vehicle", &font,16.));
+                            });
+                        });
+                    }
                 });
             });
         });
@@ -345,6 +380,14 @@ fn activate(
         return;
     }
     match action {
+        Action::Vehicles => {
+            pause.vehicles = true;
+            pause.focused = Some(Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Bike));
+        }
+        Action::VehicleBack => {
+            pause.vehicles = false;
+            pause.focused = Some(Action::Resume);
+        }
         Action::Distance(_) => pause.focused = Some(action),
         Action::Quality(quality) => graphics.set_quality(quality),
         Action::NearLess => graphics.adjust_near_distance(-DISTANCE_STEP),
@@ -415,8 +458,12 @@ pub fn read(
     windows: Query<&Window, With<PrimaryWindow>>,
     clipping: Query<&CalculatedClip>,
     mut roots: Query<(&ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
-    mut tutorials: Option<ResMut<crate::tutorials::Tutorials>>,
+    extra: (
+        Option<ResMut<crate::tutorials::Tutorials>>,
+        Option<ResMut<crate::network::Connection>>,
+    ),
 ) {
+    let (mut tutorials, mut connection) = extra;
     let (keys, mouse, wheel) = input;
     let (conversation, console, mut map, market) = modals;
     pause.just_closed = false;
@@ -481,6 +528,11 @@ pub fn read(
     if touch.menu_open && !pause.open {
         pause.open = true;
     }
+    if keys.just_pressed(KeyCode::KeyV) && session.as_ref().is_some_and(|s| s.observer.is_none()) {
+        pause.open = true;
+        pause.vehicles = true;
+        pause.focused = Some(Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Bike));
+    }
     let toggle = (keys.just_pressed(KeyCode::Escape) || back)
         && !conversation
             .as_ref()
@@ -491,7 +543,9 @@ pub fn read(
     }
     pause.input_blocked = was_open || pause.open || toggle;
     if was_open != pause.open {
-        pause.focused = Some(Action::Resume);
+        if !pause.vehicles {
+            pause.focused = Some(Action::Resume);
+        }
         pause.scroll_finger = None;
         pause.distance_drag = None;
         pause.keyboard_distance = None;
@@ -675,6 +729,12 @@ pub fn read(
             Action::Inspect,
             Action::Controls,
             Action::Tutorials,
+            Action::Vehicles,
+            Action::VehicleBack,
+            Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Bike),
+            Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Kayak),
+            Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Sailboat),
+            Action::Dismount,
             Action::ReturnSpawn,
             Action::NextVillage,
             Action::Leave,
@@ -682,6 +742,10 @@ pub fn read(
         .into_iter()
         .filter(|action| {
             enabled(*action, &graphics)
+                && (matches!(
+                    action,
+                    Action::Vehicle(_) | Action::VehicleBack | Action::Dismount
+                ) == pause.vehicles)
                 && targets
                     .iter()
                     .any(|(_, candidate, _, _, _, _)| candidate == action)
@@ -745,6 +809,18 @@ pub fn read(
         scroll.0.y = (scroll.0.y + scroll_delta).clamp(0., max.max(0.));
     }
     if let Some(action) = chosen {
+        if session.as_ref().is_some_and(|s| s.observer.is_none())
+            && let Some(c) = connection.as_deref_mut()
+        {
+            let action = match action {
+                Action::Vehicle(kind) => Some(rubblekin_core::vehicles::VehicleAction::Spawn(kind)),
+                Action::Dismount => Some(rubblekin_core::vehicles::VehicleAction::Dismount),
+                _ => None,
+            };
+            if let Some(action) = action {
+                c.send(rubblekin_core::protocol::ClientMessage::Vehicle { action });
+            }
+        }
         if action == Action::Tutorials
             && let Some(t) = tutorials.as_deref_mut()
         {
@@ -782,6 +858,8 @@ pub fn refresh(
             Option<&PauseActions>,
             Option<&PausePanel>,
             Option<&CompactNote>,
+            Option<&PauseGraphics>,
+            Option<&VehicleChoices>,
         ),
         (Without<PauseRoot>, Without<DistanceFill>),
     >,
@@ -821,7 +899,21 @@ pub fn refresh(
         let max = (computed.content_size.y - computed.size.y) * computed.inverse_scale_factor;
         scroll.0.y = scroll.0.y.clamp(0., max.max(0.));
     }
-    for (mut node, content, actions, panel, note) in &mut layout {
+    for (mut node, content, actions, panel, note, graphics_panel, choices) in &mut layout {
+        if graphics_panel.is_some() || actions.is_some() {
+            node.display = if pause.vehicles {
+                Display::None
+            } else {
+                Display::Flex
+            };
+        }
+        if choices.is_some() {
+            node.display = if pause.vehicles {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        }
         if panel.is_some() {
             node.padding = UiRect::all(px(if compact { 8. } else { 16. }));
         }
@@ -1763,5 +1855,54 @@ mod tests {
             GraphicsQuality::Low
         );
         assert!(app.world().resource::<PauseMenu>().open);
+    }
+    #[test]
+    fn vehicle_shortcut_and_keyboard_navigation_stay_with_the_three_pictured_choices() {
+        use rubblekin_core::vehicles::VehicleKind;
+        let (mut app, _) = menu_app();
+        for action in [
+            Action::Resume,
+            Action::Vehicles,
+            Action::VehicleBack,
+            Action::Vehicle(VehicleKind::Bike),
+            Action::Vehicle(VehicleKind::Kayak),
+            Action::Vehicle(VehicleKind::Sailboat),
+            Action::Dismount,
+            Action::Leave,
+        ] {
+            target(&mut app, action);
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyV);
+        app.update();
+        assert!(app.world().resource::<PauseMenu>().vehicles);
+        assert_eq!(
+            app.world().resource::<PauseMenu>().focused,
+            Some(Action::Vehicle(VehicleKind::Bike))
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Tab);
+        app.update();
+        assert_eq!(
+            app.world().resource::<PauseMenu>().focused,
+            Some(Action::Vehicle(VehicleKind::Kayak))
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        assert!(!app.world().resource::<PauseMenu>().open);
+        assert!(
+            app.world().resource::<PauseMenu>().input_blocked,
+            "closing the chooser must not also paddle or build"
+        );
     }
 }

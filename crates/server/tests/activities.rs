@@ -173,7 +173,7 @@ fn flow_garden_shares_reversible_connections_saves_before_confirmation_and_never
     assert!(!first.action(&a, ActivityAction::Turn(255)).0);
     let saved: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    assert_eq!(saved["version"], 11);
+    assert_eq!(saved["version"], 12);
     let record = saved["activities"]["records"]
         .as_array()
         .unwrap()

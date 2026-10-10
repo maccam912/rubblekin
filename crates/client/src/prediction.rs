@@ -173,6 +173,63 @@ impl Prediction {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance_vehicle(
+        &mut self,
+        world: &World,
+        body: &mut Body,
+        input: MoveInput,
+        yaw: f32,
+        dt: f32,
+        obstacles: &[[f32; 3]],
+        time: f64,
+        vehicle: &mut Option<rubblekin_core::vehicles::Vehicle>,
+    ) -> Result<ClientMessage, &'static str> {
+        let message = self.record(input, yaw, dt, Some(time))?;
+        if !rubblekin_core::vehicles::advance(world, body, input, dt, obstacles, time, vehicle) {
+            rubblekin_core::physics::move_character_with_obstacles(
+                world, body, input, dt, obstacles,
+            );
+        }
+        Ok(message)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn reconcile_vehicle(
+        &mut self,
+        world: &World,
+        body: &mut Body,
+        authoritative: &PlayerSnapshot,
+        obstacles_at: impl Fn(f64) -> Vec<[f32; 3]>,
+        world_time: f64,
+        vehicle: &mut Option<rubblekin_core::vehicles::Vehicle>,
+    ) -> Result<(), &'static str> {
+        self.acknowledge(authoritative)?;
+        *body = authoritative.body.clone();
+        *vehicle = authoritative.vehicle;
+        for pending in &self.pending {
+            let time = pending.time.unwrap_or(world_time).max(world_time);
+            let obstacles = obstacles_at(time);
+            if !rubblekin_core::vehicles::advance(
+                world,
+                body,
+                pending.input,
+                pending.dt,
+                &obstacles,
+                time,
+                vehicle,
+            ) {
+                rubblekin_core::physics::move_character_with_obstacles(
+                    world,
+                    body,
+                    pending.input,
+                    pending.dt,
+                    &obstacles,
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn record(
         &mut self,
         input: MoveInput,

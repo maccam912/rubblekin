@@ -6,6 +6,7 @@ fn snapshot(body: Body, last_input_sequence: u64) -> PlayerSnapshot {
     PlayerSnapshot {
         parcel_destination: None,
         glider_ride: None,
+        vehicle: None,
         gliding: false,
         id: 1,
         name: "Walker".into(),
@@ -958,4 +959,65 @@ fn carriage_jump_replays_from_acknowledgment_without_reboarding() {
         .unwrap();
     assert_eq!(body.position, expected);
     assert!(ride.is_none() && gliding);
+}
+
+#[test]
+fn delayed_vehicle_acknowledgments_replay_momentum_and_a_new_epoch_discards_old_pedalling() {
+    use rubblekin_core::vehicles::{self, VehicleKind};
+    let world = World::new(42);
+    let mut body = Body::new(world.spawn_position());
+    move_character(&world, &mut body, MoveInput::default(), 0.25);
+    let mut vehicle = Some(vehicles::spawn(&world, &mut body, VehicleKind::Bike, 0., &[]).unwrap());
+    let mut prediction = Prediction::default();
+    let mut acknowledged = None;
+    for sequence in 1..=10 {
+        let input = MoveInput {
+            direction: [0., -1.],
+            sprint: true,
+            ..Default::default()
+        };
+        prediction
+            .advance_vehicle(
+                &world,
+                &mut body,
+                input,
+                0.,
+                0.05,
+                &[],
+                sequence as f64 * 0.05,
+                &mut vehicle,
+            )
+            .unwrap();
+        if sequence == 5 {
+            let mut state = snapshot(body.clone(), sequence);
+            state.vehicle = vehicle;
+            acknowledged = Some(state);
+        }
+    }
+    let expected = body.clone();
+    let expected_vehicle = vehicle;
+    prediction
+        .reconcile_vehicle(
+            &world,
+            &mut body,
+            &acknowledged.unwrap(),
+            |_| vec![],
+            0.25,
+            &mut vehicle,
+        )
+        .unwrap();
+    for axis in 0..3 {
+        assert!((body.position[axis] - expected.position[axis]).abs() < 0.00001);
+        assert!((body.velocity[axis] - expected.velocity[axis]).abs() < 0.00001);
+    }
+    assert_eq!(vehicle, expected_vehicle);
+    let mut reset = snapshot(Body::new(world.spawn_position()), 0);
+    reset.movement_epoch = 1;
+    reset.vehicle = vehicle;
+    prediction
+        .reconcile_vehicle(&world, &mut body, &reset, |_| vec![], 1., &mut vehicle)
+        .unwrap();
+    assert_eq!(body.position, reset.body.position);
+    assert_eq!(body.velocity, [0.; 3]);
+    assert!(prediction.pending.is_empty());
 }

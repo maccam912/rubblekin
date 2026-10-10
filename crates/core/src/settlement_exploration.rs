@@ -2,7 +2,7 @@
 use super::*;
 use crate::airships::AirshipNetwork;
 
-/// 105 seconds at ordinary 3.8 m/s walking speed, before detours and stops.
+/// About 70 seconds at ordinary 5.7 m/s walking speed, before detours and stops.
 const DISCOVERY_SPACING: f32 = 400.0;
 const SITE_SEPARATION: f32 = 220.0;
 

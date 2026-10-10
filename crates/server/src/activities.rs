@@ -689,6 +689,7 @@ mod tests {
                 movement_epoch: 0,
                 ride: None,
                 glider_ride: None,
+                vehicle: None,
                 gliding: false,
                 deck_position: None,
             };

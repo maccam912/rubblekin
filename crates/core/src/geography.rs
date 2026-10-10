@@ -328,6 +328,89 @@ impl Geography {
         }
     }
 
+    /// Channel velocity follows the same carved drainage segments as water.
+    /// A short downstream lookahead rounds bends, and bounded lateral flow
+    /// brings drifting craft back toward the thalweg without snapping poses.
+    pub fn river_current(&self, x: f32, z: f32) -> [f32; 2] {
+        let sample = self.sample(x, z);
+        let Some(level) = sample.water else {
+            return [0.0; 2];
+        };
+        if level <= SEA_LEVEL + 0.01 {
+            return [0.0; 2];
+        }
+        let ix = (((x + HALF_WORLD) / GRID_SPACING).floor() as usize).min(GRID_SIDE - 2);
+        let iz = (((z + HALF_WORLD) / GRID_SPACING).floor() as usize).min(GRID_SIDE - 2);
+        let mut owner = None::<(f32, usize, f32, f32)>;
+        for cz in iz.saturating_sub(1)..=(iz + 2).min(GRID_SIDE - 1) {
+            for cx in ix.saturating_sub(1)..=(ix + 2).min(GRID_SIDE - 1) {
+                let i = cz * GRID_SIDE + cx;
+                let Some(next) = self.downstream[i] else {
+                    continue;
+                };
+                if self.flow[i] < RIVER_CATCHMENT || self.heights[i] < -1.0 {
+                    continue;
+                }
+                let a = grid_position(i);
+                let b = grid_position(next);
+                let v = [b[0] - a[0], b[1] - a[1]];
+                let length = hypotf(v[0], v[1]);
+                let t =
+                    (((x - a[0]) * v[0] + (z - a[1]) * v[1]) / (length * length)).clamp(0.0, 1.0);
+                let distance = hypotf(x - a[0] - v[0] * t, z - a[1] - v[1] * t);
+                let width = (self.flow[i].sqrt() * 0.32).clamp(5.0, 29.0);
+                let surface = lerp(self.filled[i], self.filled[next], t).max(SEA_LEVEL);
+                // Lakes have a different level from their neighboring outlet.
+                if distance >= width || (surface - level).abs() > 0.5 {
+                    continue;
+                }
+                let rank = if self.version >= 2 {
+                    surface - (width * 0.1).clamp(0.75, 2.6)
+                } else {
+                    distance
+                };
+                if owner.is_none_or(|(best, _, _, _)| rank < best) {
+                    owner = Some((rank, i, t, width));
+                }
+            }
+        }
+        let Some((_, i, t, width)) = owner else {
+            return [0.0; 2];
+        };
+        let next = self.downstream[i].unwrap();
+        let a = grid_position(i);
+        let b = grid_position(next);
+        let length = hypotf(b[0] - a[0], b[1] - a[1]);
+        let lead = width.min(12.0);
+        let mut target = [
+            a[0] + (b[0] - a[0]) * (t + lead / length),
+            a[1] + (b[1] - a[1]) * (t + lead / length),
+        ];
+        if t + lead / length > 1.0
+            && let Some(after) = self.downstream[next]
+        {
+            let c = grid_position(after);
+            let remaining = (t - 1.0) * length + lead;
+            let next_length = hypotf(c[0] - b[0], c[1] - b[1]);
+            target = [
+                b[0] + (c[0] - b[0]) * remaining / next_length,
+                b[1] + (c[1] - b[1]) * remaining / next_length,
+            ];
+        }
+        let grade = ((self.filled[i] - self.filled[next]) / length).max(0.0);
+        let speed = (0.6 + libm::sqrtf(grade) * 8.0).clamp(0.6, 6.0);
+        let along = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+        let offset = [target[0] - x, target[1] - z];
+        let cross = offset[0] * along[1] - offset[1] * along[0];
+        let lateral = (cross * 0.3).clamp(-speed * 0.65, speed * 0.65);
+        let toward = [offset[0], offset[1]];
+        let norm = hypotf(toward[0], toward[1]).max(0.01);
+        [
+            toward[0] / norm * speed + along[1] * lateral,
+            toward[1] / norm * speed - along[0] * lateral,
+        ]
+    }
+
     pub fn spawn(&self) -> [f32; 3] {
         self.spawn
     }

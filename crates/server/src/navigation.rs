@@ -5,12 +5,16 @@ use std::collections::VecDeque;
 
 use rubblekin_core::{
     airships::{AirshipNetwork, AirshipRide},
-    physics::{Body, MoveInput, move_character_with_airships, move_character_with_obstacles},
+    physics::{
+        Body, MoveInput, WALK_SPEED, move_character_with_airships, move_character_with_obstacles,
+    },
     world::{CELL_SIZE, World},
 };
 
 const SEARCH_EXPANSIONS_PER_SLICE: usize = 8;
 const MAX_SEARCH_EXPANSIONS: usize = 192;
+// NPC steering and route probes retain their original physical walking pace.
+pub(crate) const NPC_WALK_SCALE: f32 = 3.8 / WALK_SPEED;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Navigation {
@@ -80,7 +84,8 @@ pub(crate) struct Walking<'a> {
 }
 
 impl Walking<'_> {
-    fn step(&self, walker: &Walker, input: MoveInput, dt: f32) -> Walker {
+    fn step(&self, walker: &Walker, mut input: MoveInput, dt: f32) -> Walker {
+        input.direction = input.direction.map(|value| value * NPC_WALK_SCALE);
         let mut next = walker.clone();
         if let Some((network, time)) = self.airships {
             move_character_with_airships(

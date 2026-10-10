@@ -2,7 +2,7 @@
 //! collision, prediction, or movement messages on the wire.
 use bevy::prelude::*;
 
-const DEFAULT_SPEED: f32 = 12.0;
+const DEFAULT_SPEED: f32 = 18.0;
 const BOOST: f32 = 5.0;
 
 pub struct ObserverCamera {
@@ -20,7 +20,7 @@ impl ObserverCamera {
 
     pub fn adjust_speed(&mut self, scroll: f32) {
         if scroll.is_finite() {
-            self.speed = (self.speed * 1.25_f32.powf(scroll.clamp(-16.0, 16.0))).clamp(2.0, 64.0);
+            self.speed = (self.speed * 1.25_f32.powf(scroll.clamp(-16.0, 16.0))).clamp(3.0, 96.0);
         }
     }
 
@@ -62,13 +62,13 @@ mod tests {
         let start = camera.position;
         camera.advance(Vec3::Z, std::f32::consts::FRAC_PI_2, -0.5, false, 0.1);
         assert!(camera.position.x > start.x && camera.position.y > start.y);
-        assert!((camera.position.distance(start) - 1.2).abs() < 0.0001);
+        assert!((camera.position.distance(start) - 1.8).abs() < 0.0001);
         let start = camera.position;
         camera.advance(Vec3::ONE, 0.0, 0.5, true, 0.1);
-        assert!((camera.position.distance(start) - 6.0).abs() < 0.0001);
+        assert!((camera.position.distance(start) - 9.0).abs() < 0.0001);
         let start = camera.position;
         camera.advance(Vec3::Y, 0.7, 0.5, false, 0.1);
-        assert!((camera.position - start - Vec3::Y * 1.2).length() < 0.0001);
+        assert!((camera.position - start - Vec3::Y * 1.8).length() < 0.0001);
     }
 
     #[test]
@@ -77,10 +77,10 @@ mod tests {
         for _ in 0..10 {
             camera.adjust_speed(100.0);
         }
-        assert_eq!(camera.speed, 64.0);
+        assert_eq!(camera.speed, 96.0);
         let start = camera.position;
         camera.advance(Vec3::Z, 0.0, 0.0, true, 20.0);
-        assert!((camera.position.distance(start) - 80.0).abs() < 0.0001);
+        assert!((camera.position.distance(start) - 120.0).abs() < 0.0001);
         let stopped = camera.position;
         camera.advance(Vec3::ZERO, 0.0, 0.0, true, 0.1);
         camera.advance(Vec3::Z, 0.0, 0.0, true, f32::NAN);
@@ -88,9 +88,9 @@ mod tests {
         for _ in 0..10 {
             camera.adjust_speed(-100.0);
         }
-        assert_eq!(camera.speed, 2.0);
+        assert_eq!(camera.speed, 3.0);
         camera.adjust_speed(f32::NAN);
-        assert_eq!(camera.speed, 2.0);
+        assert_eq!(camera.speed, 3.0);
     }
 
     #[test]

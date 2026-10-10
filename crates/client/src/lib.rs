@@ -39,6 +39,7 @@ mod touch;
 mod trade_pictures;
 mod tutorials;
 mod ui;
+mod vehicles;
 mod village_details;
 mod wildlife;
 mod work_animation;
@@ -116,6 +117,7 @@ pub struct Session {
     pub(crate) gliders: Vec<rubblekin_core::gliders::GliderFlight>,
     pub(crate) glider_ride: Option<rubblekin_core::gliders::GliderRide>,
     pub(crate) gliding: bool,
+    pub(crate) vehicle: Option<rubblekin_core::vehicles::Vehicle>,
     pub(crate) ride: Option<AirshipRide>,
     pub(crate) deck_position: Option<[f32; 3]>,
     pub(crate) airship_clock: airships::AirshipClock,
@@ -142,8 +144,8 @@ fn character_obstacles(
     players
         .iter()
         .filter(|player| player.id != own_id)
-        .map(|player| {
-            player
+        .flat_map(|player| {
+            let position = player
                 .ride
                 .and_then(|ride| {
                     airships.ship(ride.ship_id, airship_time).map(|ship| {
@@ -155,7 +157,8 @@ fn character_obstacles(
                         )
                     })
                 })
-                .unwrap_or(player.body.position)
+                .unwrap_or(player.body.position);
+            rubblekin_core::vehicles::obstacle_positions(position, player.vehicle)
         })
         .chain(std::iter::once(npc.position))
         .chain(residents.iter().map(|resident| {
@@ -295,7 +298,7 @@ fn options() -> Result<Options, String> {
             "--high" => result.graphics = Some(GraphicsQuality::High),
             "--help" | "-h" => {
                 println!(
-                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 hotbar slot | I inventory | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G whip station / travel | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
+                    "Rubblekin — a living voxel world\n\nRun without arguments to choose a server or local world.\n  --local              Start and join your local world immediately\n  --connect HOST:PORT   Join an existing server\n  --observe            Read-only admin camera; no player avatar\n  --touch              Preview on-screen touch controls\n  --bind HOST:PORT      Local host address (default 127.0.0.1:7878)\n  --save PATH           World save (default saves/villages.json)\n  --name NAME           Your saved character name\n  --seed NUMBER         Seed for a new world (default 42)\n  --generation v3|v4|v5|v6 Generator for a new local world (default v6)\n  --low                 Baked shading and character ground shadows\n  --balanced            Nearby sun shadows, no MSAA (default)\n  --high                Longer shadows and 4x MSAA\n  --screenshot PATH     Capture after 8 seconds in a joined scene\n  --exit-after SECONDS  Exit after this many seconds of app time\n\nWASD move | mouse look after click | Space jump | Shift sprint\nLeft click dig | Right click build | 1–6 hotbar slot | I inventory | F creative flight\nQ/E lower/raise in flight | scroll zoom | Tab inspect aimed character/block/plot | M world map\nB cargo / work / village market | G whip station / travel | V vehicles | F2 graphics | F6/F7/F8 forager override | F9 reset needs | F12 screenshot\nObserver: WASD fly | Q/E vertical | Shift boost | scroll speed | R / Home return | V next village\nBackquote / tilde admin commands | Escape pause menu | F10 leave world | H controls | close window to quit"
                 );
                 std::process::exit(0);
             }
@@ -428,6 +431,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .add_plugins(sky::SkyPlugin)
         .init_resource::<block_textures::BlockIcons>()
         .init_resource::<trade_pictures::TradePictures>()
+        .init_resource::<vehicles::Pictures>()
         .add_systems(First, platform::frame_time.before(bevy::time::TimeSystems))
         .add_systems(First, platform::activity_exit)
         .add_message::<join::MenuKey>()
@@ -453,6 +457,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     touch::setup,
                     pause::setup,
                     gliders::setup,
+                    vehicles::setup,
                     parcels::setup,
                     admin_console::setup,
                     world_map::setup,
@@ -481,7 +486,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         controls,
                         graphics::apply_settings,
                         camera,
-                        sky::update,
+                        (sky::update, vehicles::weather).chain(),
                     )
                         .chain(),
                     (
@@ -499,7 +504,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             activities::update_demo,
                         )
                             .chain(),
-                        (gliders::update_scene, gliders::animate_whips).chain(),
+                        (
+                            gliders::update_scene,
+                            gliders::animate_whips,
+                            vehicles::update,
+                        )
+                            .chain(),
                         crops::update_crops,
                         inspection::update,
                         ui::update_ui,
@@ -778,10 +788,29 @@ fn receive_network(
     if let Some(authoritative) = latest_authoritative {
         let session = &mut *session;
         let previous_epoch = session.prediction.movement_epoch();
-        if authoritative.glider_ride.is_some() {
+        if authoritative.glider_ride.is_some() || authoritative.vehicle.is_some() {
             session.flying = false;
         }
-        let result = if session.airships.routes().is_empty() {
+        session.vehicle = authoritative.vehicle;
+        let result = if session.vehicle.is_some() {
+            session.prediction.reconcile_vehicle(
+                &world.0,
+                &mut session.body,
+                &authoritative,
+                |time| {
+                    character_obstacles(
+                        session.id,
+                        &session.players,
+                        &session.npc,
+                        &session.residents,
+                        &session.airships,
+                        time,
+                    )
+                },
+                session.world_time,
+                &mut session.vehicle,
+            )
+        } else if session.airships.routes().is_empty() {
             session.prediction.reconcile_gliders(
                 &world.0,
                 &mut session.body,
@@ -1138,7 +1167,18 @@ fn controls(
                 &session.airships,
                 session.airship_clock.time,
             );
-            let command = if session.airships.routes().is_empty() {
+            let command = if session.vehicle.is_some() {
+                session.prediction.advance_vehicle(
+                    &world.0,
+                    &mut session.body,
+                    input,
+                    session.yaw,
+                    dt,
+                    &obstacles,
+                    session.airship_clock.time,
+                    &mut session.vehicle,
+                )
+            } else if session.airships.routes().is_empty() {
                 session.prediction.advance_gliders(
                     &world.0,
                     &mut session.body,
@@ -1606,6 +1646,11 @@ fn update_avatars(
             entity
         });
         if let Ok(mut transform) = transforms.get_mut(entity) {
+            let vehicle = if player.id == session.id {
+                session.vehicle
+            } else {
+                player.vehicle
+            };
             let (position, yaw) = if player.id == session.id {
                 (session.body.position, session.yaw)
             } else if player.ride.is_some() {
@@ -1613,7 +1658,12 @@ fn update_avatars(
             } else {
                 (player.body.position, player.yaw)
             };
-            let previous = transform.translation;
+            let seat_offset = vehicle.map_or(0., |v| match v.kind {
+                rubblekin_core::vehicles::VehicleKind::Bike => 0.12,
+                rubblekin_core::vehicles::VehicleKind::Kayak => -0.42,
+                rubblekin_core::vehicles::VehicleKind::Sailboat => 0.08,
+            });
+            let previous = transform.translation - Vec3::Y * seat_offset;
             transform.translation =
                 if player.id == session.id || player.ride.is_some() || teleported {
                     Vec3::from_array(position)
@@ -1643,12 +1693,20 @@ fn update_avatars(
                     )
             } else {
                 avatars.player_deck_motion.remove(&player.id);
-                previous.xz().distance_squared(transform.translation.xz()) > 0.000001
+                vehicle.is_none()
+                    && previous.xz().distance_squared(transform.translation.xz()) > 0.000001
             };
             if walking {
                 moving.push(entity);
             }
-            transform.rotation = Quat::from_rotation_y(-yaw);
+            transform.rotation = Quat::from_rotation_y(-vehicle.map_or(yaw, |v| v.heading));
+            if let Some(v) = vehicle {
+                transform.translation.y += match v.kind {
+                    rubblekin_core::vehicles::VehicleKind::Bike => 0.12,
+                    rubblekin_core::vehicles::VehicleKind::Kayak => -0.42,
+                    rubblekin_core::vehicles::VehicleKind::Sailboat => 0.08,
+                };
+            }
         }
     }
     let npc = *avatars.npc.get_or_insert_with(|| {
@@ -1793,6 +1851,35 @@ fn update_avatars(
         };
     }
     for (mut transform, limb, parent) in &mut limbs {
+        transform.translation.y = if limb.arm { 1.0 } else { 0.38 };
+        transform.translation.z = 0.;
+        let mounted = session
+            .players
+            .iter()
+            .find(|p| avatars.players.get(&p.id) == Some(&parent.parent()))
+            .and_then(|p| {
+                if p.id == session.id {
+                    session.vehicle
+                } else {
+                    p.vehicle
+                }
+            });
+        if let Some(v) = mounted {
+            use rubblekin_core::vehicles::VehicleKind;
+            let pedalling = (time.elapsed_secs() * 5. + limb.phase).sin() * 0.25;
+            if !limb.arm && v.kind != VehicleKind::Sailboat {
+                transform.translation.y = 0.65;
+                transform.translation.z = -0.20;
+            }
+            transform.rotation = Quat::from_rotation_x(match (v.kind, limb.arm) {
+                (VehicleKind::Bike, true) => 0.65,
+                (VehicleKind::Bike, false) => 0.9 + pedalling,
+                (VehicleKind::Kayak, true) => 0.5 + pedalling,
+                (VehicleKind::Kayak, false) => 1.35,
+                (VehicleKind::Sailboat, _) => 0.,
+            });
+            continue;
+        }
         let resident = session
             .residents
             .iter()

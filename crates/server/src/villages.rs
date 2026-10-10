@@ -19,7 +19,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::{
     airships::free_seat,
-    navigation::{Navigation, Walker, Walking},
+    navigation::{NPC_WALK_SCALE, Navigation, Walker, Walking},
 };
 
 pub(crate) const MAX_RESIDENTS: usize = 60;
@@ -2217,7 +2217,7 @@ fn farm_edge_is_walkable(world: &World, a: [f32; 3], b: [f32; 3]) -> bool {
             let distance = horizontal_distance(body.position, end);
             let mut input = MoveInput::default();
             if distance > 0.001 {
-                let factor = 0.52_f32.min(distance / (3.8 * 0.05));
+                let factor = 0.52_f32.min(distance / (3.8 * 0.05)) * NPC_WALK_SCALE;
                 input.direction = [
                     (end[0] - body.position[0]) / distance * factor,
                     (end[2] - body.position[2]) / distance * factor,

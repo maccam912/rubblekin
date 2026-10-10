@@ -2170,9 +2170,12 @@ fn add_meadow_details(
     if world.generation() == WorldGeneration::GeographyV6
         && let Some(kind) = crate::ground_details::detail(biome, chance)
     {
+        let start = mesh.positions.len();
         crate::ground_details::add(mesh, base, kind);
+        mesh.mark_vegetation(start, base.y);
         return;
     }
+    let start = mesh.positions.len();
     let flowering = chance < flower_density;
     let stem = if flowering {
         [0.26, 0.38, 0.21, 1.0]
@@ -2200,6 +2203,7 @@ fn add_meadow_details(
             );
         }
     }
+    mesh.mark_vegetation(start, base.y);
 }
 
 fn river_mesh(world: &World) -> Mesh {
@@ -2334,6 +2338,11 @@ impl Geometry {
         self.indices.extend([start, start + 1, start + 2]);
     }
 
+    fn mark_vegetation(&mut self, start: usize, base: f32) {
+        for i in start..self.positions.len() {
+            self.uvs[i] = [0., (self.positions[i][1] - base).max(0.)];
+        }
+    }
     pub(crate) fn cuboid(&mut self, center: Vec3, dimensions: Vec3, color: [f32; 4]) {
         for (normal, corners) in FACES {
             let vertices = corners.map(|p| {

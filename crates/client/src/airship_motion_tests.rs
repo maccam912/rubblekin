@@ -149,6 +149,7 @@ fn check_packet_motion(rising: bool) {
     session.players.push(PlayerSnapshot {
         parcel_destination: None,
         glider_ride: None,
+        vehicle: None,
         gliding: false,
         id: 31,
         name: "Remote passenger".into(),

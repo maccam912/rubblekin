@@ -14,6 +14,7 @@ mod persistence;
 mod player_economy;
 mod resource_work;
 mod tick_schedule;
+mod vehicles;
 mod villages;
 
 #[cfg(test)]
@@ -204,6 +205,7 @@ struct Connection {
     last_activity_request: Option<Instant>,
     last_activity_id: Option<u64>,
     last_glider_request: Option<Instant>,
+    last_vehicle_request: Option<Instant>,
     last_market_request: Option<Instant>,
     last_market_view: Option<Instant>,
     last_work_view: Option<Instant>,
@@ -236,6 +238,7 @@ impl Connection {
             last_activity_request: None,
             last_activity_id: None,
             last_glider_request: None,
+            last_vehicle_request: None,
             last_market_request: None,
             last_market_view: None,
             last_work_view: None,
@@ -491,17 +494,27 @@ fn run(
             {
                 // Never extrapolate walking or a held jump. A stalled client
                 // eventually resumes neutral gravity instead of floating.
-                rubblekin_core::gliders::move_with_gliders(
+                if !rubblekin_core::vehicles::advance(
                     &sim.world,
                     &mut player.body,
                     MoveInput::default(),
                     DT,
                     &obstacles,
-                    &sim.gliders.flights,
                     sim.world_time,
-                    &mut player.glider_ride,
-                    &mut player.gliding,
-                );
+                    &mut player.vehicle,
+                ) {
+                    rubblekin_core::gliders::move_with_gliders(
+                        &sim.world,
+                        &mut player.body,
+                        MoveInput::default(),
+                        DT,
+                        &obstacles,
+                        &sim.gliders.flights,
+                        sim.world_time,
+                        &mut player.glider_ride,
+                        &mut player.gliding,
+                    );
+                }
                 // Idle simulation spends time too; retain only the bounded
                 // reserve needed to accept a resumed long client frame.
                 let now = Instant::now();
@@ -515,7 +528,9 @@ fn run(
         }
         let player_positions: Vec<_> = players(&connections, &sim)
             .iter()
-            .map(|player| player.body.position)
+            .flat_map(|player| {
+                rubblekin_core::vehicles::obstacle_positions(player.body.position, player.vehicle)
+            })
             .collect();
         let mut npc_obstacles = player_positions.clone();
         npc_obstacles.extend(sim.villages.positions());
@@ -691,7 +706,8 @@ fn character_obstacles(
     connections
         .iter()
         .filter(|(id, connection)| Some(**id) != exclude_player && !connection.dead)
-        .filter_map(|(_, connection)| connection.player.as_ref().map(|p| p.body.position))
+        .filter_map(|(_, connection)| connection.player.as_ref())
+        .flat_map(|p| rubblekin_core::vehicles::obstacle_positions(p.body.position, p.vehicle))
         .chain(std::iter::once(sim.npc.snapshot.position))
         .chain(sim.villages.positions())
         .chain(airships.ships(sim.world_time).iter().map(pilot_position))
@@ -884,6 +900,7 @@ fn handle_message(
                 Some(PlayerSnapshot {
                     parcel_destination: None,
                     glider_ride: None,
+                    vehicle: None,
                     gliding: false,
                     id,
                     name,
@@ -958,6 +975,7 @@ fn handle_message(
             ClientMessage::Input { .. }
             | ClientMessage::Admin { .. }
             | ClientMessage::Glider { .. }
+            | ClientMessage::Vehicle { .. }
             | ClientMessage::TalkToPilot { .. }
             | ClientMessage::Market { .. }
             | ClientMessage::Work { .. }
@@ -1006,6 +1024,10 @@ fn handle_message(
                 sim,
                 config,
             )?;
+        }
+        ClientMessage::Vehicle { action } => {
+            let obstacles = character_obstacles(connections, sim, Some(id), airships);
+            vehicles::handle(id, action, connections, sim, &obstacles);
         }
         ClientMessage::Glider { action } => {
             let c = connections.get_mut(&id).unwrap();
@@ -1095,7 +1117,17 @@ fn handle_message(
             // Ordinary inputs keep the client's exact duration and controller;
             // only exhausted credit requires an authoritative time correction.
             if applied_dt > 0.0 {
-                if airships.routes().is_empty() {
+                if rubblekin_core::vehicles::advance(
+                    &sim.world,
+                    &mut player.body,
+                    input,
+                    applied_dt,
+                    &obstacles,
+                    sim.world_time,
+                    &mut player.vehicle,
+                ) {
+                    // Vehicle motion already used the shared swept controller.
+                } else if airships.routes().is_empty() {
                     rubblekin_core::gliders::move_with_gliders(
                         &sim.world,
                         &mut player.body,
@@ -1708,6 +1740,7 @@ mod tests {
         let player = PlayerSnapshot {
             parcel_destination: None,
             glider_ride: None,
+            vehicle: None,
             gliding: false,
             id: 1,
             name: "Worker".into(),

@@ -7,9 +7,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-// Portable world generation and outskirts whip stations require peers to
-// agree on village identities, launch markers and terrain.
-pub const PROTOCOL_VERSION: u32 = 30;
+// Faster player movement requires matching client/server physics.
+pub const PROTOCOL_VERSION: u32 = 32;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -72,6 +71,9 @@ pub enum ClientMessage {
         activity_id: u64,
         revision: u64,
         action: crate::activities::ActivityAction,
+    },
+    Vehicle {
+        action: crate::vehicles::VehicleAction,
     },
 }
 
@@ -172,6 +174,8 @@ pub struct PlayerSnapshot {
     /// Ship-local [side, height, fore] offset; absent on the ground.
     #[serde(default)]
     pub deck_position: Option<[f32; 3]>,
+    #[serde(default)]
+    pub vehicle: Option<crate::vehicles::Vehicle>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

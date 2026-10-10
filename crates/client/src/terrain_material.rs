@@ -29,9 +29,14 @@ pub struct TerrainTexture {
     #[texture(103)]
     #[sampler(104)]
     blocks: Option<Handle<Image>>,
+    #[uniform(105)]
+    pub weather: Vec4,
 }
 
 impl MaterialExtension for TerrainTexture {
+    fn vertex_shader() -> ShaderRef {
+        TERRAIN_SHADER.into()
+    }
     fn fragment_shader() -> ShaderRef {
         TERRAIN_SHADER.into()
     }
@@ -49,6 +54,7 @@ pub fn terrain_material(albedo: Option<Handle<Image>>) -> TerrainMaterial {
             distant: f32::from(albedo.is_some()),
             albedo,
             blocks: None,
+            weather: Vec4::ZERO,
         },
     }
 }

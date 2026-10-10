@@ -1,6 +1,9 @@
 //! Read-only route pacing report and reproducible native staging coordinates.
 //! cargo run -p rubblekin_core --example exploration -- 42 /tmp/exploration.json
-use rubblekin_core::world::{World, WorldGeneration};
+use rubblekin_core::{
+    physics::WALK_SPEED,
+    world::{World, WorldGeneration},
+};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -55,7 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     all_gaps.sort_by(f32::total_cmp);
     let percentile =
         |fraction: f32| all_gaps[((all_gaps.len() - 1) as f32 * fraction).round() as usize];
-    let within_two_minutes = all_gaps.iter().filter(|&&d| d <= 456.0).count();
+    let within_two_minutes = all_gaps
+        .iter()
+        .filter(|&&d| d <= WALK_SPEED * 120.0)
+        .count();
     let wilderness: Vec<_> = plan
         .roadside_landmarks
         .iter()
@@ -115,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "wilderness_sites": wilderness.len(),
             "wilderness_nearest_neighbor": distribution(&nearest),
             "gentle_dry_land_nearest_discovery": distribution(&coverage),
-            "walking_speed_mps": 3.8, "median_gap_m": percentile(0.5),
+            "walking_speed_mps": WALK_SPEED, "median_gap_m": percentile(0.5),
             "p90_gap_m": percentile(0.9), "max_gap_m": all_gaps.last(),
             "gaps_at_most_two_minutes": within_two_minutes, "total_gaps": all_gaps.len(),
         }))?,
@@ -134,9 +140,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "Nominal walking gaps: median {:.0}s, p90 {:.0}s, max {:.0}s; {within_two_minutes}/{} within 2 min",
-        percentile(0.5) / 3.8,
-        percentile(0.9) / 3.8,
-        all_gaps.last().unwrap() / 3.8,
+        percentile(0.5) / WALK_SPEED,
+        percentile(0.9) / WALK_SPEED,
+        all_gaps.last().unwrap() / WALK_SPEED,
         all_gaps.len()
     );
     if args.iter().any(|s| s == "--diagnose") {

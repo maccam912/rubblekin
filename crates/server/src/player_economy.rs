@@ -33,12 +33,15 @@ pub(crate) struct SavedPlayer {
     pub deck_position: Option<[f32; 3]>,
     #[serde(default)]
     pub gliding: bool,
+    #[serde(default)]
+    pub vehicle: Option<rubblekin_core::vehicles::Vehicle>,
 }
 
 impl SavedPlayer {
     pub fn new(player: &PlayerSnapshot) -> Self {
         Self {
             ledger: PlayerEconomy::default(),
+            vehicle: player.vehicle,
             gliding: player.gliding || player.glider_ride.is_some(),
             position: player.body.position,
             yaw: player.yaw,
@@ -48,6 +51,7 @@ impl SavedPlayer {
     }
 
     pub fn checkpoint(&mut self, player: &PlayerSnapshot) {
+        self.vehicle = player.vehicle;
         self.gliding = player.gliding || player.glider_ride.is_some();
         self.position = player.body.position;
         self.yaw = player.yaw;
@@ -100,6 +104,11 @@ impl SavedPlayer {
                         return Some(PlayerSnapshot {
                             parcel_destination: None,
                             glider_ride: None,
+                            vehicle: self.vehicle.filter(|v| {
+                                rubblekin_core::vehicles::position_is_clear(
+                                    world, position, *v, obstacles,
+                                )
+                            }),
                             gliding: self.gliding || (self.ride.is_some() && ship.is_none()),
                             id,
                             name,
@@ -138,6 +147,12 @@ pub(crate) fn validate_profiles(
                 && position[2].abs() <= radius
                 && position[1] >= world.min_y() as f32 * CELL_SIZE - 2.0
                 && position[1] <= world.max_y() as f32 * CELL_SIZE + 64.0
+                && player.vehicle.is_none_or(|v| {
+                    v.heading.is_finite()
+                        && (0.0..std::f32::consts::TAU).contains(&v.heading)
+                        && !player.gliding
+                        && player.ride.is_none()
+                })
                 && player.ledger.coins <= MAX_COINS
                 && player.ledger.revision < u64::MAX
                 && player.ledger.cargo_total() <= CARGO_CAPACITY
@@ -737,6 +752,7 @@ mod tests {
         let mut saved = SavedPlayer {
             ledger: PlayerEconomy::default(),
             gliding: false,
+            vehicle: None,
             position,
             yaw: 0.5,
             ride: None,

@@ -1187,6 +1187,7 @@ pub(crate) fn session_from_welcome(
     let whip_stations = rubblekin_core::gliders::stations(&world);
     let glider_ride = own_player.and_then(|p| p.glider_ride);
     let gliding = own_player.is_some_and(|p| p.gliding);
+    let vehicle = own_player.and_then(|p| p.vehicle);
     let (body, observer, status) = match mode {
         SessionMode::Player => {
             let player = own_player.ok_or("Server did not provide your player avatar")?;
@@ -1245,6 +1246,7 @@ pub(crate) fn session_from_welcome(
             gliders,
             glider_ride,
             gliding,
+            vehicle,
             ride,
             deck_position,
             airship_clock: crate::airships::AirshipClock::new(world_time, now),
@@ -1415,6 +1417,7 @@ pub(crate) mod tests {
                 vec![PlayerSnapshot {
                     parcel_destination: None,
                     glider_ride: None,
+                    vehicle: None,
                     gliding: false,
                     id: 17,
                     name: "Tester".into(),

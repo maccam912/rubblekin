@@ -1,5 +1,5 @@
 use rubblekin_core::{
-    physics::{Body, MoveInput, move_character},
+    physics::{Body, MoveInput, WALK_SPEED, move_character},
     world::{World, WorldGeneration},
 };
 
@@ -30,7 +30,7 @@ fn every_generated_trail_is_physically_walkable_in_both_directions() {
                         break;
                     }
                     let direction = if distance > 0.03 {
-                        let factor = 0.52_f32.min(distance / (3.8 * 0.05));
+                        let factor = 0.52_f32.min(distance / (3.8 * 0.05)) * (3.8 / WALK_SPEED);
                         [dx / distance * factor, dz / distance * factor]
                     } else {
                         [0.0; 2]

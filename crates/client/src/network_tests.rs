@@ -108,6 +108,7 @@ fn preserves_delta_for_mode(mode: SessionMode) {
                 vec![PlayerSnapshot {
                     parcel_destination: None,
                     glider_ride: None,
+                    vehicle: None,
                     gliding: false,
                     id: 17,
                     name: "Joiner".into(),

@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 pub const PLAYER_RADIUS: f32 = 0.28;
 pub const PLAYER_HEIGHT: f32 = 1.7;
 pub const EYE_HEIGHT: f32 = 1.4;
+pub const WALK_SPEED: f32 = 5.7;
+pub const RUN_SPEED: f32 = 9.3;
+pub const CREATIVE_FLY_SPEED: f32 = 10.5;
+pub const CREATIVE_FLY_BOOST_SPEED: f32 = 18.0;
 const GRAVITY: f32 = 22.0;
 const JUMP_SPEED: f32 = 7.2;
 const CONTACT_EPSILON: f32 = 0.00001;
@@ -350,11 +354,15 @@ fn move_character_with_surfaces(
         direction = direction.map(|value| (value as f64 / length) as f32);
     }
     let speed = if input.fly {
-        if input.sprint { 12.0 } else { 7.0 }
+        if input.sprint {
+            CREATIVE_FLY_BOOST_SPEED
+        } else {
+            CREATIVE_FLY_SPEED
+        }
     } else if input.sprint {
-        6.2
+        RUN_SPEED
     } else {
-        3.8
+        WALK_SPEED
     };
     body.velocity[0] = direction[0] * speed;
     body.velocity[2] = direction[1] * speed;
@@ -478,6 +486,41 @@ fn move_character_with_surfaces(
         }
         constrain_to_world(world, body);
     }
+}
+
+/// Bicycle momentum uses the existing swept voxel/character contacts. Half-metre
+/// steps remain rideable; gravity keeps jumps and downhill drops physical.
+pub fn move_rolling_body(world: &World, body: &mut Body, dt: f32, obstacles: &[[f32; 3]]) {
+    body.velocity[1] = (body.velocity[1] - GRAVITY * dt).max(-40.0);
+    let can_step = body.on_ground;
+    for axis in [0, 2] {
+        let old = body.position;
+        let amount = body.velocity[axis] * dt;
+        let (terrain, character) =
+            move_axis_with_obstacles(world, &mut body.position, axis, amount, obstacles);
+        let mut stepped = false;
+        if terrain && !character && can_step {
+            let mut raised = old;
+            raised[1] += CELL_SIZE + contact_epsilon(old[1] + CELL_SIZE) * 2.0;
+            if character_position_is_clear(world, raised, obstacles) {
+                let (t, c) = move_axis_with_obstacles(world, &mut raised, axis, amount, obstacles);
+                if !t && !c {
+                    body.position = raised;
+                    stepped = true;
+                }
+            }
+        }
+        if (terrain || character) && !stepped {
+            body.velocity[axis] = 0.0;
+        }
+    }
+    let vertical = body.velocity[1] * dt;
+    let (t, c) = move_axis_with_obstacles(world, &mut body.position, 1, vertical, obstacles);
+    body.on_ground = (t || c) && vertical < 0.0;
+    if t || c {
+        body.velocity[1] = 0.0;
+    }
+    constrain_to_world(world, body);
 }
 
 /// Half-open AABB intersection with the controller's coordinate-aware skin.
@@ -897,11 +940,12 @@ mod tests {
                 continue;
             }
             let before = body.position;
+            let factor = (distance / (WALK_SPEED * 0.05)).min(1.0);
             move_character_with_airships(
                 world,
                 &mut body,
                 MoveInput {
-                    direction: [dx / distance, dz / distance],
+                    direction: [dx / distance * factor, dz / distance * factor],
                     ..Default::default()
                 },
                 0.05,
@@ -915,7 +959,7 @@ mod tests {
                 + (body.position[2] - before[2]).powi(2))
             .sqrt();
             assert!(
-                travelled <= 3.8 * 0.05 + 0.03,
+                travelled <= WALK_SPEED * 0.05 + 0.03,
                 "boarding teleported by {travelled}"
             );
         }

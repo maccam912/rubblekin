@@ -48,6 +48,10 @@ pub(crate) fn handle(
             station_id,
             destination,
         } => {
+            if player.vehicle.is_some() {
+                notice(connections, id, "Leave your vehicle before boarding.");
+                return;
+            }
             if player.glider_ride.is_some() {
                 notice(
                     connections,

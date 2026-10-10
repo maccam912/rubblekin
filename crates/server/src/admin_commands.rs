@@ -169,6 +169,7 @@ fn execute(
     };
     let connection = connections.get_mut(&target_id).unwrap();
     let player = connection.player.as_mut().unwrap();
+    player.vehicle = None;
     player.glider_ride = None;
     player.gliding = false;
     let movement_epoch = player.movement_epoch.checked_add(1).ok_or_else(|| {

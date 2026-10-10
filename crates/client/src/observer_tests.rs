@@ -47,6 +47,7 @@ fn observer_controls_move_only_the_camera_and_never_send_gameplay_messages() {
         players.push(PlayerSnapshot {
             parcel_destination: None,
             glider_ride: None,
+            vehicle: None,
             gliding: false,
             id: 31,
             name: "Another explorer".into(),
@@ -292,7 +293,7 @@ fn observer_controls_move_only_the_camera_and_never_send_gameplay_messages() {
         let session = app.world().resource::<Session>();
         let observer = session.observer.as_ref().unwrap();
         assert_ne!(observer.position, camera_before);
-        assert!(observer.speed > 12.0);
+        assert!(observer.speed > 18.0);
         assert_ne!(session.yaw, -0.45);
         assert_ne!(session.pitch, 0.12);
 
@@ -312,7 +313,7 @@ fn observer_controls_move_only_the_camera_and_never_send_gameplay_messages() {
         let session = app.world().resource::<Session>();
         let observer = session.observer.as_ref().unwrap();
         assert_eq!(observer.position, camera_before, "{reset_key:?}");
-        assert_eq!(observer.speed, 12.0, "{reset_key:?}");
+        assert_eq!(observer.speed, 18.0, "{reset_key:?}");
         assert_eq!(session.yaw, -0.45, "{reset_key:?}");
         assert_eq!(session.pitch, 0.12, "{reset_key:?}");
         assert_eq!(session.body.position, body_before.position);

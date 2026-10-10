@@ -623,7 +623,8 @@ mod tests {
                                 break;
                             }
                             let direction = if distance > 0.03 {
-                                let factor = 0.52_f32.min(distance / (3.8 / 30.0));
+                                let factor = 0.52_f32.min(distance / (3.8 / 30.0))
+                                    * (3.8 / crate::physics::WALK_SPEED);
                                 [dx / distance * factor, dz / distance * factor]
                             } else {
                                 [0.0; 2]

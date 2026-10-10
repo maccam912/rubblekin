@@ -55,6 +55,7 @@ impl Fixture {
         connection.player = Some(PlayerSnapshot {
             parcel_destination: None,
             glider_ride: None,
+            vehicle: None,
             gliding: false,
             id,
             name: name.into(),
@@ -206,9 +207,12 @@ fn exhausted_movement_credit_corrects_time_but_keeps_sequence_validation() {
     assert!(!f.connections[&1].dead);
     assert_eq!(f.snapshot(1).last_input_sequence, 64);
     let elapsed = started.elapsed().as_secs_f32();
-    // The fastest flight is 12m/s; sixteen requested seconds get only actual
+    // The fastest flight is 18m/s; sixteen requested seconds get only actual
     // elapsed credit. A small positional tolerance covers f32 accumulation.
-    assert!(f.snapshot(1).body.position[0] - initial.position[0] <= elapsed * 12.0 + 0.001);
+    assert!(
+        f.snapshot(1).body.position[0] - initial.position[0]
+            <= elapsed * rubblekin_core::physics::CREATIVE_FLY_BOOST_SPEED + 0.001
+    );
     // Accepting a time correction does not forgive replayed sequence numbers.
     f.send(
         1,

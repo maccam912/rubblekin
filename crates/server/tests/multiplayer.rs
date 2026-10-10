@@ -9,7 +9,7 @@ use std::{
 };
 
 use rubblekin_core::{
-    physics::{MoveInput, PLAYER_RADIUS, characters_overlap, move_character},
+    physics::{CREATIVE_FLY_SPEED, MoveInput, PLAYER_RADIUS, characters_overlap, move_character},
     protocol::*,
     world::{Block, BlockPos, CELL_SIZE, World, WorldGeneration},
 };
@@ -1253,7 +1253,7 @@ fn joining_players_get_free_space_and_server_movement_stops_at_other_players() {
     second.send(ClientMessage::Input {
         movement_epoch: 0,
         sequence: 1,
-        dt: z_distance.abs() / 7.0,
+        dt: z_distance.abs() / CREATIVE_FLY_SPEED,
         input: MoveInput {
             direction: [0.0, z_distance.signum()],
             fly: true,
@@ -1458,7 +1458,7 @@ fn idle_gravity_lands_on_another_player_without_merging_bodies() {
     first.send(ClientMessage::Input {
         movement_epoch: 0,
         sequence: 2,
-        dt: distance / 7.0,
+        dt: distance / CREATIVE_FLY_SPEED,
         input: MoveInput {
             fly: true,
             direction: direction.map(|value| value / distance),
@@ -2379,7 +2379,9 @@ fn movement_cannot_spend_more_than_the_servers_real_time_budget() {
     });
     if let ServerMessage::State { players, .. } = corrected {
         let x = players.iter().find(|p| p.id == id).unwrap().body.position[0];
-        assert!(x - initial_x <= (0.5 + started.elapsed().as_secs_f32()) * 7.0 + 0.01);
+        assert!(
+            x - initial_x <= (0.5 + started.elapsed().as_secs_f32()) * CREATIVE_FLY_SPEED + 0.01
+        );
     }
     // The same session remains usable after correcting the delayed batch.
     thread::sleep(Duration::from_millis(50));
@@ -2428,8 +2430,9 @@ fn a_long_frame_after_a_short_frame_fits_the_bounded_network_burst_allowance() {
     let world = World::new(42);
     let mut batch = Vec::new();
     for (index, dt) in [0.008, MAX_INPUT_DT].into_iter().enumerate() {
+        // Move away from Moss to exercise batching along a clear path.
         let input = MoveInput {
-            direction: [1.0, 0.0],
+            direction: [-1.0, 0.0],
             fly: true,
             ..Default::default()
         };
@@ -3078,7 +3081,7 @@ fn wildlife_replicates_advances_without_clients_and_keeps_its_saved_population()
     server.stop().unwrap();
     let mut saved: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    assert_eq!(saved["version"], 11);
+    assert_eq!(saved["version"], 12);
     saved["ecology"]["animals"][0]["hunger"] = 12.345.into();
     fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
     let server = spawn(config.clone()).unwrap();
@@ -3303,5 +3306,140 @@ fn whip_carriage_is_shared_and_jump_out_replicates_over_tcp() {
     assert!(
         matches!(observer.until(|m|matches!(m,ServerMessage::Notice{..})),ServerMessage::Notice{text} if text.contains("read-only"))
     );
+    server.stop().unwrap();
+}
+
+#[test]
+fn personal_vehicles_are_authoritative_shared_read_only_for_observers_and_resume_on_reconnect() {
+    use rubblekin_core::vehicles::{VehicleAction, VehicleKind};
+    let save = TestSave::new();
+    let config = save.config(true);
+    let server = spawn(config.clone()).unwrap();
+    let profile = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa9";
+    let (mut rider, welcome) = Client::connect_profile(server.addr, profile);
+    let ServerMessage::Welcome { session_id: id, .. } = welcome else {
+        panic!()
+    };
+    rider.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.body.on_ground)));
+    rider.send(ClientMessage::Vehicle {
+        action: VehicleAction::Spawn(VehicleKind::Bike),
+    });
+    let state=rider.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.vehicle.is_some())));
+    let ServerMessage::State { players, .. } = state else {
+        panic!()
+    };
+    let mounted = players.into_iter().find(|p| p.id == id).unwrap();
+    assert_eq!(mounted.vehicle.unwrap().kind, VehicleKind::Bike);
+    assert!(mounted.movement_epoch > 0);
+    assert_eq!(mounted.last_input_sequence, 0);
+    let (mut watcher, _) =
+        Client::connect_mode(server.addr, "Vehicle watcher", SessionMode::Observer);
+    watcher.send(ClientMessage::Vehicle {
+        action: VehicleAction::Spawn(VehicleKind::Bike),
+    });
+    watcher.until(|m| matches!(m,ServerMessage::Notice{text} if text.contains("read-only")));
+    watcher.until(|m|matches!(m,ServerMessage::State{players,..} if players.len()==1 && players[0].vehicle.is_some()));
+    drop(rider);
+    server.stop().unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
+    assert_eq!(saved["version"], 12);
+    assert_eq!(saved["profiles"][profile]["vehicle"]["kind"], "Bike");
+    let server = spawn(config).unwrap();
+    let (mut rider, welcome) = Client::connect_profile(server.addr, profile);
+    let ServerMessage::Welcome {
+        session_id: id,
+        players,
+        ..
+    } = welcome
+    else {
+        panic!()
+    };
+    let restored = players.into_iter().find(|p| p.id == id).unwrap();
+    assert_eq!(restored.vehicle.unwrap().kind, VehicleKind::Bike);
+    assert_eq!(restored.body.velocity, [0.; 3]);
+    rider.send(ClientMessage::Vehicle {
+        action: VehicleAction::Dismount,
+    });
+    rider.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.vehicle.is_none() && p.movement_epoch>restored.movement_epoch)));
+    thread::sleep(Duration::from_millis(220));
+    rider.send(ClientMessage::Vehicle {
+        action: VehicleAction::Spawn(VehicleKind::Kayak),
+    });
+    rider.until(|m| matches!(m,ServerMessage::Notice{text} if text.contains("water")));
+    drop(rider);
+    server.stop().unwrap();
+}
+
+#[test]
+fn watercraft_use_server_wind_and_paddle_input_and_reject_an_edited_bow() {
+    use rubblekin_core::vehicles::{VehicleAction, VehicleKind};
+    let save = TestSave::new();
+    let mut config = save.config(true);
+    config.generation = WorldGeneration::GeographyV2;
+    let server = spawn(config).unwrap();
+    let (mut rider, welcome) = Client::connect(server.addr, "Sailor");
+    let ServerMessage::Welcome { session_id: id, .. } = welcome else {
+        panic!()
+    };
+    rider.teleport([15000., 0.02, 15000.]);
+    rider.send(ClientMessage::Vehicle {
+        action: VehicleAction::Spawn(VehicleKind::Sailboat),
+    });
+    rider.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.vehicle.is_some_and(|v|v.kind==VehicleKind::Sailboat))));
+    rider.until_for(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && (p.body.position[2]-15000.).abs()>2.0)),Duration::from_secs(8));
+    rider.send(ClientMessage::Vehicle {
+        action: VehicleAction::Dismount,
+    });
+    rider.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.vehicle.is_none())));
+    rider.teleport([15000., 0.02, 15000.]);
+    thread::sleep(Duration::from_millis(220));
+    rider.send(ClientMessage::Vehicle {
+        action: VehicleAction::Spawn(VehicleKind::Kayak),
+    });
+    let state=rider.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.vehicle.is_some_and(|v|v.kind==VehicleKind::Kayak))));
+    let ServerMessage::State { players, .. } = state else {
+        panic!()
+    };
+    let p = players.into_iter().find(|p| p.id == id).unwrap();
+    for sequence in 1..=40 {
+        thread::sleep(Duration::from_millis(30));
+        rider.send(ClientMessage::Input {
+            sequence,
+            movement_epoch: p.movement_epoch,
+            dt: 0.03,
+            input: MoveInput {
+                direction: [0., -1.],
+                ..Default::default()
+            },
+            yaw: 0.,
+        });
+    }
+    rider.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.last_input_sequence==40 && p.body.position[2]<14999.)));
+    rider.send(ClientMessage::Vehicle {
+        action: VehicleAction::Dismount,
+    });
+    rider.until(|m|matches!(m,ServerMessage::State{players,..} if players.iter().any(|p|p.id==id && p.vehicle.is_none())));
+    rider.teleport([15000., 0.02, 15000.]);
+    rider.send(ClientMessage::Edit {
+        request_id: 9001,
+        position: BlockPos::new(30000, 0, 29997),
+        block: Block::Stone,
+    });
+    rider.until(|m| {
+        matches!(
+            m,
+            ServerMessage::BlockChanged {
+                request_id: 9001,
+                ..
+            }
+        )
+    });
+    thread::sleep(Duration::from_millis(220));
+    rider.send(ClientMessage::Vehicle {
+        action: VehicleAction::Spawn(VehicleKind::Kayak),
+    });
+    rider.until(|m| matches!(m,ServerMessage::Notice{text} if text.contains("whole vehicle")));
+    drop(rider);
     server.stop().unwrap();
 }

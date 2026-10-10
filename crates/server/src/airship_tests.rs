@@ -42,6 +42,7 @@ impl Fixture {
         connection.player = Some(PlayerSnapshot {
             parcel_destination: None,
             glider_ride: None,
+            vehicle: None,
             gliding: false,
             id,
             name: format!("Passenger {id}"),
