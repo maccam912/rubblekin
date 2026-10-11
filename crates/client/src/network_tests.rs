@@ -230,6 +230,7 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
         .unwrap()
         .body
         .clone();
+    let start = body.position;
     let mut prediction = Prediction::default();
     let mut delayed = VecDeque::new();
     let mut acknowledged = 0;
@@ -248,7 +249,11 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
         let dt = [1.0 / 120.0, 1.0 / 90.0, 1.0 / 60.0][frame % 3];
         thread::sleep(Duration::from_secs_f32(dt));
         for message in connection.poll() {
-            if let ServerMessage::State { players, .. } = message {
+            if let ServerMessage::State { players, npc, .. } = message {
+                assert!(
+                    npc.position[0] > start[0] + rubblekin_core::physics::PLAYER_RADIUS * 2.0,
+                    "Moss entered the isolated westbound replay corridor"
+                );
                 delayed.push_back((
                     Instant::now() + Duration::from_millis(80),
                     players.into_iter().find(|p| p.id == session_id).unwrap(),
@@ -259,9 +264,12 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
             let (_, state) = delayed.pop_front().unwrap();
             reconcile(&mut prediction, &mut body, state);
         }
-        // Normal grounded movement followed by W release, with real server ticks.
+        // Walk away from Moss, whose live server motion is deliberately absent
+        // from this isolated acknowledgment replay. Walking east through his
+        // route made correct crowd contacts look like prediction regressions.
+        // Keep real grounded movement, uneven frames and release/server ticks.
         let input = MoveInput {
-            direction: if frame < 60 { [1.0, 0.0] } else { [0.0, 0.0] },
+            direction: if frame < 60 { [-1.0, 0.0] } else { [0.0, 0.0] },
             ..Default::default()
         };
         connection.send(
@@ -279,7 +287,11 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
     while Instant::now() < deadline {
         let mut done = false;
         for message in connection.poll() {
-            if let ServerMessage::State { players, .. } = message {
+            if let ServerMessage::State { players, npc, .. } = message {
+                assert!(
+                    npc.position[0] > start[0] + rubblekin_core::physics::PLAYER_RADIUS * 2.0,
+                    "Moss entered the isolated westbound replay corridor"
+                );
                 let state = players.into_iter().find(|p| p.id == session_id).unwrap();
                 done |= state.last_input_sequence == 90;
                 reconcile(&mut prediction, &mut body, state);
@@ -292,6 +304,7 @@ fn localhost_prediction_stays_put_when_delayed_movement_acknowledgments_arrive()
     }
     assert_eq!(acknowledged, 90, "server did not acknowledge the stop");
     assert_eq!(body.velocity[0], 0.0);
+    assert!(body.position[0] < start[0] - 2.0, "walker never left spawn");
     drop(connection);
     server.stop().unwrap();
     std::fs::remove_dir_all(directory).unwrap();
