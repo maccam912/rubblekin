@@ -28,7 +28,7 @@ impl VehicleKind {
     pub fn dimensions(self) -> [f32; 3] {
         match self {
             Self::Bike => [0.32, 0.85, 0.9],
-            Self::Kayak => [0.42, 0.18, 1.5],
+            Self::Kayak => [0.42, 0.10, 1.5],
             Self::Sailboat => [0.85, 0.35, 2.0],
         }
     }
@@ -55,6 +55,40 @@ fn solid(world: &World, p: [f32; 3]) -> bool {
     world.block(BlockPos::new(p[0], p[1], p[2])).is_solid()
 }
 
+/// The rendered hull and its collision samples use the same bounded pitch.
+/// A flat envelope can hit the river bed while the visible bow is above it.
+pub fn pitch(world: &World, position: [f32; 3], vehicle: Vehicle) -> f32 {
+    let f = forward(vehicle.heading);
+    let length = vehicle.kind.dimensions()[2];
+    let surface = |sign: f32| {
+        let x = position[0] + f[0] * length * sign;
+        let z = position[2] + f[1] * length * sign;
+        if vehicle.kind.watercraft() {
+            environment::water_surface(world, x, z).unwrap_or(position[1])
+        } else {
+            world.surface_height(x, z)
+        }
+    };
+    libm::atanf((surface(1.) - surface(-1.)) / (length * 2.)).clamp(-0.45, 0.45)
+}
+
+fn floating_height(world: &World, p: [f32; 3], vehicle: Vehicle) -> Option<f32> {
+    let centre = environment::water_surface(world, p[0], p[2])?;
+    let f = forward(vehicle.heading);
+    let length = vehicle.kind.dimensions()[2];
+    let end = |sign: f32| {
+        environment::water_surface(
+            world,
+            p[0] + f[0] * length * sign,
+            p[2] + f[1] * length * sign,
+        )
+        .unwrap_or(centre)
+    };
+    // A hull bridges the water under its ends. Using only the centre traps
+    // the bow at a steepening reach, even while it is already pitched up.
+    Some(centre.max((end(-1.) + end(1.)) * 0.5) + 0.02)
+}
+
 /// Check the hull footprint and draft, not just the rider's centre. Samples
 /// are closer than one voxel so thin edited walls and banks cannot be skipped.
 pub fn position_is_clear(
@@ -68,6 +102,11 @@ pub fn position_is_clear(
     }
     let [width, draft, length] = vehicle.kind.dimensions();
     let f = forward(vehicle.heading);
+    let slope = if vehicle.kind.watercraft() {
+        libm::tanf(pitch(world, p, vehicle))
+    } else {
+        0.
+    };
     let nx = (width * 2.0 / 0.24).ceil() as usize;
     let nz = (length * 2.0 / 0.24).ceil() as usize;
     for x in 0..=nx {
@@ -76,7 +115,7 @@ pub fn position_is_clear(
             let along = -length + 2.0 * length * z as f32 / nz as f32;
             let q = [
                 p[0] + f[1] * side + f[0] * along,
-                p[1],
+                p[1] + along * slope,
                 p[2] - f[0] * side + f[1] * along,
             ];
             if vehicle.kind.watercraft() {
@@ -85,17 +124,17 @@ pub fn position_is_clear(
                 };
                 // Hulls can bridge a rapid or a drop into a lake; buoyancy
                 // settles their centre continuously instead of snapping down.
-                if level - p[1] > 2.0 {
+                if level - q[1] > 2.0 {
                     return false;
                 }
                 for h in [-draft, 0.0, 0.25] {
-                    if solid(world, [q[0], p[1] + h, q[2]]) {
+                    if solid(world, [q[0], q[1] + h, q[2]]) {
                         return false;
                     }
                 }
                 if vehicle.kind == VehicleKind::Sailboat {
                     for h in [0.75, 1.25, 1.75, 2.25, 2.75, 3.25] {
-                        if solid(world, [q[0], p[1] + h, q[2]]) {
+                        if solid(world, [q[0], q[1] + h, q[2]]) {
                             return false;
                         }
                     }
@@ -164,7 +203,7 @@ pub fn spawn(
         if (p[1] - level).abs() > 2.0 {
             return Err("Come down to the water to launch this boat.");
         }
-        p[1] = level + 0.02;
+        p[1] = floating_height(world, p, vehicle).unwrap();
     } else if !body.on_ground
         || environment::water_surface(world, p[0], p[2]).is_some_and(|level| p[1] < level + 0.2)
     {
@@ -227,11 +266,13 @@ pub fn advance(
         return false;
     }
     let direction = input.direction.map(|v| if v.is_finite() { v } else { 0.0 });
-    let throttle = norm(direction).min(1.0);
+    let direction_length = norm(direction);
+    let throttle = direction_length.min(1.0);
     let steps = (dt.min(0.25) / (1.0 / 120.0)).ceil() as usize;
     let step = dt.min(0.25) / steps as f32;
     for _ in 0..steps {
         let old_heading = craft.heading;
+        let mut turn_blocked = false;
         if throttle > 0.05 {
             let target = libm::atan2f(direction[0], -direction[1]);
             let delta = (target - craft.heading + std::f32::consts::PI)
@@ -246,6 +287,7 @@ pub fn advance(
                 .rem_euclid(std::f32::consts::TAU);
             if !position_is_clear(world, body.position, craft, obstacles) {
                 craft.heading = old_heading;
+                turn_blocked = true;
             }
         }
         let f = forward(craft.heading);
@@ -284,6 +326,15 @@ pub fn advance(
                 body.velocity[2] = 0.;
             }
         } else {
+            // A bank can leave room to paddle out but no room to swing the
+            // bow. Scull toward the requested direction until turning clears,
+            // retaining every swept hull/character contact below.
+            let recovering = craft.kind == VehicleKind::Kayak && turn_blocked && !input.jump;
+            let paddle = if recovering {
+                direction.map(|v| v / direction_length)
+            } else {
+                f
+            };
             let flow = environment::current(world, body.position[0], body.position[2]);
             let wind = environment::wind(world.seed, now);
             let v = [body.velocity[0] - flow[0], body.velocity[2] - flow[1]];
@@ -304,8 +355,9 @@ pub fn advance(
                     0.0
                 };
                 let drag = 0.3 + norm(v) * 0.07 + if input.jump { 2.0 } else { 0.0 };
-                body.velocity[axis] +=
-                    (f[k] * thrust + leeway - v[k] * drag + (f[k] * along - v[k]) * 1.3) * step;
+                body.velocity[axis] += (paddle[k] * thrust + leeway - v[k] * drag
+                    + (f[k] * along - v[k]) * if recovering { 0.0 } else { 1.3 })
+                    * step;
             }
             for axis in [0, 2] {
                 let old = body.position;
@@ -317,10 +369,7 @@ pub fn advance(
                     body.velocity[axis] = 0.0;
                 }
             }
-            if let Some(level) =
-                environment::water_surface(world, body.position[0], body.position[2])
-            {
-                let target = level + 0.02;
+            if let Some(target) = floating_height(world, body.position, craft) {
                 let mut next = body.position;
                 if body.position[1] > target {
                     body.velocity[1] = (body.velocity[1] - 22. * step).max(-12.);
@@ -356,6 +405,10 @@ mod tests {
     fn island() -> &'static World {
         static WORLD: std::sync::OnceLock<World> = std::sync::OnceLock::new();
         WORLD.get_or_init(|| World::generate(42, WorldGeneration::GeographyV2))
+    }
+    fn public_island() -> &'static World {
+        static WORLD: std::sync::OnceLock<World> = std::sync::OnceLock::new();
+        WORLD.get_or_init(|| World::generate(2_689_504_302, WorldGeneration::GeographyV6))
     }
     #[test]
     fn sailing_requires_tacking_and_retains_momentum_when_braked() {
@@ -443,6 +496,289 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn kayak_paddles_past_the_public_islands_shallow_voxel_bed_step() {
+        let world = public_island();
+        let direction = [std::f32::consts::FRAC_1_SQRT_2; 2];
+        let mut body = Body::new([-3187.8577, 44.120476, -11186.21]);
+        let mut craft = Some(
+            spawn(
+                world,
+                &mut body,
+                VehicleKind::Kayak,
+                direction[0].atan2(-direction[1]),
+                &[],
+            )
+            .unwrap(),
+        );
+        let start = body.position;
+        for _ in 0..80 {
+            assert!(advance(
+                world,
+                &mut body,
+                MoveInput {
+                    direction,
+                    sprint: true,
+                    ..Default::default()
+                },
+                0.05,
+                &[],
+                0.,
+                &mut craft
+            ));
+        }
+        assert!(craft.is_some());
+        assert!(
+            (body.position[0] - start[0]).hypot(body.position[2] - start[2]) > 4.,
+            "continuous paddling must clear the shallow bed step: {start:?} -> {:?}",
+            body.position
+        );
+    }
+
+    #[test]
+    fn kayak_hull_follows_a_sloping_river_instead_of_stopping_at_each_bed_step() {
+        let world = public_island();
+        for heading in [std::f32::consts::PI, 3.1593623] {
+            let mut body = Body::new([64., 45.54889, -11102.501]);
+            let mut craft =
+                Some(spawn(world, &mut body, VehicleKind::Kayak, heading, &[]).unwrap());
+            let start = body.position;
+            for _ in 0..80 {
+                assert!(advance(
+                    world,
+                    &mut body,
+                    MoveInput {
+                        direction: [0., 1.],
+                        sprint: true,
+                        ..Default::default()
+                    },
+                    0.05,
+                    &[],
+                    0.,
+                    &mut craft
+                ));
+            }
+            assert!(craft.is_some());
+            assert!(
+                body.position[2] - start[2] > 4.,
+                "upstream paddling must climb the water slope: {start:?} -> {:?}",
+                body.position
+            );
+        }
+    }
+
+    #[test]
+    fn kayak_buoyancy_raises_the_hull_through_a_steepening_river() {
+        let world = public_island();
+        let mut body = Body::new([64., 49.955513, -11067.809]);
+        let mut craft = Some(
+            spawn(
+                world,
+                &mut body,
+                VehicleKind::Kayak,
+                std::f32::consts::PI,
+                &[],
+            )
+            .unwrap(),
+        );
+        let start = body.position;
+        for _ in 0..80 {
+            assert!(advance(
+                world,
+                &mut body,
+                MoveInput {
+                    direction: [0., 1.],
+                    sprint: true,
+                    ..Default::default()
+                },
+                0.05,
+                &[],
+                0.,
+                &mut craft
+            ));
+        }
+        assert!(craft.is_some());
+        assert!(
+            body.position[2] - start[2] > 0.65 && body.position[1] - start[1] > 0.1,
+            "the hull must rise with the water under its bow: {start:?} -> {:?}",
+            body.position
+        );
+    }
+
+    #[test]
+    fn pitched_kayak_buoyancy_does_not_climb_an_edited_river_wall() {
+        let mut world = public_island().clone();
+        let mut body = Body::new([64., 45.54889, -11102.501]);
+        let mut craft = Some(
+            spawn(
+                &world,
+                &mut body,
+                VehicleKind::Kayak,
+                std::f32::consts::PI,
+                &[],
+            )
+            .unwrap(),
+        );
+        let start = body.position;
+        let wall_z = ((start[2] + 2.) / CELL_SIZE).floor() as i32;
+        for x in 126..=129 {
+            for y in 90..=99 {
+                world
+                    .set_block(BlockPos::new(x, y, wall_z), Block::Stone)
+                    .unwrap();
+            }
+        }
+        for _ in 0..80 {
+            assert!(advance(
+                &world,
+                &mut body,
+                MoveInput {
+                    direction: [0., 1.],
+                    sprint: true,
+                    ..Default::default()
+                },
+                0.05,
+                &[],
+                0.,
+                &mut craft
+            ));
+        }
+        assert!(craft.is_some());
+        assert!(body.position[2] < wall_z as f32 * CELL_SIZE - 1.4);
+        assert!(
+            body.position[1] - start[1] < 0.5,
+            "buoyancy must not lift over the wall"
+        );
+    }
+
+    #[test]
+    fn kayak_can_paddle_away_from_a_dry_downstream_channel_edge() {
+        let world = public_island();
+        let mut body = Body::new([63.989956, 41.707188, -11129.092]);
+        let mut craft = Some(spawn(world, &mut body, VehicleKind::Kayak, 3.1593623, &[]).unwrap());
+        let start = body.position;
+        for _ in 0..160 {
+            assert!(advance(
+                world,
+                &mut body,
+                MoveInput {
+                    direction: [0., 1.],
+                    ..Default::default()
+                },
+                0.05,
+                &[],
+                0.,
+                &mut craft
+            ));
+        }
+        assert!(
+            body.position[2] - start[2] > 1.,
+            "paddling back into the channel must escape a bank contact: {start:?} -> {:?}",
+            body.position
+        );
+        assert!(craft.is_some());
+    }
+
+    #[test]
+    fn kayak_can_scull_out_when_a_bank_blocks_its_turn() {
+        let world = public_island();
+        let start = [63.915215, 41.55425, -11130.15];
+        let trapped = Vehicle {
+            kind: VehicleKind::Kayak,
+            heading: 4.582626,
+        };
+        assert!(position_is_clear(world, start, trapped, &[]));
+        assert!(!position_is_clear(
+            world,
+            start,
+            Vehicle {
+                heading: trapped.heading - 0.015,
+                ..trapped
+            },
+            &[]
+        ));
+        for direction in [[0., 1.], [1., 0.]] {
+            let mut body = Body::new(start);
+            let mut craft = Some(trapped);
+            for _ in 0..160 {
+                assert!(advance(
+                    world,
+                    &mut body,
+                    MoveInput {
+                        direction,
+                        ..Default::default()
+                    },
+                    0.05,
+                    &[],
+                    0.,
+                    &mut craft
+                ));
+                assert!(position_is_clear(world, body.position, craft.unwrap(), &[]));
+            }
+            let progress = (body.position[0] - start[0]) * direction[0]
+                + (body.position[2] - start[2]) * direction[1];
+            assert!(progress > 2., "bank recovery must make progress: {body:?}");
+            assert!((craft.unwrap().heading - trapped.heading).abs() > 1.);
+        }
+    }
+
+    #[test]
+    fn bank_recovery_preserves_braking_and_hull_contacts() {
+        let mut world = public_island().clone();
+        let start = [63.915215, 41.55425, -11130.15];
+        let trapped = Vehicle {
+            kind: VehicleKind::Kayak,
+            heading: 4.582626,
+        };
+        let wall_z = ((start[2] + 1.5) / CELL_SIZE).floor() as i32;
+        for x in 122..=135 {
+            for y in 81..=87 {
+                world
+                    .set_block(BlockPos::new(x, y, wall_z), Block::Stone)
+                    .unwrap();
+            }
+        }
+        let person = [start[0], start[1], start[2] + 1.3];
+        for (edited_wall, people, brake) in [
+            (true, &[][..], false),
+            (false, &[person][..], false),
+            (false, &[][..], true),
+        ] {
+            let world = if edited_wall { &world } else { public_island() };
+            let mut body = Body::new(start);
+            let mut craft = Some(trapped);
+            assert!(position_is_clear(world, start, trapped, people));
+            for _ in 0..160 {
+                assert!(advance(
+                    world,
+                    &mut body,
+                    MoveInput {
+                        direction: [0., 1.],
+                        jump: brake,
+                        ..Default::default()
+                    },
+                    0.05,
+                    people,
+                    0.,
+                    &mut craft
+                ));
+                assert!(position_is_clear(
+                    world,
+                    body.position,
+                    craft.unwrap(),
+                    people
+                ));
+            }
+            assert!(body.position[2] - start[2] < 1.);
+            if brake {
+                assert_eq!(
+                    body.position, start,
+                    "braking must not apply recovery thrust"
+                );
+            }
+        }
     }
     #[test]
     fn a_coasting_bike_accelerates_downhill_and_stops_at_a_thin_wall() {

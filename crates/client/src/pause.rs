@@ -31,6 +31,7 @@ pub struct PauseMenu {
     /// Includes the closing frame, so Resume cannot also dig, jump, or look.
     pub input_blocked: bool,
     pub just_closed: bool,
+    vehicle_notice: Option<&'static str>,
     focused: Option<Action>,
     scroll_finger: Option<(u64, Vec2)>,
     distance_drag: Option<DistanceDrag>,
@@ -45,6 +46,8 @@ pub(super) struct PauseContent;
 pub(super) struct PauseGraphics;
 #[derive(Component)]
 pub(super) struct VehicleChoices;
+#[derive(Component)]
+pub(super) struct VehicleNote;
 #[derive(Component)]
 pub(super) struct PauseActions;
 #[derive(Component)]
@@ -219,6 +222,7 @@ pub fn setup(
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
+    let heading = crate::ui::heading_font(&mut fonts);
     commands
         .spawn((
             GameEntity,
@@ -254,7 +258,7 @@ pub fn setup(
                 BackgroundColor(Color::srgb(0.08, 0.15, 0.15)),
             ))
             .with_children(|panel| {
-                panel.spawn(label("Paused", &font, 26.));
+                panel.spawn(label("Paused", &heading, 26.));
                 panel.spawn((
                     Text::new("Your controls are paused. The shared world keeps running."),
                     TextFont::from_font_size(14.).with_font(font.clone()),
@@ -275,7 +279,7 @@ pub fn setup(
                         row_gap: px(8),
                         ..default()
                     },)).with_children(|graphics| {
-                        graphics.spawn((Text::new("GRAPHICS QUALITY"), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
+                        graphics.spawn((Text::new("GRAPHICS QUALITY"), TextFont::from_font_size(14.).with_font(heading.clone()), TextColor(accent())));
                         graphics.spawn((Node { column_gap: px(6), ..default() },)).with_children(|row| {
                             for (quality, name) in [(GraphicsQuality::Low, "Low"), (GraphicsQuality::Balanced, "Balanced"), (GraphicsQuality::High, "High")] {
                                 row.spawn(button(Action::Quality(quality), percent(33.33))).with_child(label(name, &font, 16.));
@@ -288,7 +292,7 @@ pub fn setup(
                             ("SHADOW DISTANCE", Distance::Shadows, Action::ShadowLess, Action::ShadowMore),
                         ] {
                             graphics.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(4), ..default() },)).with_children(|setting| {
-                                setting.spawn((Text::new(title), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
+                                setting.spawn((Text::new(title), TextFont::from_font_size(14.).with_font(heading.clone()), TextColor(accent())));
                                 setting.spawn((Node { align_items: AlignItems::Center, column_gap: px(8), ..default() },)).with_children(|row| {
                                     row.spawn(button(less, px(48))).with_child(label("−", &font, 23.));
                                     let value = row.spawn((label("", &font, 20.), Node { min_width: px(76), ..default() })).id();
@@ -332,19 +336,22 @@ pub fn setup(
                     });
                     if session.observer.is_none() {
                         content.spawn((VehicleChoices,Node{display:Display::None,width:percent(100),flex_direction:FlexDirection::Column,row_gap:px(12),..default()})).with_children(|choices| {
-                            choices.spawn(label("Choose a vehicle · Free to use", &font,20.));
+                            choices.spawn(label("Choose a vehicle · Free to use", &heading,20.));
                             choices.spawn((Node{column_gap:px(10),..default()},)).with_children(|row| {
                                 for (i,kind) in rubblekin_core::vehicles::VehicleKind::ALL.into_iter().enumerate() {
                                     let bundle=button(Action::Vehicle(kind),percent(33.33));
                                     // Each button contains its complete model picture and name.
                                     row.spawn(bundle).insert(Node{width:percent(33.33),min_height:px(130),padding:UiRect::all(px(8)),flex_direction:FlexDirection::Column,align_items:AlignItems::Center,justify_content:JustifyContent::Center,row_gap:px(6),..default()}).with_children(|card| {
                                         card.spawn((ImageNode::new(pictures.0[i].clone()),Node{width:px(72),height:px(72),..default()}));
-                                        card.spawn(label(kind.name(), &font,18.));
+                                        card.spawn(label(kind.name(), &heading,18.));
                                     });
                                 }
                             });
-                            choices.spawn(label("Bike: dry ground · Boats: wade into clear water
-Move to steer · Jump brakes · Sprint pedals / paddles", &font,14.));
+                            choices.spawn((VehicleNote, label(if touch.enabled {
+                                "Bike: dry ground · Boats: wade into clear water\nMove to steer · Brake slows · hold Pedal hard / Paddle hard"
+                            } else {
+                                "Bike: dry ground · Boats: wade into clear water\nWASD steers · Space brakes · Shift pedals / paddles"
+                            }, &font,14.)));
                             choices.spawn((Node{column_gap:px(10),..default()},)).with_children(|row| {
                                 row.spawn(button(Action::VehicleBack,percent(50))).with_child(label("Back", &font,16.));
                                 row.spawn(button(Action::Dismount,percent(50))).with_child(label("Leave vehicle", &font,16.));
@@ -386,10 +393,12 @@ fn activate(
     match action {
         Action::Vehicles => {
             pause.vehicles = true;
+            pause.vehicle_notice = None;
             pause.focused = Some(Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Bike));
         }
         Action::VehicleBack => {
             pause.vehicles = false;
+            pause.vehicle_notice = None;
             pause.focused = Some(Action::Resume);
         }
         Action::Distance(_) => pause.focused = Some(action),
@@ -467,9 +476,10 @@ pub fn read(
     extra: (
         Option<ResMut<crate::tutorials::Tutorials>>,
         Option<ResMut<crate::network::Connection>>,
+        Option<Res<crate::VoxelWorld>>,
     ),
 ) {
-    let (mut tutorials, mut connection) = extra;
+    let (mut tutorials, mut connection, world) = extra;
     let (keys, mouse, wheel) = input;
     let (conversation, console, mut map, market) = modals;
     pause.just_closed = false;
@@ -537,6 +547,7 @@ pub fn read(
     if keys.just_pressed(KeyCode::KeyV) && session.as_ref().is_some_and(|s| s.observer.is_none()) {
         pause.open = true;
         pause.vehicles = true;
+        pause.vehicle_notice = None;
         pause.focused = Some(Action::Vehicle(rubblekin_core::vehicles::VehicleKind::Bike));
     }
     let toggle = (keys.just_pressed(KeyCode::Escape) || back)
@@ -549,6 +560,7 @@ pub fn read(
     }
     pause.input_blocked = was_open || pause.open || toggle;
     if was_open != pause.open {
+        pause.vehicle_notice = None;
         if !pause.vehicles {
             pause.focused = Some(Action::Resume);
         }
@@ -817,6 +829,18 @@ pub fn read(
         scroll.0.y = (scroll.0.y + scroll_delta).clamp(0., max.max(0.));
     }
     if let Some(action) = chosen {
+        if let Action::Vehicle(kind) = action
+            && let (Some(session), Some(world)) = (session.as_deref(), world.as_deref())
+            && let Some(reason) = vehicle_spawn_error(session, &world.0, kind)
+        {
+            pause.vehicle_notice = Some(reason);
+            pause.focused = Some(action);
+            pause.distance_drag = None;
+            pause.keyboard_distance = None;
+            touch.menu_open = true;
+            return;
+        }
+        pause.vehicle_notice = None;
         if session.as_ref().is_some_and(|s| s.observer.is_none())
             && let Some(c) = connection.as_deref_mut()
         {
@@ -848,6 +872,34 @@ pub fn read(
     touch.menu_open = pause.open;
 }
 
+fn vehicle_spawn_error(
+    session: &Session,
+    world: &rubblekin_core::world::World,
+    kind: rubblekin_core::vehicles::VehicleKind,
+) -> Option<&'static str> {
+    if session.glider_ride.is_some() || session.gliding || session.ride.is_some() {
+        return Some("Land and leave your current ride first.");
+    }
+    let obstacles = crate::character_obstacles(
+        session.id,
+        &session.players,
+        &session.npc,
+        &session.residents,
+        &session.airships,
+        session.airship_clock.time,
+    );
+    // Preview the exact shared rules on a copy. Only the server can install
+    // the ride or change the real body; moving people may still reject it.
+    rubblekin_core::vehicles::spawn(
+        world,
+        &mut session.body.clone(),
+        kind,
+        session.yaw,
+        &obstacles,
+    )
+    .err()
+}
+
 fn track_fraction(point: Vec2, computed: &ComputedNode, transform: &UiGlobalTransform) -> f32 {
     let local = transform.affine().inverse().transform_point2(point);
     (local.x / computed.size.x.max(1.) + 0.5).clamp(0., 1.)
@@ -858,6 +910,7 @@ pub fn refresh(
     pause: Res<PauseMenu>,
     graphics: Res<GraphicsSettings>,
     window: Single<&Window, With<PrimaryWindow>>,
+    touch: Res<TouchControls>,
     mut roots: Query<(&mut Node, &ComputedNode, &mut ScrollPosition), With<PauseRoot>>,
     mut layout: Query<
         (
@@ -873,10 +926,12 @@ pub fn refresh(
     >,
     mut texts: Query<(
         &mut Text,
+        &mut TextColor,
         Option<&NearText>,
         Option<&ShadowText>,
         Option<&TreeText>,
         Option<&QualityNote>,
+        Option<&VehicleNote>,
     )>,
     mut buttons: Query<(
         &Action,
@@ -943,7 +998,7 @@ pub fn refresh(
             node.width = if wide { px(220) } else { percent(100) };
         }
     }
-    for (mut text, near, shadow, tree, note) in &mut texts {
+    for (mut text, mut color, near, shadow, tree, note, vehicle) in &mut texts {
         let value = if near.is_some() {
             format!("{:.0} m", Distance::Near.displayed_value(&pause, &graphics))
         } else if shadow.is_some() {
@@ -967,6 +1022,26 @@ pub fn refresh(
                 GraphicsQuality::High => "Sharper shadows · 4× antialiasing",
             }
             .into()
+        } else if vehicle.is_some() {
+            let next_color = if pause.vehicle_notice.is_some() {
+                accent()
+            } else {
+                ink()
+            };
+            if color.0 != next_color {
+                color.0 = next_color;
+            }
+            let guidance = pause
+                .vehicle_notice
+                .unwrap_or("Bike: dry ground · Boats: wade into clear water");
+            format!(
+                "{guidance}\n{}",
+                if touch.enabled {
+                    "Move to steer · Brake slows · hold Pedal hard / Paddle hard"
+                } else {
+                    "WASD steers · Space brakes · Shift pedals / paddles"
+                }
+            )
         } else {
             continue;
         };
@@ -1911,6 +1986,161 @@ mod tests {
         assert!(
             app.world().resource::<PauseMenu>().input_blocked,
             "closing the chooser must not also paddle or build"
+        );
+    }
+
+    #[test]
+    fn rejected_vehicle_choice_keeps_its_reason_visible_and_sends_no_spawn() {
+        use crate::network::Connection;
+        use rubblekin_core::{
+            physics::{Body, MoveInput, move_character},
+            protocol::ClientMessage,
+            vehicles::{Vehicle, VehicleAction, VehicleKind},
+            world::World,
+        };
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            time::Duration,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let client = std::thread::spawn(move || {
+            Connection::connect(&address, "Vehicle menu".into(), SessionMode::Player).unwrap()
+        });
+        let (socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut peer = BufReader::new(socket);
+        let mut line = String::new();
+        peer.read_line(&mut line).unwrap();
+        let welcome = crate::join::tests::welcome(SessionMode::Player);
+        serde_json::to_writer(peer.get_mut(), &welcome).unwrap();
+        peer.get_mut().write_all(b"\n").unwrap();
+        let (connection, _) = client.join().unwrap();
+        let (mut app, window) = menu_app();
+        let world = World::new(42);
+        let mut body = Body::new(world.spawn_position());
+        move_character(&world, &mut body, MoveInput::default(), 0.25);
+        {
+            let mut session = app.world_mut().resource_mut::<Session>();
+            session.body = body.clone();
+            session.vehicle = Some(Vehicle {
+                kind: VehicleKind::Bike,
+                heading: 0.,
+            });
+            session.npc.position = [100., 80., 100.];
+        }
+        app.insert_resource(crate::VoxelWorld(world))
+            .insert_resource(connection)
+            .add_systems(Update, refresh.after(read));
+        app.world_mut().resource_mut::<PauseMenu>().vehicles = true;
+        let note = app.world_mut().spawn((VehicleNote, Text::new(""))).id();
+        target(&mut app, Action::Vehicle(VehicleKind::Kayak));
+        tap(&mut app, window);
+        for _ in 0..3 {
+            app.update();
+        }
+        let pause = app.world().resource::<PauseMenu>();
+        assert!(pause.open && pause.vehicles && pause.input_blocked && !pause.just_closed);
+        assert_eq!(
+            pause.vehicle_notice,
+            Some("Move into open water to launch this boat.")
+        );
+        assert!(
+            app.world()
+                .get::<Text>(note)
+                .unwrap()
+                .0
+                .starts_with(pause.vehicle_notice.unwrap())
+        );
+        assert_eq!(app.world().get::<TextColor>(note).unwrap().0, accent());
+        let session = app.world().resource::<Session>();
+        assert_eq!(session.body.position, body.position);
+        assert_eq!(session.body.velocity, body.velocity);
+        assert_eq!(session.vehicle.unwrap().kind, VehicleKind::Bike);
+        app.world_mut()
+            .resource_mut::<Connection>()
+            .send(ClientMessage::Ping);
+        line.clear();
+        peer.read_line(&mut line).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<ClientMessage>(&line).unwrap(),
+            ClientMessage::Ping
+        ));
+
+        // A valid retry still sends the ordinary server request and closes
+        // safely. The preview does not install a new ride or reposition us.
+        app.world_mut().resource_mut::<PauseMenu>().focused =
+            Some(Action::Vehicle(VehicleKind::Bike));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        let pause = app.world().resource::<PauseMenu>();
+        assert!(!pause.open && pause.just_closed && pause.input_blocked);
+        assert!(pause.vehicle_notice.is_none());
+        line.clear();
+        peer.read_line(&mut line).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<ClientMessage>(&line).unwrap(),
+            ClientMessage::Vehicle {
+                action: VehicleAction::Spawn(VehicleKind::Bike)
+            }
+        ));
+        assert_eq!(
+            app.world().resource::<Session>().body.position,
+            body.position
+        );
+    }
+
+    #[test]
+    fn vehicle_preview_uses_full_hull_people_water_and_existing_ride_rules() {
+        use rubblekin_core::{
+            physics::{Body, MoveInput, move_character},
+            vehicles::VehicleKind,
+            world::{World, WorldGeneration},
+        };
+        let (mut app, _) = menu_app();
+        let dry = World::new(42);
+        let mut session = app.world_mut().resource_mut::<Session>();
+        session.body = Body::new(dry.spawn_position());
+        session.yaw = 0.;
+        move_character(&dry, &mut session.body, MoveInput::default(), 0.25);
+        session.npc.position = [100., 80., 100.];
+        assert_eq!(vehicle_spawn_error(&session, &dry, VehicleKind::Bike), None);
+        session.npc.position = session.body.position;
+        session.npc.position[2] -= 0.85;
+        assert_eq!(
+            vehicle_spawn_error(&session, &dry, VehicleKind::Bike),
+            Some("Find more clear space for the whole vehicle.")
+        );
+        session.npc.position = [100., 80., 100.];
+        session.gliding = true;
+        assert_eq!(
+            vehicle_spawn_error(&session, &dry, VehicleKind::Bike),
+            Some("Land and leave your current ride first.")
+        );
+        session.gliding = false;
+        let mut water = World::generate(42, WorldGeneration::GeographyV2);
+        session.body.position = [15_000., 0.02, 15_000.];
+        assert_eq!(
+            vehicle_spawn_error(&session, &water, VehicleKind::Bike),
+            Some("Stand on dry ground to ride a bike.")
+        );
+        for kind in [VehicleKind::Kayak, VehicleKind::Sailboat] {
+            assert_eq!(vehicle_spawn_error(&session, &water, kind), None);
+        }
+        water
+            .set_block(
+                rubblekin_core::world::BlockPos::new(30_000, 0, 29_997),
+                rubblekin_core::world::Block::Stone,
+            )
+            .unwrap();
+        assert_eq!(
+            vehicle_spawn_error(&session, &water, VehicleKind::Kayak),
+            Some("Find more clear space for the whole vehicle.")
         );
     }
 }

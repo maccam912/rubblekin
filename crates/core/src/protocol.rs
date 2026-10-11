@@ -7,8 +7,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-// Bulk building, light blocks and emergency travel require matching peers.
-pub const PROTOCOL_VERSION: u32 = 33;
+// River hull collision, bank recovery and prediction require rebuilt peers.
+pub const PROTOCOL_VERSION: u32 = 34;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;

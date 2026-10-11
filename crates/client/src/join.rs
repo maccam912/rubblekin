@@ -338,6 +338,10 @@ pub(super) struct MenuPanel;
 #[derive(Component)]
 pub(super) struct MenuContent;
 #[derive(Component)]
+pub(super) struct MenuProgress;
+#[derive(Component)]
+pub(super) struct ObserverHint;
+#[derive(Component)]
 pub(super) struct MenuColumn;
 #[derive(Component)]
 pub(super) struct KeyboardDone;
@@ -352,6 +356,7 @@ pub fn setup(
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
+    let heading = crate::ui::heading_font(&mut fonts);
     let camera = commands.spawn((Camera2d, MenuCamera)).id();
     commands.spawn((
         MenuRoot,
@@ -377,16 +382,30 @@ pub fn setup(
             BackgroundColor(Color::srgb(0.08, 0.15, 0.15)),
         )).with_children(|panel| {
             panel.spawn((Node { align_items: AlignItems::Center, justify_content: JustifyContent::SpaceBetween, column_gap: px(8), ..default() },)).with_children(|header| {
-                header.spawn((Text::new("R U B B L E K I N"), TextFont::from_font_size(if touch { 24. } else { 32. }).with_font(font.clone()), TextColor(ink())));
+                header.spawn((Text::new("Rubblekin"), TextFont::from_font_size(if touch { 28. } else { 36. }).with_font(heading.clone()), TextColor(ink())));
                 header.spawn(((Button, ActivateOnPress, Hovered::default()), Action::DismissKeyboard, KeyboardDone, Node { display: Display::None, min_height: px(44), padding: UiRect::axes(px(14), px(8)), border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
                     .with_child((Text::new("Done typing"), TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink())));
             });
             panel.spawn((Text::new("A LIVING WORLD  /  EARLY PROTOTYPE"), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
+            panel.spawn((MenuProgress, Node {
+                display: Display::None, width: percent(100), max_width: px(560),
+                flex_direction: FlexDirection::Column, row_gap: px(16),
+                padding: UiRect::all(px(16)), border_radius: BorderRadius::all(px(8)),
+                ..default()
+            }, BackgroundColor(Color::srgb(0.055, 0.10, 0.10)))).with_children(|progress| {
+                progress.spawn((MenuStatus, Text::new(menu.status.clone()), TextFont::from_font_size(20.).with_font(font.clone()), TextColor(ink())));
+                progress.spawn(((Button, ActivateOnPress, Hovered::default()), Action::Cancel, Node {
+                    min_height: px(48), padding: UiRect::axes(px(20), px(11)),
+                    align_items: AlignItems::Center, justify_content: JustifyContent::Center,
+                    border_radius: BorderRadius::all(px(6)), ..default()
+                }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                    .with_child((Text::new("Cancel"), TextFont::from_font_size(19.).with_font(font.clone()), TextColor(ink())));
+            });
             panel.spawn((MenuContent, Node { flex_direction: FlexDirection::Column, row_gap: px(16), column_gap: px(24), ..default() },)).with_children(|content| {
                 content.spawn((MenuColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(if touch { 8 } else { 12 }), min_width: px(0), ..default() },)).with_children(|fields| {
-                    fields.spawn((Text::new("Choose your server"), TextFont::from_font_size(if touch { 20. } else { 24. }).with_font(font.clone()), TextColor(ink())));
+                    fields.spawn((Text::new("Choose your server"), TextFont::from_font_size(if touch { 20. } else { 24. }).with_font(heading.clone()), TextColor(ink())));
                     for (field, label, value, max) in [(Field::Address, "SERVER ADDRESS", menu.address.as_str(), 260), (Field::Name, "CHARACTER NAME", menu.name.as_str(), 24)] {
-                        fields.spawn((Text::new(label), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(accent())));
+                        fields.spawn((Text::new(label), TextFont::from_font_size(14.).with_font(heading.clone()), TextColor(accent())));
                         fields.spawn((
                             field, Hovered::default(), TabIndex(0),
                             Node { width: percent(100), min_height: px(48), padding: UiRect::all(px(10)), border: UiRect::all(px(2)), border_radius: BorderRadius::all(px(5)), overflow: Overflow::clip_x(), ..default() },
@@ -396,26 +415,32 @@ pub fn setup(
                             EditableText { max_characters: Some(max), ..EditableText::new(value) },
                             EditableTextFilter::new(|ch| !ch.is_control()), TextLayout::no_wrap(),
                             TextCursorStyle { color: ink(), selection_color: Color::srgb(0.23, 0.43, 0.42), unfocused_selection_color: Color::NONE, ..default() },
-                            TextFont::from_font_size(21.).with_font(font.clone()), TextColor(ink()),
+                            TextFont::from_font_size(if touch { 19. } else { 21. }).with_font(font.clone()), TextColor(ink()),
                             BackgroundColor(Color::srgb(0.04, 0.08, 0.08)), BorderColor::all(Color::srgb(0.20, 0.32, 0.30)),
                         ));
                     }
                 });
                 content.spawn((MenuColumn, Node { flex_direction: FlexDirection::Column, row_gap: px(if touch { 8 } else { 12 }), min_width: px(0), ..default() },)).with_children(|actions| {
                     actions.spawn((Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() },)).with_children(|row| {
-                        for (mode, label) in [(SessionMode::Player, "Play as explorer"), (SessionMode::Observer, "Observe as admin")] {
+                        for (mode, label) in [
+                            (SessionMode::Player, if touch { "Explorer" } else { "Play as explorer" }),
+                            (SessionMode::Observer, if touch { "Admin camera" } else { "Observe as admin" }),
+                        ] {
                             row.spawn(((Button, ActivateOnPress, Hovered::default()), Action::Mode(mode), Node { min_height: px(48), padding: UiRect::axes(px(12), px(10)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
                                 .with_child((Text::new(label), TextFont::from_font_size(if touch { 16. } else { 18. }).with_font(font.clone()), TextColor(ink())));
                         }
                     });
-                    actions.spawn((Text::new("Observer camera is read-only; the server must allow observers."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+                    actions.spawn((ObserverHint, Text::new("Read-only camera; the server must allow observers."), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69)), Node {
+                        display: if touch && menu.mode == SessionMode::Player { Display::None } else { Display::Flex },
+                        ..default()
+                    }));
                     actions.spawn(((Button, ActivateOnPress, Hovered::default()), Action::MinimumGraphics, Node { min_height: px(48), padding: UiRect::axes(px(16), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
-                        .with_child((Text::new("Use minimum graphics"), TextFont::from_font_size(19.).with_font(font.clone()), TextColor(ink())));
-                    actions.spawn((Text::new("Low quality · 24 m detail · 128 m trees\nShadows and antialiasing off · applies before joining"), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
+                        .with_child((Text::new(if touch { "Low graphics" } else { "Use minimum graphics" }), TextFont::from_font_size(if touch { 17. } else { 19. }).with_font(font.clone()), TextColor(ink())));
+                    actions.spawn((Text::new(if touch { "Less detail and effects.\nChange graphics later in Menu." } else { "Low quality · 24 m detail · 128 m trees\nShadows and antialiasing off · applies before joining" }), TextFont::from_font_size(14.).with_font(font.clone()), TextColor(Color::srgb(0.62, 0.74, 0.69))));
                     actions.spawn((Node { column_gap: px(8), flex_wrap: FlexWrap::Wrap, row_gap: px(8), ..default() },)).with_children(|row| {
-                        for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world"), (Action::Cancel, "Cancel")] {
-                            row.spawn(((Button, ActivateOnPress, Hovered::default()), action, Node { display: if matches!(action, Action::Cancel) { Display::None } else { Display::Flex }, min_height: px(48), padding: UiRect::axes(px(20), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
-                                .with_child((Text::new(label), TextFont::from_font_size(19.).with_font(font.clone()), TextColor(ink())));
+                        for (action, label) in [(Action::Join, "Join server"), (Action::Local, "Local world")] {
+                            row.spawn(((Button, ActivateOnPress, Hovered::default()), action, Node { min_height: px(48), padding: UiRect::axes(px(if touch { 12 } else { 20 }), px(11)), align_items: AlignItems::Center, border_radius: BorderRadius::all(px(6)), ..default() }, BackgroundColor(Color::srgb(0.19, 0.34, 0.31))))
+                                .with_child((Text::new(label), TextFont::from_font_size(if touch { 17. } else { 19. }).with_font(font.clone()), TextColor(ink())));
                         }
                     });
                     actions.spawn((Text::new(menu.status.clone()), TextFont::from_font_size(17.).with_font(font.clone()), TextColor(ink()), MenuStatus, Node { min_height: px(42), ..default() }));
@@ -714,6 +739,8 @@ pub fn layout(
         Query<&mut Node, With<MenuContent>>,
         Query<&mut Node, With<MenuColumn>>,
         Query<&mut Node, With<KeyboardDone>>,
+        Query<&mut Node, With<MenuProgress>>,
+        Query<&mut Node, With<ObserverHint>>,
     )>,
 ) {
     let touch = touch.is_some_and(|touch| touch.enabled);
@@ -725,15 +752,22 @@ pub fn layout(
         return;
     }
     let height = visible_height(&window);
-    let wide = touch && window.width() >= 650.;
+    let wide = touch && window.width() >= 600.;
     for mut panel in &mut nodes.p1() {
-        panel.width = px(if wide {
+        panel.width = px(if menu.pending.is_some() {
+            560.
+        } else if wide {
             (window.width() - 32.).min(900.)
         } else {
             560.
         });
     }
     for mut content in &mut nodes.p2() {
+        content.display = if menu.pending.is_some() {
+            Display::None
+        } else {
+            Display::Flex
+        };
         content.flex_direction = if wide {
             FlexDirection::Row
         } else {
@@ -746,6 +780,20 @@ pub fn layout(
     }
     for mut done in &mut nodes.p4() {
         done.display = if touch && editing {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for mut progress in &mut nodes.p5() {
+        progress.display = if menu.pending.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for mut hint in &mut nodes.p6() {
+        hint.display = if !touch || menu.mode == SessionMode::Observer {
             Display::Flex
         } else {
             Display::None
@@ -1229,6 +1277,7 @@ pub(crate) fn session_from_welcome(
             inventory: default(),
             flying: false,
             captured: false,
+            vehicle_effort: 0.,
             can_admin,
             inspector: true,
             inspected: None,
@@ -1345,7 +1394,7 @@ pub fn refresh(
     focus: Res<InputFocus>,
     mut root: Single<&mut Node, With<MenuRoot>>,
     mut camera: Single<&mut Camera, With<MenuCamera>>,
-    mut status: Single<&mut Text, With<MenuStatus>>,
+    mut statuses: Query<&mut Text, With<MenuStatus>>,
     mut fields: Query<(Entity, &mut BorderColor), With<Field>>,
     mut buttons: Query<
         (
@@ -1370,8 +1419,10 @@ pub fn refresh(
         Display::Flex
     };
     camera.is_active = session.is_none();
-    if status.0 != menu.status {
-        status.0.clone_from(&menu.status);
+    for mut status in &mut statuses {
+        if status.0 != menu.status {
+            status.0.clone_from(&menu.status);
+        }
     }
     for (entity, mut border) in &mut fields {
         border.set_all(if focus.get() == Some(entity) && menu.pending.is_none() {
@@ -1411,6 +1462,136 @@ pub fn refresh(
 pub(crate) mod tests {
     use super::*;
     use rubblekin_core::protocol::{NpcAction, NpcSnapshot, PlayerSnapshot};
+
+    #[test]
+    fn loading_card_shows_live_progress_and_cancel_then_restores_the_same_form() {
+        let (release, held) = std::sync::mpsc::channel();
+        let mut menu = JoinScreen::new(
+            "example.org:7878".into(),
+            "River explorer".into(),
+            ServerConfig::default(),
+            GraphicsQuality::Low,
+            SessionMode::Player,
+        );
+        menu.pending = Some(PendingJoin {
+            worker: std::thread::spawn(move || {
+                held.recv().unwrap();
+                Err("Cancelled fixture worker".into())
+            }),
+            stage: Arc::new(Mutex::new(JoinStage::PreparingTerrain(
+                PreparationStage::Chunks {
+                    completed: 4,
+                    total: 12,
+                },
+            ))),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            started: Instant::now(),
+        });
+        let mut app = App::new();
+        app.insert_resource(menu)
+            .init_resource::<Assets<Font>>()
+            .init_resource::<InputFocus>()
+            .init_resource::<Time>()
+            .init_resource::<crate::touch::TouchControls>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_message::<MenuKey>()
+            .add_message::<Ime>()
+            .add_message::<TouchInput>()
+            .add_systems(Startup, setup)
+            .add_systems(Update, (interact, poll_connection, layout, refresh).chain());
+        app.world_mut()
+            .resource_mut::<crate::touch::TouchControls>()
+            .enabled = true;
+        app.world_mut()
+            .spawn((Window::default(), PrimaryWindow, CursorOptions::default()));
+        app.update();
+        let content = app
+            .world_mut()
+            .query_filtered::<Entity, With<MenuContent>>()
+            .single(app.world())
+            .unwrap();
+        let progress = app
+            .world_mut()
+            .query_filtered::<Entity, With<MenuProgress>>()
+            .single(app.world())
+            .unwrap();
+        let cancel = app
+            .world_mut()
+            .query::<(Entity, &Action)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| matches!(action, Action::Cancel).then_some(entity))
+            .unwrap();
+        assert_eq!(
+            app.world().get::<Node>(content).unwrap().display,
+            Display::None
+        );
+        assert_eq!(
+            app.world().get::<Node>(progress).unwrap().display,
+            Display::Flex
+        );
+        assert!(
+            app.world_mut()
+                .query_filtered::<&Text, With<MenuStatus>>()
+                .iter(app.world())
+                .all(|status| status.0.contains("Preparing nearby terrain… 4 / 12"))
+        );
+        app.world_mut()
+            .entity_mut(cancel)
+            .insert(crate::ui::Activated);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<JoinScreen>()
+                .pending
+                .as_ref()
+                .unwrap()
+                .cancelled
+                .load(Ordering::Relaxed)
+        );
+        assert_eq!(
+            app.world().get::<Node>(cancel).unwrap().display,
+            Display::None
+        );
+        assert_eq!(
+            app.world().get::<Node>(content).unwrap().display,
+            Display::None,
+            "retry waits until the worker closes"
+        );
+        assert!(
+            app.world_mut()
+                .query_filtered::<&Text, With<MenuStatus>>()
+                .iter(app.world())
+                .all(|status| status.0.contains("Cancelling"))
+        );
+        release.send(()).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while !app
+            .world()
+            .resource::<JoinScreen>()
+            .pending
+            .as_ref()
+            .unwrap()
+            .worker
+            .is_finished()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        app.update();
+        assert!(app.world().resource::<JoinScreen>().pending.is_none());
+        assert_eq!(
+            app.world().get::<Node>(progress).unwrap().display,
+            Display::None
+        );
+        assert_eq!(
+            app.world().get::<Node>(content).unwrap().display,
+            Display::Flex
+        );
+        let menu = app.world().resource::<JoinScreen>();
+        assert_eq!(menu.address, "example.org:7878");
+        assert_eq!(menu.name, "River explorer");
+        assert!(!app.world().contains_resource::<Session>());
+    }
 
     pub(crate) fn welcome(mode: SessionMode) -> ServerMessage {
         ServerMessage::Welcome {

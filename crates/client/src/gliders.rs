@@ -105,9 +105,30 @@ fn craft(commands: &mut Commands, scene: &Scene, glider: bool) -> Entity {
                         SeatMark,
                         Mesh3d(scene.cube.clone()),
                         MeshMaterial3d(scene.gold.clone()),
-                        Transform::from_xyz(local[0], 0.02, local[2])
-                            .with_scale(Vec3::new(0.62, 0.08, 0.62)),
+                        Transform::from_xyz(local[0], 0.34, local[2])
+                            .with_scale(Vec3::new(0.62, 0.12, 0.62)),
                     ));
+                    parts(
+                        parent,
+                        scene,
+                        &[
+                            (
+                                Vec3::new(local[0], 0.65, local[2] - 0.30),
+                                Vec3::new(0.62, 0.62, 0.10),
+                                0,
+                            ),
+                            (
+                                Vec3::new(local[0] - 0.24, 0.15, local[2]),
+                                Vec3::new(0.08, 0.30, 0.48),
+                                1,
+                            ),
+                            (
+                                Vec3::new(local[0] + 0.24, 0.15, local[2]),
+                                Vec3::new(0.08, 0.30, 0.48),
+                                1,
+                            ),
+                        ],
+                    );
                 }
             }
         })
@@ -117,6 +138,7 @@ fn craft(commands: &mut Commands, scene: &Scene, glider: bool) -> Entity {
 pub(crate) fn setup(
     mut commands: Commands,
     session: Res<Session>,
+    touch: Res<TouchControls>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut fonts: ResMut<Assets<Font>>,
@@ -124,6 +146,7 @@ pub(crate) fn setup(
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
+    let heading = crate::ui::heading_font(&mut fonts);
     let scene = Scene {
         font: font.clone(),
         cube: meshes.add(Cuboid::default()),
@@ -205,72 +228,106 @@ pub(crate) fn setup(
             TextColor(Color::srgb(0.95, 0.88, 0.66))
         )],
     ));
-    commands.spawn((
-        GameEntity,
-        Panel,
-        GlobalZIndex(90),
-        Node {
-            display: Display::None,
-            width: percent(100),
-            height: percent(100),
-            padding: UiRect::all(px(10)),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.02, 0.05, 0.05, 0.55)),
-    )).with_children(|root| {
-        root.spawn((
+    commands
+        .spawn((
+            GameEntity,
+            Panel,
+            GlobalZIndex(90),
             Node {
-                width: px(560),
-                max_width: percent(100),
+                display: Display::None,
+                width: percent(100),
                 height: percent(100),
-                max_height: px(620),
-                padding: UiRect::all(px(16)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(10),
+                padding: UiRect::all(px(10)),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.08, 0.15, 0.14)),
-        )).with_children(|panel| {
-            crate::tutorials::panel(panel, &font, crate::tutorials::Context::Travel);
-            panel.spawn((
-                Title,
-                Text::new("Whip station"),
-                TextFont::from_font_size(22.0).with_font(font.clone()),
-                TextColor(Color::srgb(0.95, 0.83, 0.56)),
-            ));
-            panel.spawn((
-                TravelHelp,
-                Text::new("Choose a town or an explorer within 16 km.\nFour seats · solo trips welcome · Jump to glide away\nExplorer targets use their location at launch."),
-                TextFont::from_font_size(16.0).with_font(font.clone()),
-                TextColor(Color::srgb(0.88, 0.92, 0.83)),
-            ));
-            panel.spawn((
-                Rows,
+            BackgroundColor(Color::srgba(0.02, 0.05, 0.05, 0.55)),
+        ))
+        .with_children(|root| {
+            root.spawn((
                 Node {
-                    overflow: Overflow::scroll_y(),
+                    width: px(560),
+                    max_width: percent(100),
+                    max_height: percent(100),
+                    min_height: px(0),
+                    padding: UiRect::all(px(16)),
                     flex_direction: FlexDirection::Column,
-                    row_gap: px(6),
-                    min_height: px(48),
-                    flex_grow: 1.0,
-                    flex_shrink: 1.0,
-                    flex_basis: px(0),
+                    row_gap: px(10),
+                    border_radius: BorderRadius::all(px(12)),
+                    border: UiRect::all(px(1)),
                     ..default()
                 },
-                ScrollPosition::default(),
-            ));
-            panel.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: px(10),
-                ..default()
-            }).with_children(|row| {
-                button(row, &font, "Launch [L]", Action::Launch, None);
-                button(row, &font, "Leave [Jump]", Action::Leave, None);
-                button(row, &font, "Close [G]", Action::Close, None);
+                BorderColor::all(Color::srgb(0.25, 0.38, 0.31)),
+                BackgroundColor(Color::srgb(0.08, 0.15, 0.14)),
+            ))
+            .with_children(|panel| {
+                crate::tutorials::panel(panel, &font, crate::tutorials::Context::Travel);
+                panel.spawn((
+                    Title,
+                    Text::new("Whip station"),
+                    TextFont::from_font_size(22.0).with_font(heading.clone()),
+                    TextColor(Color::srgb(0.95, 0.83, 0.56)),
+                ));
+                panel.spawn((
+                    TravelHelp,
+                    Text::new(""),
+                    TextFont::from_font_size(16.0).with_font(font.clone()),
+                    TextColor(Color::srgb(0.88, 0.92, 0.83)),
+                ));
+                panel.spawn((
+                    Rows,
+                    Node {
+                        overflow: Overflow::scroll_y(),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(6),
+                        min_height: px(48),
+                        flex_grow: 1.0,
+                        flex_shrink: 1.0,
+                        flex_basis: px(0),
+                        ..default()
+                    },
+                    ScrollPosition::default(),
+                ));
+                panel
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: px(10),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        button(
+                            row,
+                            &font,
+                            if touch.enabled {
+                                "Launch"
+                            } else {
+                                "Launch [L]"
+                            },
+                            Action::Launch,
+                            None,
+                        );
+                        button(
+                            row,
+                            &font,
+                            if touch.enabled {
+                                "Leave"
+                            } else {
+                                "Leave [Space]"
+                            },
+                            Action::Leave,
+                            None,
+                        );
+                        button(
+                            row,
+                            &font,
+                            if touch.enabled { "Close" } else { "Close [G]" },
+                            Action::Close,
+                            None,
+                        );
+                    });
             });
         });
-    });
     commands.insert_resource(scene);
 }
 #[derive(Component)]
@@ -782,7 +839,10 @@ pub(crate) fn refresh(
     mut title: Query<&mut Text, With<Title>>,
     mut hints: Query<(&mut Node, &Children), (With<Hint>, Without<Panel>)>,
     mut texts: Query<&mut Text, Without<Title>>,
+    mut hint_fonts: Query<&mut TextFont>,
     pictures: Option<Res<crate::parcels::Pictures>>,
+    touch: Res<TouchControls>,
+    window: Single<&Window, With<PrimaryWindow>>,
 ) {
     if let Ok(mut node) = panel.single_mut() {
         node.display = if dialog.station_id.is_some() {
@@ -798,13 +858,18 @@ pub(crate) fn refresh(
         if let Ok(entity) = help.single()
             && let Ok(mut text) = texts.get_mut(entity)
         {
+            let exit = if touch.enabled { "Glide" } else { "Space" };
             let label = if station.temporary {
-                "Your one trip to the nearest town with a safe route.\nLaunch uses up this station · Leave puts it away.\nJump during the flight to glide away."
+                format!(
+                    "Your one trip to the nearest town with a safe route.\nLaunch uses up this station · Leave puts it away.\n{exit} opens your canopy during flight."
+                )
             } else {
-                "Choose a town or an explorer within 16 km.\nFour seats · solo trips welcome · Jump to glide away\nExplorer targets use their location at launch."
+                format!(
+                    "Choose a town or an explorer within 16 km.\nFour seats · solo trips welcome · {exit} opens your canopy\nExplorer targets use their location at launch."
+                )
             };
             if text.0 != label {
-                text.0 = label.into();
+                text.0 = label;
             }
         }
         let flight = session
@@ -885,7 +950,49 @@ pub(crate) fn refresh(
             scene.signature = signature;
         }
     }
-    let hint = if let Some(ride) = session.glider_ride {
+    let hint = travel_hint(&session, touch.enabled);
+    for (mut node, children) in &mut hints {
+        node.display = if hint.is_empty() || dialog.open() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if touch.enabled {
+            let scale = (window.width() / 840.)
+                .min(window.height() / 400.)
+                .clamp(0.5, 1.0);
+            // The right-hand gap between Zoom and the bottom action row is
+            // clear of the thumbstick, Inventory and the first-use card.
+            node.left = Val::Auto;
+            node.right = px(16. * scale);
+            node.width = px(312. * scale);
+            node.bottom = px(88. * scale);
+            node.padding = UiRect::all(px(8. * scale));
+        }
+        for child in children {
+            if let Ok(mut font) = hint_fonts.get_mut(*child) {
+                let scale = if touch.enabled {
+                    (window.width() / 840.)
+                        .min(window.height() / 400.)
+                        .clamp(0.5, 1.0)
+                } else {
+                    1.0
+                };
+                font.font_size = bevy::text::FontSize::Px(16. * scale);
+            }
+            if let Ok(mut text) = texts.get_mut(*child)
+                && text.0 != hint
+            {
+                *text = Text::new(hint.clone());
+            }
+        }
+    }
+}
+
+fn travel_hint(session: &Session, touch: bool) -> String {
+    let jump = if touch { "Glide" } else { "Space" };
+    let travel = if touch { "Travel" } else { "G" };
+    if let Some(ride) = session.glider_ride {
         session
             .gliders
             .iter()
@@ -893,47 +1000,39 @@ pub(crate) fn refresh(
             .map_or(String::new(), |f| {
                 if let Some(started_at) = f.started_at {
                     format!(
-                        "To {} · {:.0}s · Jump to explore",
+                        "To {} · {:.0}s\n{jump} opens your canopy",
                         f.destination_name,
                         (started_at + f.duration - session.airship_clock.time).max(0.0)
                     )
                 } else {
                     format!(
-                        "{} · aboard · G / Travel to launch · Jump to leave",
-                        f.destination_name
+                        "{} · aboard\n{travel} to launch · {} steps off",
+                        f.destination_name,
+                        if touch { "Leave" } else { "Space" },
                     )
                 }
             })
     } else if session.gliding {
         format!(
-            "{} · {:.0} m/s · look to steer and pitch · Jump brake · Sprint dive",
+            "{} · {:.0} m/s\n{}",
             if session.body.glide_stalled {
                 "Stall · nose lowering"
             } else {
                 "Gliding"
             },
             rubblekin_core::physics::flight_speed(session.body.velocity),
+            if touch {
+                "Swipe to steer · Brake / Dive"
+            } else {
+                "Look to steer · Space brakes · Shift dives"
+            },
         )
     } else if session.whip_stations.iter().any(|s| {
         rubblekin_core::gliders::distance(s.position, session.body.position) <= STATION_REACH
     }) {
-        "Whip station nearby · G / Travel · four seats, solo welcome".into()
+        format!("Whip station nearby\n{travel} to board · solo trips welcome")
     } else {
         String::new()
-    };
-    for (mut node, children) in &mut hints {
-        node.display = if hint.is_empty() {
-            Display::None
-        } else {
-            Display::Flex
-        };
-        for child in children {
-            if let Ok(mut text) = texts.get_mut(*child)
-                && text.0 != hint
-            {
-                *text = Text::new(hint.clone());
-            }
-        }
     }
 }
 
@@ -995,6 +1094,12 @@ mod tests {
                 GliderDestination::Village(3)
             )]
         );
+        session.glider_ride = session.players[0].glider_ride;
+        assert!(travel_hint(&session, true).contains("Leave steps off"));
+        assert!(travel_hint(&session, false).contains("Space steps off"));
+        session.gliders[0].started_at = Some(0.);
+        assert!(travel_hint(&session, true).contains("Glide opens your canopy"));
+        assert!(travel_hint(&session, false).contains("Space opens your canopy"));
     }
     #[test]
     fn destinations_include_only_other_active_players_within_reach() {

@@ -7,7 +7,7 @@ use bevy::{
     prelude::*,
     window::{AppLifecycle, PrimaryWindow, WindowFocused},
 };
-use rubblekin_core::physics::MoveInput;
+use rubblekin_core::{physics::MoveInput, vehicles::VehicleKind};
 
 use crate::{GameEntity, Session, network::Connection};
 
@@ -135,13 +135,54 @@ impl Layout {
                 }
             }
         }
-        if session.gliding {
-            for region in &mut layout.regions {
-                match region.action {
-                    Action::Sprint => region.label = "Dive".into(),
-                    Action::Jump => region.label = "Brake".into(),
-                    _ => {}
+        for region in &mut layout.regions {
+            match region.action {
+                Action::Sprint if session.gliding => region.label = "Dive".into(),
+                Action::Sprint if session.vehicle.is_some_and(|v| v.kind == VehicleKind::Bike) => {
+                    region.label = "Pedal hard".into();
                 }
+                Action::Sprint
+                    if session
+                        .vehicle
+                        .is_some_and(|v| v.kind == VehicleKind::Kayak) =>
+                {
+                    region.label = "Paddle hard".into();
+                }
+                Action::Jump if session.gliding || session.vehicle.is_some() => {
+                    region.label = "Brake".into();
+                }
+                Action::Jump if session.glider_ride.is_some() => {
+                    let flying = session.glider_ride.is_some_and(|ride| {
+                        session.gliders.iter().any(|flight| {
+                            flight.id == ride.carriage_id && flight.started_at.is_some()
+                        })
+                    });
+                    region.label = if flying { "Glide" } else { "Leave" }.into();
+                }
+                _ => {}
+            }
+        }
+        if session.glider_ride.is_some()
+            || session
+                .vehicle
+                .is_some_and(|v| v.kind == VehicleKind::Sailboat)
+        {
+            layout.regions.retain(|r| r.action != Action::Sprint);
+        }
+        if session.vehicle.is_some() || session.glider_ride.is_some() || session.gliding {
+            let top = size.y - 264. * layout.scale;
+            // Clear the seated rider/hull without covering the world HUD.
+            // Very short viewports retain the original button position.
+            if top >= 110.
+                && let Some(inventory) = layout
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.action == Action::PalettePage)
+            {
+                inventory.rect = Rect::from_corners(
+                    Vec2::new(20. * layout.scale, top),
+                    Vec2::new(164. * layout.scale, top + 44. * layout.scale),
+                );
             }
         }
         if session.ride.is_some() {
@@ -543,13 +584,16 @@ impl TouchControls {
         if self.menu_open || self.leave {
             return;
         }
-        for contact in self.contacts.values() {
-            if contact.action != Action::Move
+        for contact in self.contacts.values_mut() {
+            if !matches!(contact.action, Action::Move | Action::Look)
                 && !layout
                     .regions
                     .iter()
                     .any(|region| region.action == contact.action)
             {
+                // An unavailable action stays consumed until this finger lifts.
+                // It must neither turn into look nor reactivate in a later mode.
+                contact.action = Action::Blocked;
                 continue;
             }
             match contact.action {
@@ -1165,6 +1209,11 @@ mod tests {
         assert!(movement.direction[0] > 0.95 && movement.direction[1].abs() < 0.001);
         assert!(movement.jump);
         input.clear_frame();
+        input.route(
+            &event(2, TouchPhase::Moved, Vec2::new(540.0, 200.0)),
+            &layout,
+        );
+        assert_eq!(input.look, Vec2::new(20.0, 10.0));
         input.route(&event(1, TouchPhase::Ended, center), &layout);
         input.route(&event(3, TouchPhase::Canceled, Vec2::ZERO), &layout);
         input.held(&layout);
@@ -1268,6 +1317,211 @@ mod tests {
                 )));
             }
         }
+    }
+
+    #[test]
+    fn riding_inventory_clears_the_avatar_and_keeps_distinct_accessible_hit_regions() {
+        use rubblekin_core::{
+            protocol::SessionMode,
+            vehicles::{Vehicle, VehicleKind},
+        };
+        let (_, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(SessionMode::Player),
+            "riding layout".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            SessionMode::Player,
+        )
+        .unwrap();
+        for ride in 0..5 {
+            session.vehicle = VehicleKind::ALL.get(ride).map(|kind| Vehicle {
+                kind: *kind,
+                heading: 0.,
+            });
+            session.glider_ride = (ride == 3).then_some(rubblekin_core::gliders::GliderRide {
+                carriage_id: 1,
+                seat: 0,
+            });
+            session.gliding = ride == 4;
+            for size in [
+                Vec2::new(840., 400.),
+                Vec2::new(640., 360.),
+                Vec2::new(1280., 720.),
+            ] {
+                let layout = Layout::for_session(size, &session, false, None);
+                let inventory = layout
+                    .regions
+                    .iter()
+                    .find(|r| r.action == Action::PalettePage)
+                    .unwrap();
+                let avatar =
+                    Rect::from_corners(size * Vec2::new(0.4, 0.45), size * Vec2::new(0.6, 0.8));
+                assert!(inventory.rect.intersect(avatar).is_empty());
+                assert_eq!(
+                    layout.action(inventory.rect.center(), false),
+                    Action::PalettePage
+                );
+                for (index, a) in layout.regions.iter().enumerate() {
+                    assert!(a.rect.min.cmpge(Vec2::ZERO).all() && a.rect.max.cmple(size).all());
+                    for b in layout.regions.iter().skip(index + 1) {
+                        assert!(
+                            a.rect.intersect(b.rect).is_empty(),
+                            "overlap: {:?} {:?}",
+                            a.action,
+                            b.action
+                        );
+                    }
+                }
+            }
+        }
+        session.vehicle = None;
+        session.glider_ride = None;
+        session.gliding = false;
+        let on_foot = Layout::for_session(Vec2::new(840., 400.), &session, false, None);
+        assert_eq!(action_position(&on_foot, Action::PalettePage).x, 420.);
+    }
+
+    #[test]
+    fn transport_controls_name_real_actions_and_cancel_unavailable_held_effort() {
+        use rubblekin_core::{gliders::*, protocol::SessionMode, vehicles::Vehicle};
+        let (_, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(SessionMode::Player),
+            "transport controls".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            SessionMode::Player,
+        )
+        .unwrap();
+        let size = Vec2::new(840., 400.);
+        let foot = Layout::for_session(size, &session, false, None);
+        let mut input = TouchControls::default();
+        let effort = action_position(&foot, Action::Sprint);
+        input.route(&event(1, TouchPhase::Started, effort), &foot);
+        for (kind, label) in [
+            (VehicleKind::Bike, "Pedal hard"),
+            (VehicleKind::Kayak, "Paddle hard"),
+        ] {
+            session.vehicle = Some(Vehicle { kind, heading: 0. });
+            let layout = Layout::for_session(size, &session, false, None);
+            assert_eq!(
+                layout
+                    .regions
+                    .iter()
+                    .find(|r| r.action == Action::Sprint)
+                    .unwrap()
+                    .label,
+                label
+            );
+            assert_eq!(
+                layout
+                    .regions
+                    .iter()
+                    .find(|r| r.action == Action::Jump)
+                    .unwrap()
+                    .label,
+                "Brake"
+            );
+            input.clear_frame();
+            input.held(&layout);
+            assert!(input.sprint);
+        }
+        session.vehicle.as_mut().unwrap().kind = VehicleKind::Sailboat;
+        let sailing = Layout::for_session(size, &session, false, None);
+        assert!(!sailing.regions.iter().any(|r| r.action == Action::Sprint));
+        input.clear_frame();
+        input.held(&sailing);
+        assert!(!input.sprint);
+        input.route(
+            &event(1, TouchPhase::Moved, effort + Vec2::X * 20.),
+            &sailing,
+        );
+        assert_eq!(
+            input.look,
+            Vec2::ZERO,
+            "an old effort finger keeps its owner"
+        );
+
+        session.vehicle = None;
+        session.glider_ride = Some(GliderRide {
+            carriage_id: 2,
+            seat: 0,
+        });
+        session.gliders.push(GliderFlight {
+            emergency: false,
+            id: 2,
+            station_id: 1,
+            destination: GliderDestination::Village(3),
+            destination_name: "Pinevale".into(),
+            from: session.body.position,
+            to: session.body.position,
+            apex: 500.,
+            duration: 30.,
+            created_at: 0.,
+            started_at: None,
+        });
+        for (started, label) in [(None, "Leave"), (Some(0.), "Glide")] {
+            session.gliders[0].started_at = started;
+            let layout = Layout::for_session(size, &session, false, None);
+            assert_eq!(
+                layout
+                    .regions
+                    .iter()
+                    .find(|r| r.action == Action::Jump)
+                    .unwrap()
+                    .label,
+                label
+            );
+            input.clear_frame();
+            input.held(&layout);
+            assert!(!input.sprint);
+        }
+        session.glider_ride = None;
+        session.gliding = true;
+        let gliding = Layout::for_session(size, &session, false, None);
+        assert_eq!(
+            gliding
+                .regions
+                .iter()
+                .find(|r| r.action == Action::Sprint)
+                .unwrap()
+                .label,
+            "Dive"
+        );
+        input.clear_frame();
+        input.held(&gliding);
+        assert!(
+            !input.sprint,
+            "a hidden held button must not become a dive later"
+        );
+        input.route(&event(1, TouchPhase::Ended, effort), &gliding);
+        input.route(
+            &event(
+                2,
+                TouchPhase::Started,
+                action_position(&gliding, Action::Sprint),
+            ),
+            &gliding,
+        );
+        input.held(&gliding);
+        assert!(input.sprint, "a fresh Dive press must still work");
+        session.gliding = false;
+        let foot = Layout::for_session(size, &session, false, None);
+        assert_eq!(
+            foot.regions
+                .iter()
+                .find(|r| r.action == Action::Sprint)
+                .unwrap()
+                .label,
+            "Sprint"
+        );
+        assert_eq!(
+            foot.regions
+                .iter()
+                .find(|r| r.action == Action::Jump)
+                .unwrap()
+                .label,
+            "Jump"
+        );
     }
 
     #[test]

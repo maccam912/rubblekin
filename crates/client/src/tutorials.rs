@@ -7,7 +7,7 @@ use bevy::{
     ui_widgets::{ActivateOnPress, Button},
     window::PrimaryWindow,
 };
-use rubblekin_core::{activities::ActivityAction, world::Block};
+use rubblekin_core::{activities::ActivityAction, vehicles::VehicleKind, world::Block};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -17,6 +17,14 @@ use std::{
 };
 
 const FILE: &str = "tutorials.json";
+
+fn vehicle_lesson(kind: VehicleKind) -> Lesson {
+    match kind {
+        VehicleKind::Bike => Lesson::Bike,
+        VehicleKind::Kayak => Lesson::Kayak,
+        VehicleKind::Sailboat => Lesson::Sailboat,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum Lesson {
@@ -32,6 +40,10 @@ pub(crate) enum Lesson {
     Glide,
     Flight,
     FlowGarden,
+    BoxBuilding,
+    Bike,
+    Kayak,
+    Sailboat,
 }
 impl Lesson {
     fn title(self) -> &'static str {
@@ -48,10 +60,54 @@ impl Lesson {
             Self::Glide => "YOUR CANOPY",
             Self::Flight => "CREATIVE FLIGHT",
             Self::FlowGarden => "FOLLOW THE WATER",
+            Self::BoxBuilding => "BUILD A BOX",
+            Self::Bike => "YOUR BIKE",
+            Self::Kayak => "YOUR KAYAK",
+            Self::Sailboat => "YOUR SAILBOAT",
         }
     }
     fn instruction(self, stage: u8, touch: bool) -> &'static str {
         match (self, stage, touch) {
+            (Self::BoxBuilding, 0, true) => {
+                "Aim at nearby ground and tap Select for the first corner."
+            }
+            (Self::BoxBuilding, 0, false) => {
+                "Click nearby ground for the first corner. Shift-right-click selects the empty cell beside it."
+            }
+            (Self::BoxBuilding, 1, true) => {
+                "Aim at the opposite corner and tap Select. The outline shows your box."
+            }
+            (Self::BoxBuilding, 1, false) => {
+                "Click the opposite corner. The outline shows every block your box will fill."
+            }
+            (Self::BoxBuilding, _, true) => {
+                "Choose your hotbar block, check the outline, then tap Fill. Menu, then Building exits."
+            }
+            (Self::BoxBuilding, _, false) => {
+                "Choose 1–6, check the outline, then Enter fills it. Backspace clears; K exits."
+            }
+            (Self::Bike, 0, true) => {
+                "Thumbstick steers and pedals. Hold Pedal hard for extra effort; hills build speed."
+            }
+            (Self::Bike, 0, false) => {
+                "WASD steers and pedals. Shift adds effort; hills build speed."
+            }
+            (Self::Kayak, 0, true) => {
+                "Thumbstick steers and paddles. Let go to drift; hold Paddle hard for extra effort."
+            }
+            (Self::Kayak, 0, false) => "WASD steers and paddles. Let go to drift with the current.",
+            (Self::Sailboat, 0, true) => {
+                "Steer with the thumbstick. The ribbon shows wind; zigzag to sail upwind."
+            }
+            (Self::Sailboat, 0, false) => {
+                "WASD steers. The ribbon shows wind; zigzag to sail upwind. The sail trims itself."
+            }
+            (Self::Bike | Self::Kayak | Self::Sailboat, _, true) => {
+                "Try Brake to slow down. Menu, Vehicles, then Leave vehicle puts it away."
+            }
+            (Self::Bike | Self::Kayak | Self::Sailboat, _, false) => {
+                "Hold Space to brake. V opens Vehicles; Leave vehicle puts it away."
+            }
             (Self::Hotbar, 0, _) => {
                 "Choose a block from the pictures. Building stock is unlimited."
             }
@@ -113,26 +169,22 @@ impl Lesson {
             (Self::Parcel, _, false) => {
                 "Find the matching market sign, then press T there. There is no time limit."
             }
-            (Self::Supplies, 0, true) => {
-                "Tap Take beside a loose supply. Show me demonstrates the matching place."
-            }
+            (Self::Supplies, 0, true) => "Take a loose supply. Show me shows its matching place.",
             (Self::Supplies, 0, false) => {
                 "T takes a loose supply. J demonstrates the matching place."
             }
             (Self::Supplies, _, true) => {
-                "Carry to the matching outline, then Place. Return puts it back."
+                "Carry to its matching outline, then Place. Return puts it back."
             }
             (Self::Supplies, _, false) => {
                 "Carry it to its matching outline, then T. Backspace puts it safely back."
             }
-            (Self::Stones, _, true) => {
-                "Find its matching dotted picture along the route. Turn changes the stone; Hint guides."
-            }
+            (Self::Stones, _, true) => "Match its dotted picture. Turn changes it; Hint guides.",
             (Self::Stones, _, false) => {
                 "Find its matching dotted picture along the route. T turns; Y guides; J shows."
             }
             (Self::FlowGarden, _, true) => {
-                "Turn channels. Join their open ends. Follow the water; Hint finds the break."
+                "Join the open ends. Follow the water; Hint shows the break."
             }
             (Self::FlowGarden, _, false) => {
                 "T turns channels. Connect their open ends; Y finds the break and J shows a turn."
@@ -178,6 +230,7 @@ pub(crate) enum Signal {
     Finished(Lesson),
     Activity(ActivityAction, bool),
     Garden(bool),
+    BoxFill,
 }
 
 #[derive(Resource, Default)]
@@ -208,6 +261,9 @@ struct Observation {
     yaw: f32,
     pitch: f32,
     height: f32,
+    vehicle: Option<VehicleKind>,
+    position: Vec3,
+    vehicle_distance: f32,
 }
 impl Tutorials {
     pub(crate) fn signal(&mut self, event: Signal) {
@@ -219,6 +275,10 @@ impl Tutorials {
                 }
             }
             Signal::Finished(lesson) => self.finish(lesson),
+            Signal::BoxFill => {
+                self.start(Lesson::BoxBuilding);
+                self.finish(Lesson::BoxBuilding);
+            }
             Signal::ChooseBlock => {
                 self.start(Lesson::Hotbar);
                 self.advance(Lesson::Hotbar, 1);
@@ -317,14 +377,16 @@ impl Tutorials {
         self.reset_pending = true;
         self.world_rect = None;
     }
-    fn visible(&self, context: Context) -> Option<Lesson> {
+    fn visible(&self, context: Context, available: impl Fn(Lesson) -> bool) -> Option<Lesson> {
         self.active
-            .filter(|lesson| self.stages.contains_key(lesson) && context.supports(*lesson))
+            .filter(|lesson| {
+                self.stages.contains_key(lesson) && context.supports(*lesson) && available(*lesson)
+            })
             .or_else(|| {
                 self.stages
                     .keys()
                     .copied()
-                    .find(|lesson| context.supports(*lesson))
+                    .find(|lesson| context.supports(*lesson) && available(*lesson))
             })
     }
 }
@@ -352,6 +414,10 @@ impl Context {
             Self::World => matches!(
                 lesson,
                 Lesson::Building
+                    | Lesson::BoxBuilding
+                    | Lesson::Bike
+                    | Lesson::Kayak
+                    | Lesson::Sailboat
                     | Lesson::Work
                     | Lesson::Parcel
                     | Lesson::Travel
@@ -391,6 +457,7 @@ pub(crate) fn panel(parent: &mut ChildSpawnerCommands, font: &Handle<Font>, cont
                 column_gap: px(8),
                 padding: UiRect::all(px(6)),
                 border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(5)),
                 ..default()
             },
             BorderColor::all(Color::srgb(0.72, 0.58, 0.29)),
@@ -591,6 +658,44 @@ pub(crate) fn update(
         if !s.flying && t.previous.flying && t.stages.get(&Lesson::Flight) == Some(&1) {
             t.finish(Lesson::Flight);
         }
+        if s.building.enabled {
+            t.start(Lesson::BoxBuilding);
+            if t.stages.contains_key(&Lesson::BoxBuilding) {
+                // Clearing or starting another selection restores the actual next step.
+                t.stages
+                    .insert(Lesson::BoxBuilding, s.building.tutorial_stage());
+            }
+        }
+        if let Some(vehicle) = s.vehicle {
+            let lesson = vehicle_lesson(vehicle.kind);
+            if t.previous.vehicle != Some(vehicle.kind) {
+                t.start(lesson);
+                t.previous.vehicle_distance = 0.;
+            } else if gameplay {
+                let practiced = t.stages.get(&lesson) == Some(&1);
+                let moving = if touch.enabled {
+                    touch.movement.length_squared() > 0.01
+                } else {
+                    keys.any_pressed([KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD])
+                };
+                if moving {
+                    let step = Vec3::from_array(s.body.position) - t.previous.position;
+                    t.previous.vehicle_distance += Vec2::new(step.x, step.z).length().min(0.5);
+                    if t.previous.vehicle_distance >= 1. {
+                        t.advance(lesson, 1);
+                    }
+                }
+                if practiced
+                    && if touch.enabled {
+                        touch.jump
+                    } else {
+                        keys.pressed(KeyCode::Space)
+                    }
+                {
+                    t.finish(lesson);
+                }
+            }
+        }
     }
     t.previous.map_view = map.open.then(|| map.tutorial_view());
     t.previous.inventory = s.inventory.open;
@@ -604,6 +709,8 @@ pub(crate) fn update(
     t.previous.flying = s.flying;
     t.previous.yaw = s.yaw;
     t.previous.pitch = s.pitch;
+    t.previous.vehicle = s.vehicle.map(|v| v.kind);
+    t.previous.position = Vec3::from_array(s.body.position);
     let blocked = !window.focused
         || touch.suspended
         || s.observer.is_some()
@@ -624,7 +731,10 @@ pub(crate) fn update(
         Context::Market
     } else if travel.open() {
         Context::Travel
-    } else if t.active.is_some_and(|l| Context::Activity.supports(l)) {
+    } else if !s.building.enabled
+        && s.vehicle.is_none()
+        && t.active.is_some_and(|l| Context::Activity.supports(l))
+    {
         Context::Activity
     } else {
         Context::World
@@ -634,32 +744,108 @@ pub(crate) fn update(
             && activities
                 .as_ref()
                 .is_some_and(|scene| scene.demonstrating()));
-    let visible = (!blocked && !(context == Context::World && session.building.enabled))
-        .then(|| t.visible(context))
+    let visible = (!blocked)
+        .then(|| {
+            t.visible(context, |lesson| {
+                if context == Context::World && s.building.enabled {
+                    return lesson == Lesson::BoxBuilding;
+                }
+                if context == Context::World
+                    && let Some(v) = s.vehicle
+                {
+                    return lesson == vehicle_lesson(v.kind);
+                }
+                match lesson {
+                    Lesson::Building => !s.building.enabled && s.vehicle.is_none(),
+                    Lesson::BoxBuilding => s.building.enabled,
+                    Lesson::Bike | Lesson::Kayak | Lesson::Sailboat => {
+                        !s.building.enabled
+                            && s.vehicle.is_some_and(|v| vehicle_lesson(v.kind) == lesson)
+                    }
+                    Lesson::Work => market.active_work().is_some(),
+                    Lesson::Parcel => market.delivery().is_some(),
+                    Lesson::Travel => travel.open() || s.glider_ride.is_some(),
+                    Lesson::Glide => s.gliding,
+                    Lesson::Flight => s.flying,
+                    _ => true,
+                }
+            })
+        })
         .flatten()
-        .filter(|lesson| match lesson {
-            Lesson::Work => market.active_work().is_some(),
-            Lesson::Parcel => market.delivery().is_some(),
-            Lesson::Travel => travel.open() || s.glider_ride.is_some(),
-            Lesson::Glide => s.gliding,
-            Lesson::Flight => s.flying,
-            _ => true,
+        .filter(|lesson| {
+            // Touch transport lessons share the ordinary notice strip. Server
+            // messages and a stalled connection must remain readable there.
+            !(touch.enabled
+                && ((context == Context::World
+                    && matches!(
+                        lesson,
+                        Lesson::Bike
+                            | Lesson::Kayak
+                            | Lesson::Sailboat
+                            | Lesson::Travel
+                            | Lesson::Glide
+                            | Lesson::Flight
+                    ))
+                    || context == Context::Activity)
+                && (s.prediction.waiting()
+                    || (!s.status.is_empty() && time.elapsed_secs_f64() < s.status_until)))
         });
     if let Some(lesson) = visible {
         t.active = Some(lesson);
     }
+    let touch_activity = touch.enabled && context == Context::Activity;
+    let presentation = if touch_activity {
+        Context::World
+    } else {
+        context
+    };
     for mut root in &mut nodes.p0() {
-        root.display = if visible.is_some() && context == Context::World {
+        root.display = if visible.is_some() && presentation == Context::World {
             Display::Flex
         } else {
             Display::None
         };
-        root.left = px(if touch.enabled { 210. } else { 28. });
-        root.top = px(if touch.enabled { 100. } else { 116. });
-        root.width = px(if touch.enabled { 300. } else { 320. });
+        let touch_transport = touch.enabled
+            && (touch_activity
+                || matches!(
+                    visible,
+                    Some(
+                        Lesson::Bike
+                            | Lesson::Kayak
+                            | Lesson::Sailboat
+                            | Lesson::Travel
+                            | Lesson::Glide
+                            | Lesson::Flight
+                    )
+                ));
+        root.left = px(if touch_transport {
+            12.
+        } else if touch.enabled {
+            210.
+        } else {
+            28.
+        });
+        root.top = px(match (visible, touch.enabled) {
+            (Some(Lesson::BoxBuilding), true) => 158.,
+            (Some(Lesson::BoxBuilding), false) => 210.,
+            (_, true) if touch_transport => 58.,
+            (_, true) => 100.,
+            (_, false) => 116.,
+        });
+        root.width = px(if touch_transport {
+            let scale = (window.width() / 840.)
+                .min(window.height() / 400.)
+                .clamp(0.5, 1.);
+            let actions = if touch_activity { 328. } else { 88. };
+            (window.width() - actions * scale - 32.).clamp(240., 800.)
+        } else if touch.enabled {
+            300.
+        } else {
+            320.
+        });
     }
     for (banner, mut node) in &mut nodes.p1() {
-        node.display = if banner.0 == context && visible.is_some() {
+        node.display = if banner.0 == presentation && visible.is_some() {
             Display::Flex
         } else {
             Display::None
@@ -673,7 +859,7 @@ pub(crate) fn update(
         };
     }
     for (copy, mut text) in &mut text {
-        if copy.0 == context
+        if copy.0 == presentation
             && let Some(lesson) = visible
         {
             let stage = t.stages[&lesson];
@@ -740,7 +926,10 @@ pub(crate) fn read(
         targets
             .iter()
             .find(|(skip, node, _, visibility)| {
-                visibility.get() && node.size().min_element() > 0. && skip.0.supports(lesson)
+                visibility.get()
+                    && node.size().min_element() > 0.
+                    && (skip.0.supports(lesson)
+                        || (skip.0 == Context::World && Context::Activity.supports(lesson)))
             })
             .map(|(skip, ..)| skip.0)
     });
@@ -844,7 +1033,10 @@ mod tests {
     fn garden_teaches_water_connections_without_starting_the_stone_lesson() {
         let mut t = Tutorials::default();
         t.signal(Signal::Garden(false));
-        assert_eq!(t.visible(Context::Activity), Some(Lesson::FlowGarden));
+        assert_eq!(
+            t.visible(Context::Activity, |_| true),
+            Some(Lesson::FlowGarden)
+        );
         assert!(!t.stages.contains_key(&Lesson::Stones));
         assert!(
             Lesson::FlowGarden
@@ -855,7 +1047,7 @@ mod tests {
         assert!(t.completed.contains(&Lesson::FlowGarden));
         t.signal(Signal::Garden(false));
         assert!(
-            t.visible(Context::Activity).is_none(),
+            t.visible(Context::Activity, |_| true).is_none(),
             "Later experiments do not repeat a completed lesson"
         );
     }
@@ -888,7 +1080,10 @@ mod tests {
         let mut t = Tutorials::default();
         t.signal(Signal::Activity(ActivityAction::Take(0), false));
         t.start(Lesson::Map);
-        assert_eq!(t.visible(Context::Activity), Some(Lesson::Supplies));
+        assert_eq!(
+            t.visible(Context::Activity, |_| true),
+            Some(Lesson::Supplies)
+        );
         t.signal(Signal::Activity(ActivityAction::Return, false));
         assert_eq!(t.stages[&Lesson::Supplies], 0);
         assert!(!t.completed.contains(&Lesson::Supplies));
@@ -1076,17 +1271,77 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_box_fill_keeps_the_ordinary_dig_lesson_hidden_until_selection_exits() {
+    fn box_selection_teaches_actual_corners_and_only_confirmed_fill_completes() {
         let (mut app, _peer) = app();
         app.world_mut().resource_mut::<Session>().building.enabled = true;
+        app.update();
+        assert_eq!(
+            app.world().resource::<Tutorials>().active,
+            Some(Lesson::BoxBuilding)
+        );
+        assert_eq!(
+            app.world().resource::<Tutorials>().stages[&Lesson::BoxBuilding],
+            0
+        );
+        let first = rubblekin_core::world::BlockPos::new(4, 20, 4);
+        let second = rubblekin_core::world::BlockPos::new(5, 21, 5);
+        app.world_mut()
+            .resource_mut::<Session>()
+            .building
+            .corner(first);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Tutorials>().stages[&Lesson::BoxBuilding],
+            1
+        );
+        app.world_mut()
+            .resource_mut::<Session>()
+            .building
+            .corner(second);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Tutorials>().stages[&Lesson::BoxBuilding],
+            2
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<Tutorials>()
+                .completed
+                .contains(&Lesson::BoxBuilding)
+        );
+        app.world_mut().resource_mut::<Session>().building.clear();
+        app.update();
+        assert_eq!(
+            app.world().resource::<Tutorials>().stages[&Lesson::BoxBuilding],
+            0
+        );
         app.world_mut()
             .resource_mut::<Tutorials>()
-            .signal(Signal::Edit(Block::Wood));
+            .signal(Signal::BoxFill);
         app.update();
         let world = app.world_mut();
         let mut cards = world.query_filtered::<&Node, With<WorldCard>>();
         assert_eq!(cards.single(world).unwrap().display, Display::None);
+        assert!(
+            world
+                .resource::<Tutorials>()
+                .completed
+                .contains(&Lesson::BoxBuilding)
+        );
+        assert!(
+            !world
+                .resource::<Tutorials>()
+                .stages
+                .contains_key(&Lesson::Building)
+        );
         app.world_mut().resource_mut::<Session>().building.enabled = false;
+        app.world_mut()
+            .resource_mut::<Tutorials>()
+            .signal(Signal::Edit(Block::Wood));
         app.update();
         let world = app.world_mut();
         assert_eq!(cards.single(world).unwrap().display, Display::Flex);
@@ -1095,6 +1350,235 @@ mod tests {
                 .resource::<Tutorials>()
                 .completed
                 .contains(&Lesson::Building)
+        );
+    }
+
+    #[test]
+    fn vehicles_require_active_steering_then_braking_and_resume_after_menus() {
+        for kind in VehicleKind::ALL {
+            let (mut app, _peer) = app();
+            let lesson = vehicle_lesson(kind);
+            app.world_mut().resource_mut::<Session>().vehicle =
+                Some(rubblekin_core::vehicles::Vehicle { kind, heading: 0. });
+            app.update();
+            assert_eq!(app.world().resource::<Tutorials>().active, Some(lesson));
+            app.world_mut().resource_mut::<Session>().body.position[0] += 2.;
+            app.update();
+            assert_eq!(
+                app.world().resource::<Tutorials>().stages[&lesson],
+                0,
+                "Wind and current alone do not teach steering"
+            );
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::KeyW);
+            app.world_mut()
+                .resource_mut::<crate::world_map::WorldMap>()
+                .input_blocked = true;
+            for _ in 0..4 {
+                app.world_mut().resource_mut::<Session>().body.position[0] += 0.4;
+                app.update();
+            }
+            assert_eq!(app.world().resource::<Tutorials>().stages[&lesson], 0);
+            app.world_mut()
+                .resource_mut::<crate::world_map::WorldMap>()
+                .input_blocked = false;
+            for _ in 0..4 {
+                app.world_mut().resource_mut::<Session>().body.position[0] += 0.4;
+                app.update();
+            }
+            assert_eq!(app.world().resource::<Tutorials>().stages[&lesson], 1);
+            app.world_mut()
+                .resource_mut::<crate::pause::PauseMenu>()
+                .input_blocked = true;
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Space);
+            app.update();
+            assert!(
+                !app.world()
+                    .resource::<Tutorials>()
+                    .completed
+                    .contains(&lesson)
+            );
+            app.world_mut()
+                .resource_mut::<crate::pause::PauseMenu>()
+                .input_blocked = false;
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<Tutorials>()
+                    .completed
+                    .contains(&lesson)
+            );
+        }
+    }
+
+    #[test]
+    fn touch_ride_lessons_yield_to_server_notices_and_resume_the_same_step() {
+        for kind in VehicleKind::ALL {
+            let (mut app, _peer) = app();
+            app.world_mut().resource_mut::<TouchControls>().enabled = true;
+            {
+                let mut session = app.world_mut().resource_mut::<Session>();
+                session.vehicle = Some(rubblekin_core::vehicles::Vehicle { kind, heading: 0. });
+                session.status_until = 0.;
+            }
+            app.update();
+            let lesson = vehicle_lesson(kind);
+            let card = app
+                .world_mut()
+                .query_filtered::<Entity, With<WorldCard>>()
+                .single(app.world())
+                .unwrap();
+            assert_eq!(
+                app.world().get::<Node>(card).unwrap().display,
+                Display::Flex
+            );
+            app.world_mut().resource_mut::<TouchControls>().movement = Vec2::NEG_Y;
+            for _ in 0..4 {
+                app.world_mut().resource_mut::<Session>().body.position[0] += 0.4;
+                app.update();
+            }
+            app.world_mut().resource_mut::<TouchControls>().movement = Vec2::ZERO;
+            assert_eq!(app.world().resource::<Tutorials>().stages[&lesson], 1);
+            {
+                let mut session = app.world_mut().resource_mut::<Session>();
+                session.status = "Cannot place the boat beside another explorer.".into();
+                session.status_until = 100.;
+            }
+            app.update();
+            assert_eq!(
+                app.world().get::<Node>(card).unwrap().display,
+                Display::None
+            );
+            assert_eq!(app.world().resource::<Tutorials>().stages[&lesson], 1);
+            app.world_mut().resource_mut::<Session>().status_until = 0.;
+            app.update();
+            assert_eq!(
+                app.world().get::<Node>(card).unwrap().display,
+                Display::Flex
+            );
+            assert_eq!(app.world().resource::<Tutorials>().stages[&lesson], 1);
+            assert!(
+                app.world_mut()
+                    .resource_mut::<Session>()
+                    .prediction
+                    .ready_to_advance(0.1, false, std::time::Instant::now())
+                    .is_ok()
+            );
+            app.update();
+            assert_eq!(
+                app.world().get::<Node>(card).unwrap().display,
+                Display::None
+            );
+            assert_eq!(app.world().resource::<Tutorials>().stages[&lesson], 1);
+            assert!(
+                app.world_mut()
+                    .resource_mut::<Session>()
+                    .prediction
+                    .ready_to_advance(0.1, true, std::time::Instant::now())
+                    .unwrap()
+            );
+            app.update();
+            assert_eq!(
+                app.world().get::<Node>(card).unwrap().display,
+                Display::Flex
+            );
+        }
+    }
+
+    #[test]
+    fn touch_flight_lessons_resume_after_notices_without_hiding_station_guidance() {
+        for lesson in [Lesson::Travel, Lesson::Glide, Lesson::Flight] {
+            let (mut app, _peer) = app();
+            app.world_mut().resource_mut::<TouchControls>().enabled = true;
+            {
+                let mut session = app.world_mut().resource_mut::<Session>();
+                match lesson {
+                    Lesson::Travel => {
+                        session.glider_ride = Some(rubblekin_core::gliders::GliderRide {
+                            carriage_id: 5,
+                            seat: 0,
+                        });
+                    }
+                    Lesson::Glide => session.gliding = true,
+                    Lesson::Flight => session.flying = true,
+                    _ => unreachable!(),
+                }
+                session.status_until = 0.;
+            }
+            app.update();
+            app.world_mut()
+                .resource_mut::<Tutorials>()
+                .advance(lesson, 1);
+            let card = app
+                .world_mut()
+                .query_filtered::<Entity, With<WorldCard>>()
+                .single(app.world())
+                .unwrap();
+            {
+                let mut session = app.world_mut().resource_mut::<Session>();
+                session.status = "Waiting for movement sync…".into();
+                session.status_until = 100.;
+            }
+            app.update();
+            assert_eq!(
+                app.world().get::<Node>(card).unwrap().display,
+                Display::None
+            );
+            assert_eq!(app.world().resource::<Tutorials>().stages[&lesson], 1);
+            if lesson == Lesson::Travel {
+                app.world_mut()
+                    .resource_mut::<crate::airships::PilotConversation>()
+                    .station_id = Some(0);
+                app.update();
+                let world = app.world_mut();
+                let mut banners = world.query::<(&Banner, &Node)>();
+                assert!(banners.iter(world).any(|(banner, node)| {
+                    banner.0 == Context::Travel && node.display == Display::Flex
+                }));
+                world
+                    .resource_mut::<crate::airships::PilotConversation>()
+                    .station_id = None;
+            }
+            app.world_mut().resource_mut::<Session>().status_until = 0.;
+            app.update();
+            assert_eq!(
+                app.world().get::<Node>(card).unwrap().display,
+                Display::Flex
+            );
+            assert_eq!(app.world().resource::<Tutorials>().stages[&lesson], 1);
+        }
+    }
+
+    #[test]
+    fn leaving_a_vehicle_restores_another_unfinished_world_lesson() {
+        let (mut app, _peer) = app();
+        app.world_mut()
+            .resource_mut::<Tutorials>()
+            .start(Lesson::Building);
+        app.world_mut().resource_mut::<Session>().vehicle =
+            Some(rubblekin_core::vehicles::Vehicle {
+                kind: VehicleKind::Bike,
+                heading: 0.,
+            });
+        app.update();
+        assert_eq!(
+            app.world().resource::<Tutorials>().active,
+            Some(Lesson::Bike)
+        );
+        app.world_mut().resource_mut::<Session>().vehicle = None;
+        app.update();
+        assert_eq!(
+            app.world().resource::<Tutorials>().active,
+            Some(Lesson::Building)
+        );
+        assert!(
+            !app.world()
+                .resource::<Tutorials>()
+                .completed
+                .contains(&Lesson::Bike)
         );
     }
 
@@ -1155,6 +1639,72 @@ mod tests {
             app.world().resource::<Tutorials>().stages[&Lesson::Glide],
             0
         );
+    }
+
+    #[test]
+    fn touch_activity_strip_resumes_after_notices_and_its_skip_finishes_the_lesson() {
+        for lesson in [Lesson::Supplies, Lesson::Stones, Lesson::FlowGarden] {
+            let (mut app, _peer) = app();
+            app.add_systems(Update, read.before(update));
+            app.world_mut().resource_mut::<TouchControls>().enabled = true;
+            app.world_mut().resource_mut::<Session>().status_until = 0.;
+            app.world_mut().resource_mut::<Tutorials>().start(lesson);
+            app.update();
+            {
+                let world = app.world_mut();
+                let mut banners = world.query::<(&Banner, &Node)>();
+                assert!(banners.iter(world).any(|(banner, node)| {
+                    banner.0 == Context::World && node.display == Display::Flex
+                }));
+                assert!(banners.iter(world).any(|(banner, node)| {
+                    banner.0 == Context::Activity && node.display == Display::None
+                }));
+                let mut copies = world.query::<(&Copy, &Text)>();
+                assert!(copies.iter(world).any(|(copy, text)| {
+                    copy.0 == Context::World && text.0.contains(lesson.instruction(0, true))
+                }));
+                let mut session = world.resource_mut::<Session>();
+                session.status = "Supply returned safely.".into();
+                session.status_until = 100.;
+            }
+            app.update();
+            let world = app.world_mut();
+            let mut cards = world.query_filtered::<&Node, With<WorldCard>>();
+            assert_eq!(cards.single(world).unwrap().display, Display::None);
+            world.resource_mut::<Session>().status_until = 0.;
+            app.update();
+            assert_eq!(cards.single(app.world()).unwrap().display, Display::Flex);
+            app.world_mut().spawn((
+                Skip(Context::World),
+                ComputedNode {
+                    size: Vec2::splat(48.),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(240., 120.),
+                InheritedVisibility::VISIBLE,
+            ));
+            let window = app
+                .world_mut()
+                .query_filtered::<Entity, With<PrimaryWindow>>()
+                .single(app.world())
+                .unwrap();
+            for phase in [TouchPhase::Started, TouchPhase::Ended] {
+                app.world_mut().write_message(TouchInput {
+                    id: 1,
+                    phase,
+                    position: Vec2::new(240., 120.),
+                    window,
+                    force: None,
+                });
+                app.update();
+            }
+            assert!(
+                app.world()
+                    .resource::<Tutorials>()
+                    .completed
+                    .contains(&lesson)
+            );
+        }
     }
 
     #[test]

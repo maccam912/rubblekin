@@ -55,6 +55,8 @@ This is a concrete mismatch with the helper's stated intent to retain silhouette
 
 ### C02 — Terrain loading mixes expensive preparation with presentation
 
+Status (2026-10-10): the initial atlas/geometry and replacement landscape preparation are implemented on cancellable workers, with old coverage retained until replacements are ready. Worker progress, stale-result rejection and bounded detail installation have regression coverage. This closes the specific synchronous preparation recommendation; representative frame-time/memory measurements and broader ownership cleanup remain separate follow-ups. The source description below is historical.
+
 **Source-confirmed work placement; runtime cost unmeasured in this review.** [`setup_terrain`](crates/client/src/terrain.rs#L83) generates the distant atlas, complete initial landscape, and local placeholders synchronously from the Bevy setup system. Moving detailed meshing to workers did not move all terrain preparation off the update thread.
 
 During play, [`stream_terrain`](crates/client/src/terrain.rs#L196) starts a replacement landscape when the chunk center or settings change. [`landscape_geometry`](crates/client/src/terrain.rs#L625) combines terrain tiles, water, tree proxies, and building proxies in that replacement. Installing it also calls `move_local_square`, which synchronously creates every new placeholder and its mesh assets. Each update scans the local chunks and sorts the outstanding detail candidates; only two detail tasks run concurrently.

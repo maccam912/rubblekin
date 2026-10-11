@@ -307,6 +307,7 @@ pub(crate) fn setup(
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
+    let heading = crate::ui::heading_font(&mut fonts);
     let towns = world
         .0
         .settlements()
@@ -345,7 +346,7 @@ pub(crate) fn setup(
             })
             .with_children(|header| {
                 crate::tutorials::panel(header, &font, crate::tutorials::Context::Map);
-                header.spawn((MapHeading, label("WORLD MAP  /  N at top", &font, 23.)));
+                header.spawn((MapHeading, label("World map  /  N at top", &heading, 23.)));
                 crate::map_activities::tabs(header, &font);
                 header
                     .spawn((

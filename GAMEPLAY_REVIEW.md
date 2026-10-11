@@ -160,6 +160,8 @@ Follow-up 2026-10-06: repaired with a timeless introduction and one live timetab
 
 ### R18 — The village loop offers spectatorship before participation
 
+Status (2026-10-10): **the initial voluntary-interaction slice is complete.** Markets, paid deliveries, tending/harvesting, workshop/quarry work and finite salvage now use authoritative stocks, cargo and saved rewards. Model pictures, work tools and first-use lessons expose those actions. Native transaction/work and restart evidence is recorded in DESIGN.md. Broader economic design and family understanding remain playtest questions; do not reimplement this missing first interaction from the historical recording.
+
 **Design / known scope gap · 00:10–01:16 and 03:54–04:53.** The footage's meaningful actions are moving, inspecting inhabitants, and traveling; nothing visible invites a small useful act in the local economy. Creative building is available, but the lived-in-village promise needs a player-facing point of contact. The recording alone does not establish every available action; DESIGN.md explicitly records player farming/trade as unfinished.
 
 - **Recommendation:** after presentation repairs, choose one small voluntary interaction. A first coin-based market exchange is consistent with the user's leaning toward trade, but its priority, prices, funds, and cargo rules still need feedback. Do not add hunger chores or quest machinery to create artificial purpose.
@@ -204,6 +206,8 @@ Follow-up 2026-10-06: repaired with a timeless introduction and one live timetab
 
 Follow-up 2026-10-06: aboard trip information now occupies the main notice, the lower duplicate is hidden, and reach warnings appear only after an attempted ground edit. Automated socket/modal/aboard coverage passes; native travel presentation review remains open.
 
+Status (2026-10-10): **implemented and natively reviewed for current whip travel.** The default Controls reference/inspector are closed, first-use lessons teach actual actions, and waiting/flight/canopy touch guidance clears the rider and controls at640×360 and840×400. Generic terrain hints yield to riding, vehicles and focused activities; explicit errors retain priority. The original airship-service presentation is superseded. Physical-device comfort remains open.
+
 **Observed / usability · 00:10–03:52 · [farm HUD](artifacts/gameplay-review-2026-10-06/0045-farm.jpg), [flight HUD](artifacts/gameplay-review-2026-10-06/0212-forest-cutoff.jpg).** A title/subtitle, edit hint, statistics, material palette, controls panel, inspector, and transport hint can compete for the screen. During flight, the prominent instruction remains “Move closer to reach a block · aim down to build nearby,” even though the player is riding. The transport destination is tucked beside the palette.
 
 - **Recommendation:** give context-sensitive travel/interact information priority. Let established controls and diagnostics collapse after onboarding, keeping them easy to reopen; preserve direct creative building access.
@@ -222,7 +226,7 @@ Follow-up 2026-10-06: resident inspection now leads with name, role, activity an
 
 ### R26 — Joining spends several seconds without useful progress
 
-Follow-up 2026-10-06: real worker stages, elapsed time and cancellation are implemented and natively checked against a waiting local server. Synchronous atlas/scene preparation still blocks the final stage and remains a measured follow-up.
+Status (2026-10-10): **implemented and locally validated.** Real connection, landscape, atlas and nearby-chunk stages report elapsed time with Cancel; initial atlas/geometry preparation runs on cancellable workers. The compact pending card fits640×360, and accepted cancellation/retry was natively checked at840×400. The October6 synchronous-preparation follow-up was completed later that day and was missed here. Representative hardware loading cost remains a measurement question, rather than missing loading feedback.
 
 **Observed / usability · 00:01–00:10 · [00:05](artifacts/gameplay-review-2026-10-06/0005-joining.jpg).** The small join panel remains largely unchanged while connecting, then jumps into the village. This sample takes roughly nine seconds; it does not reveal whether networking, world generation, atlas generation, or mesh preparation owns the wait.
 

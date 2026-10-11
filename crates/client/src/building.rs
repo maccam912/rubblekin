@@ -26,6 +26,15 @@ impl Tools {
     pub fn corners(&self) -> Option<(BlockPos, BlockPos)> {
         self.first.zip(self.second)
     }
+    pub fn tutorial_stage(&self) -> u8 {
+        if self.second.is_some() {
+            2
+        } else if self.first.is_some() {
+            1
+        } else {
+            0
+        }
+    }
     pub fn hint(&self, block: rubblekin_core::world::Block, touch: bool) -> String {
         if !self.enabled {
             return String::new();

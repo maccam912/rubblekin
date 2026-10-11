@@ -54,6 +54,14 @@ fn panel() -> Color {
     Color::srgba(0.055, 0.10, 0.10, 0.87)
 }
 
+/// Use real bold letterforms for headings while body copy keeps the readable
+/// regular face. Called only when building a screen, never during refresh.
+pub(crate) fn heading_font(fonts: &mut Assets<Font>) -> Handle<Font> {
+    fonts.add(Font::from_bytes(
+        include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Bold.ttf").to_vec(),
+    ))
+}
+
 pub fn setup_ui(
     mut commands: Commands,
     mut fonts: ResMut<Assets<Font>>,
@@ -65,24 +73,28 @@ pub fn setup_ui(
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
+    let heading = heading_font(&mut fonts);
     if touch.is_some_and(|touch| touch.enabled) {
-        setup_touch_ui(&mut commands, font, observing);
+        setup_touch_ui(&mut commands, font, heading, observing);
         return;
     }
     commands.spawn((
         crate::GameEntity,
         Node {
             position_type: PositionType::Absolute,
-            top: px(26),
-            left: px(30),
+            top: px(18),
+            left: px(18),
             flex_direction: FlexDirection::Column,
             row_gap: px(4),
+            padding: UiRect::axes(px(12), px(8)),
+            border_radius: BorderRadius::all(px(8)),
             ..default()
         },
+        BackgroundColor(panel()),
         children![
             (
-                Text::new("R U B B L E K I N"),
-                TextFont::from_font_size(28.0).with_font(font.clone()),
+                Text::new("Rubblekin"),
+                TextFont::from_font_size(28.0).with_font(heading),
                 TextColor(ink()),
                 TextShadow {
                     offset: Vec2::splat(1.0),
@@ -90,7 +102,7 @@ pub fn setup_ui(
                 }
             ),
             (
-                Text::new("MOUNTAINS & VALLEYS  /  EARLY PROTOTYPE"),
+                Text::new("MOUNTAINS & VALLEYS"),
                 TextFont::from_font_size(14.0).with_font(font.clone()),
                 TextColor(Color::srgb(0.86, 0.76, 0.52)),
                 TextShadow {
@@ -290,22 +302,31 @@ pub fn setup_ui(
     ));
 }
 
-fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) {
+fn setup_touch_ui(
+    commands: &mut Commands,
+    font: Handle<Font>,
+    heading: Handle<Font>,
+    observing: bool,
+) {
     commands.spawn((
         crate::GameEntity,
         Node {
             position_type: PositionType::Absolute,
-            top: px(12),
+            top: px(8),
             left: px(12),
-            max_width: percent(62),
+            max_width: percent(32),
             flex_direction: FlexDirection::Column,
             row_gap: px(2),
+            padding: UiRect::axes(px(8), px(4)),
+            border_radius: BorderRadius::all(px(8)),
+            overflow: Overflow::clip(),
             ..default()
         },
+        BackgroundColor(panel()),
         children![
             (
-                Text::new("RUBBLEKIN"),
-                TextFont::from_font_size(18.).with_font(font.clone()),
+                Text::new("Rubblekin"),
+                TextFont::from_font_size(18.).with_font(heading),
                 TextColor(ink()),
                 TextShadow::default()
             ),
@@ -314,6 +335,7 @@ fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) 
                 TextFont::from_font_size(14.).with_font(font.clone()),
                 TextColor(ink()),
                 StatusText,
+                TextLayout::no_wrap(),
                 TextShadow::default()
             ),
         ],
@@ -362,7 +384,7 @@ fn setup_touch_ui(commands: &mut Commands, font: Handle<Font>, observing: bool) 
                     Text::new(if observing {
                         "Left stick: fly · swipe the world: look\nRise / Fall: vertical flight · Sprint: boost\n+ / −: camera speed\nMenu: graphics, return to spawn, next village, servers\nInspect: aimed character, block, or plot · swipe panel to scroll\nRead-only observer: no avatar or editing"
                     } else {
-                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a hotbar tile to choose · Inventory changes its blocks\nInspect: aimed character, block, or plot · swipe panel to scroll\nTravel: board at a whip station · launch alone or with friends\nJump: leave a carriage · swipe to steer your canopy\nCargo / Work: coins, goods, deliveries and local jobs · trade at market entrances\nMenu: pictured Vehicles, graphics, controls, and leave world"
+                        "Left stick: move · swipe the world: look\nJump: hop · Sprint: run · Fly: creative flight\nRise / Fall: vertical flight · + / −: camera distance\nDig / Build: change the block under the center dot\nTap a hotbar tile to choose · Inventory changes its blocks\nInspect: aimed character, block, or plot · swipe panel to scroll\nTravel: board at a whip station · launch alone or with friends\nGlide: leave a flying carriage · swipe to steer your canopy\nPedal hard / Paddle hard: hold for extra effort · Brake slows\nCargo / Work: coins, goods, deliveries and local jobs · trade at market entrances\nMenu: pictured Vehicles, graphics, controls, and leave world"
                     }),
                     TextFont::from_font_size(16.).with_font(font.clone()), TextColor(ink()),
                     Node { flex_shrink: 0., ..default() },
@@ -531,13 +553,12 @@ pub fn update_ui(
             &mut text,
             if touch_enabled {
                 format!(
-                    "{} explorer{} · {:02}:{:02} · {:.0} fps · {}",
+                    "{} explorer{} · {:02}:{:02} · {:.0} fps",
                     session.players.len(),
                     if session.players.len() == 1 { "" } else { "s" },
                     minutes / 60,
                     minutes % 60,
                     session.fps,
-                    session.graphics.label()
                 )
             } else {
                 format!(
@@ -661,6 +682,13 @@ fn notice_text(session: &Session, world: &crate::VoxelWorld, now: f64, touch: bo
     }
     if session.ride.is_some() {
         return crate::airships::travel_hint(session, world, touch).unwrap_or_default();
+    }
+    if session.building.enabled
+        || session.vehicle.is_some()
+        || crate::activities::focused(session, &world.0).is_some()
+    {
+        // These modes already show their actual controls in the dedicated HUD.
+        return String::new();
     }
     if touch {
         if session.observer.is_some() {
@@ -929,6 +957,37 @@ mod tests {
         assert!(notice_text(&session, &world, 13., false).is_empty());
         session.captured = false;
         assert!(notice_text(&session, &world, 13., false).contains("Click to explore"));
+    }
+
+    #[test]
+    fn activity_pictures_replace_generic_terrain_hints_while_real_notices_keep_priority() {
+        use rubblekin_core::activities::{ActivitySnapshot, PropState, review_plans};
+        let (world, mut session) = fixture(WorldGeneration::ValleyV1);
+        let plan = review_plans(&world.0)[0].clone();
+        session.body.position = plan.objects[0];
+        session.target = Some((BlockPos::new(0, 10, 0), BlockPos::new(0, 11, 0)));
+        session.activities = vec![ActivitySnapshot {
+            plan,
+            revision: 0,
+            props: [PropState::Home; 3],
+            faces: [0; 3],
+            complete: false,
+            available: true,
+            repair: None,
+        }];
+        for touch in [false, true] {
+            session.status_until = 0.;
+            assert!(notice_text(&session, &world, 10., touch).is_empty());
+            session.status = "Needs one Timber".into();
+            session.status_until = 12.;
+            assert_eq!(
+                notice_text(&session, &world, 10., touch),
+                "Needs one Timber"
+            );
+            assert!(notice_text(&session, &world, 13., touch).is_empty());
+        }
+        session.body.position = [1000.; 3];
+        assert!(notice_text(&session, &world, 13., true).contains("Dig / Build"));
     }
 
     #[test]

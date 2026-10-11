@@ -120,6 +120,7 @@ pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
+    let heading = crate::ui::heading_font(&mut fonts);
     commands
         .spawn((
             GameEntity,
@@ -158,7 +159,7 @@ pub fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                         ..default()
                     })
                     .with_children(|row| {
-                        row.spawn((label("CREATIVE INVENTORY", &font, 22.), Heading));
+                        row.spawn((label("Creative inventory", &heading, 22.), Heading));
                         row.spawn(button(Action::Close)).with_child(label(
                             "Done · I / Esc",
                             &font,

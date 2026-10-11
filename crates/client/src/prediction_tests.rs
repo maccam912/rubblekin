@@ -1022,3 +1022,70 @@ fn delayed_vehicle_acknowledgments_replay_momentum_and_a_new_epoch_discards_old_
     assert_eq!(body.velocity, [0.; 3]);
     assert!(prediction.pending.is_empty());
 }
+
+#[test]
+fn delayed_kayak_snapshots_replay_river_steps_and_bank_recovery_without_a_position_jump() {
+    use rubblekin_core::{
+        vehicles::{self, VehicleKind},
+        world::WorldGeneration,
+    };
+    let world = World::generate(2_689_504_302, WorldGeneration::GeographyV6);
+    for (position, direction, heading) in [
+        (
+            [-3187.8577, 44.120476, -11186.21],
+            [std::f32::consts::FRAC_1_SQRT_2; 2],
+            std::f32::consts::PI * 0.75,
+        ),
+        ([64., 45.54889, -11102.501], [0., 1.], std::f32::consts::PI),
+        ([64., 49.955513, -11067.809], [0., 1.], std::f32::consts::PI),
+        ([63.915215, 41.55425, -11130.15], [0., 1.], 4.582626),
+    ] {
+        let mut body = Body::new(position);
+        let yaw = direction[0].atan2(-direction[1]);
+        let mut vehicle =
+            Some(vehicles::spawn(&world, &mut body, VehicleKind::Kayak, heading, &[]).unwrap());
+        let mut prediction = Prediction::default();
+        let mut acknowledged = None;
+        for sequence in 1..=32 {
+            prediction
+                .advance_vehicle(
+                    &world,
+                    &mut body,
+                    MoveInput {
+                        direction,
+                        sprint: true,
+                        ..Default::default()
+                    },
+                    yaw,
+                    0.05,
+                    &[],
+                    sequence as f64 * 0.05,
+                    &mut vehicle,
+                )
+                .unwrap();
+            if sequence == 12 {
+                let mut state = snapshot(body.clone(), sequence);
+                state.vehicle = vehicle;
+                acknowledged = Some(state);
+            }
+        }
+        let expected = body.clone();
+        let expected_vehicle = vehicle;
+        prediction
+            .reconcile_vehicle(
+                &world,
+                &mut body,
+                &acknowledged.unwrap(),
+                |_| vec![],
+                0.6,
+                &mut vehicle,
+            )
+            .unwrap();
+        for axis in 0..3 {
+            assert!((body.position[axis] - expected.position[axis]).abs() < 0.00001);
+            assert!((body.velocity[axis] - expected.velocity[axis]).abs() < 0.00001);
+        }
+        assert_eq!(vehicle, expected_vehicle);
+        assert!(vehicle.is_some());
+    }
+}

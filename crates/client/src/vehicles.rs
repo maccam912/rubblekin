@@ -66,6 +66,96 @@ fn index(kind: VehicleKind) -> usize {
     }
 }
 fn parts(kind: VehicleKind) -> Vec<Part> {
+    let mut model = frame_parts(kind);
+    match kind {
+        VehicleKind::Bike => {
+            for centre in wheel_centres() {
+                model.extend(
+                    wheel_parts()
+                        .into_iter()
+                        .map(|(p, s, c)| (p + centre, s, c)),
+                );
+            }
+            for side in [-1., 1.] {
+                let pedal = bike_pedal(side, 0.);
+                model.push((pedal, Vec3::new(0.18, 0.06, 0.24), [0.86, 0.64, 0.22, 1.]));
+                model.push((
+                    (pedal + Vec3::new(pedal.x, 0.34, 0.)) * 0.5,
+                    Vec3::new(0.045, 0.045, 0.12),
+                    [0.86, 0.64, 0.22, 1.],
+                ));
+            }
+        }
+        VehicleKind::Kayak => model.extend(
+            paddle_parts()
+                .into_iter()
+                .map(|(p, s, c)| (p + resting_paddle_position(), s, c)),
+        ),
+        VehicleKind::Sailboat => {}
+    }
+    model
+}
+fn wheel_centres() -> [Vec3; 2] {
+    [Vec3::new(0., 0.34, -0.65), Vec3::new(0., 0.34, 0.65)]
+}
+fn wheel_parts() -> Vec<Part> {
+    let mut model: Vec<_> = (0..20)
+        .map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 20.;
+            (
+                Vec3::new(0., a.sin() * 0.30, a.cos() * 0.30),
+                Vec3::new(0.13, 0.10, 0.10),
+                [0.10, 0.15, 0.14, 1.],
+            )
+        })
+        .collect();
+    for size in [Vec3::new(0.15, 0.07, 0.50), Vec3::new(0.15, 0.50, 0.07)] {
+        model.push((Vec3::ZERO, size, [0.86, 0.64, 0.22, 1.]));
+    }
+    model
+}
+fn paddle_parts() -> Vec<Part> {
+    vec![
+        (
+            Vec3::ZERO,
+            Vec3::new(1.8, 0.045, 0.045),
+            [0.42, 0.27, 0.12, 1.],
+        ),
+        (
+            Vec3::new(-0.94, 0., 0.),
+            Vec3::new(0.35, 0.06, 0.19),
+            [0.86, 0.64, 0.22, 1.],
+        ),
+        (
+            Vec3::new(0.94, 0., 0.),
+            Vec3::new(0.35, 0.06, 0.19),
+            [0.86, 0.64, 0.22, 1.],
+        ),
+    ]
+}
+fn resting_paddle_position() -> Vec3 {
+    seat_offset(VehicleKind::Kayak) + Vec3::Y + Quat::from_rotation_x(0.5) * Vec3::NEG_Y * 0.26
+}
+pub(crate) fn bike_grip(side: f32) -> Vec3 {
+    Vec3::new(side * 0.26, 0.94, -0.4)
+}
+pub(crate) fn bike_pedal(side: f32, phase: f32) -> Vec3 {
+    let phase = phase + if side > 0. { std::f32::consts::PI } else { 0. };
+    Vec3::new(side * 0.225, 0.34 + phase.sin() * 0.12, phase.cos() * 0.12)
+}
+fn pedal_transform(side: f32, phase: f32, crank: bool) -> Transform {
+    let pedal = bike_pedal(side, phase);
+    if crank {
+        let pivot = Vec3::new(pedal.x, 0.34, 0.);
+        let arm = pedal - pivot;
+        Transform::from_translation((pedal + pivot) * 0.5)
+            .with_rotation(Quat::from_rotation_arc(Vec3::Y, arm.normalize()))
+            .with_scale(Vec3::new(0.045, arm.length(), 0.045))
+    } else {
+        Transform::from_translation(pedal).with_scale(Vec3::new(0.18, 0.06, 0.24))
+    }
+}
+fn frame_parts(kind: VehicleKind) -> Vec<Part> {
     let wood = [0.42, 0.27, 0.12, 1.];
     let gold = [0.86, 0.64, 0.22, 1.];
     let green = [0.19, 0.39, 0.29, 1.];
@@ -74,22 +164,6 @@ fn parts(kind: VehicleKind) -> Vec<Part> {
     let mut add = |x, y, z, w, h, l, c| p.push((Vec3::new(x, y, z), Vec3::new(w, h, l), c));
     match kind {
         VehicleKind::Bike => {
-            for z in [-0.65, 0.65] {
-                for i in 0..20 {
-                    let a = i as f32 * std::f32::consts::TAU / 20.;
-                    add(
-                        0.,
-                        0.34 + a.sin() * 0.30,
-                        z + a.cos() * 0.30,
-                        0.13,
-                        0.10,
-                        0.10,
-                        dark,
-                    );
-                }
-                add(0., 0.34, z, 0.15, 0.07, 0.50, gold);
-                add(0., 0.34, z, 0.15, 0.50, 0.07, gold);
-            }
             for (from, to) in [
                 (Vec3::new(0., 0.34, -0.65), Vec3::new(0., 0.78, -0.4)),
                 (Vec3::new(0., 0.78, -0.4), Vec3::new(0., 0.34, 0.)),
@@ -104,7 +178,8 @@ fn parts(kind: VehicleKind) -> Vec<Part> {
                 }
             }
             add(0., 0.85, 0.20, 0.25, 0.08, 0.30, dark);
-            add(0., 0.94, -0.4, 0.62, 0.06, 0.10, gold);
+            let grip = bike_grip(1.);
+            add(0., grip.y, grip.z, 0.62, 0.06, 0.10, gold);
             add(0., 0.34, 0., 0.45, 0.08, 0.12, gold);
         }
         VehicleKind::Kayak => {
@@ -117,9 +192,6 @@ fn parts(kind: VehicleKind) -> Vec<Part> {
             add(0.37, 0.09, 0., 0.08, 0.20, 1.3, green);
             add(0., 0.08, 0.12, 0.48, 0.08, 0.50, dark);
             add(0., 0.37, 0.39, 0.45, 0.42, 0.10, dark);
-            add(0., 0.46, -0.38, 1.8, 0.045, 0.045, wood);
-            add(-0.94, 0.46, -0.38, 0.35, 0.06, 0.19, gold);
-            add(0.94, 0.46, -0.38, 0.35, 0.06, 0.19, gold);
         }
         VehicleKind::Sailboat => {
             add(0., -0.12, 0., 1.6, 0.30, 3.0, wood);
@@ -131,6 +203,12 @@ fn parts(kind: VehicleKind) -> Vec<Part> {
             add(0., -0.19, 0., 0.12, 0.30, 1.3, dark);
             add(0., 1.66, -0.5, 0.09, 3.3, 0.09, wood);
             add(0., 0.34, 0.65, 1.3, 0.16, 0.38, gold);
+        }
+    }
+    if kind == VehicleKind::Kayak {
+        // The shallow collision draft also sets the visible hull waterline.
+        for (position, _, _) in &mut p {
+            position.y += 0.08;
         }
     }
     p
@@ -158,6 +236,8 @@ fn mesh(parts: &[Part]) -> Mesh {
 #[derive(Resource)]
 pub(crate) struct Scene {
     crafts: [Handle<Mesh>; 3],
+    wheel: Handle<Mesh>,
+    paddle: Handle<Mesh>,
     sail: Handle<Mesh>,
     cube: Handle<Mesh>,
     material: Handle<StandardMaterial>,
@@ -166,7 +246,22 @@ pub(crate) struct Scene {
     riders: HashMap<u64, (VehicleKind, Entity)>,
 }
 #[derive(Component)]
-pub(crate) struct Craft;
+pub(crate) struct Craft {
+    wheel_angle: f32,
+    movement_epoch: u64,
+}
+#[derive(Component)]
+pub(crate) struct Wheel;
+#[derive(Component)]
+pub(crate) struct PedalPart {
+    pub(crate) rider: u64,
+    pub(crate) side: f32,
+    pub(crate) crank: bool,
+}
+#[derive(Component)]
+pub(crate) struct Paddle {
+    rider: u64,
+}
 #[derive(Component)]
 pub(crate) struct Sail;
 #[derive(Component)]
@@ -186,7 +281,9 @@ pub(crate) fn setup(
     mut fonts: ResMut<Assets<Font>>,
 ) {
     let scene = Scene {
-        crafts: VehicleKind::ALL.map(|kind| meshes.add(mesh(&parts(kind)))),
+        crafts: VehicleKind::ALL.map(|kind| meshes.add(mesh(&frame_parts(kind)))),
+        wheel: meshes.add(mesh(&wheel_parts())),
+        paddle: meshes.add(mesh(&paddle_parts())),
         sail: meshes.add(mesh(&sail_parts())),
         cube: meshes.add(Cuboid::default()),
         material: materials.add(Color::WHITE),
@@ -226,6 +323,7 @@ pub(crate) fn setup(
                 top: px(130),
                 max_width: px(235),
                 padding: UiRect::all(px(8)),
+                border_radius: BorderRadius::all(px(8)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.06, 0.13, 0.10, 0.88)),
@@ -246,7 +344,9 @@ pub(crate) fn update(
     session: Res<Session>,
     world: Res<VoxelWorld>,
     mut scene: ResMut<Scene>,
-    mut craft_transforms: Query<&mut Transform, With<Craft>>,
+    avatars: Res<crate::Avatars>,
+    avatar_transforms: Query<&Transform, (With<crate::Avatar>, Without<Craft>)>,
+    mut craft_transforms: Query<(&mut Transform, &mut Craft)>,
     mut sails: Query<
         (&ChildOf, &mut Transform),
         (
@@ -254,6 +354,7 @@ pub(crate) fn update(
             Without<Craft>,
             Without<Telltale>,
             Without<FlowMark>,
+            Without<crate::Avatar>,
         ),
     >,
     mut flags: Query<
@@ -263,11 +364,17 @@ pub(crate) fn update(
             Without<Craft>,
             Without<Sail>,
             Without<FlowMark>,
+            Without<crate::Avatar>,
         ),
     >,
     mut flow: Query<
         (&FlowMark, &mut Transform, &mut Visibility),
-        (Without<Craft>, Without<Sail>, Without<Telltale>),
+        (
+            Without<Craft>,
+            Without<Sail>,
+            Without<Telltale>,
+            Without<crate::Avatar>,
+        ),
     >,
     mut hud: Query<(&mut Text, &ChildOf), With<Hud>>,
     mut hud_visibility: Query<&mut Visibility, Without<FlowMark>>,
@@ -279,7 +386,6 @@ pub(crate) fn update(
         Res<crate::market::MarketPanel>,
         Res<crate::touch::TouchControls>,
     ),
-    time: Res<Time>,
 ) {
     let (pause, map, console, conversation, market, touch) = modals;
     let show_hud = session.vehicle.is_some()
@@ -299,6 +405,19 @@ pub(crate) fn update(
             player.vehicle
         };
         let Some(craft) = craft else { continue };
+        let position = if player.id == session.id {
+            session.body.position
+        } else {
+            // The avatar already smooths network snapshots. Reuse that pose
+            // so a second interpolation cannot detach the hull from its rider.
+            avatars
+                .players
+                .get(&player.id)
+                .and_then(|entity| avatar_transforms.get(*entity).ok())
+                .map_or(player.body.position, |avatar| {
+                    (avatar.translation - avatar.rotation * seat_offset(craft.kind)).to_array()
+                })
+        };
         live.push(player.id);
         let needs = scene
             .riders
@@ -311,13 +430,54 @@ pub(crate) fn update(
             let entity = commands
                 .spawn((
                     GameEntity,
-                    Craft,
+                    Craft {
+                        wheel_angle: 0.,
+                        movement_epoch: player.movement_epoch,
+                    },
                     Mesh3d(scene.crafts[index(craft.kind)].clone()),
                     MeshMaterial3d(scene.material.clone()),
-                    Transform::default(),
+                    Transform::from_translation(Vec3::from_array(position))
+                        .with_rotation(rotation(&world.0, position, craft)),
                     Visibility::default(),
                 ))
                 .with_children(|p| {
+                    if craft.kind == VehicleKind::Bike {
+                        for centre in wheel_centres() {
+                            p.spawn((
+                                Wheel,
+                                Mesh3d(scene.wheel.clone()),
+                                MeshMaterial3d(scene.material.clone()),
+                                Transform::from_translation(centre),
+                            ));
+                        }
+                        let phase = avatars
+                            .player_pedal_phase
+                            .get(&player.id)
+                            .copied()
+                            .unwrap_or(0.);
+                        for side in [-1., 1.] {
+                            for crank in [false, true] {
+                                p.spawn((
+                                    PedalPart {
+                                        rider: player.id,
+                                        side,
+                                        crank,
+                                    },
+                                    Mesh3d(scene.cube.clone()),
+                                    MeshMaterial3d(scene.gold.clone()),
+                                    pedal_transform(side, phase, crank),
+                                ));
+                            }
+                        }
+                    }
+                    if craft.kind == VehicleKind::Kayak {
+                        p.spawn((
+                            Paddle { rider: player.id },
+                            Mesh3d(scene.paddle.clone()),
+                            MeshMaterial3d(scene.material.clone()),
+                            Transform::from_translation(resting_paddle_position()),
+                        ));
+                    }
                     if craft.kind == VehicleKind::Sailboat {
                         p.spawn((
                             Sail,
@@ -337,34 +497,20 @@ pub(crate) fn update(
             scene.riders.insert(player.id, (craft.kind, entity));
         }
         let entity = scene.riders[&player.id].1;
-        let position = if player.id == session.id {
-            session.body.position
-        } else {
-            player.body.position
-        };
-        if let Ok(mut t) = craft_transforms.get_mut(entity) {
-            let target = Vec3::from_array(position);
-            t.translation = if player.id == session.id || t.translation.distance(target) > 4. {
-                target
-            } else {
-                t.translation
-                    .lerp(target, 1. - (-12. * time.delta_secs()).exp())
-            };
-            let f = [craft.heading.sin(), -craft.heading.cos()];
-            let length = craft.kind.dimensions()[2];
-            let surface = |sign: f32| {
-                let x = position[0] + f[0] * length * sign;
-                let z = position[2] + f[1] * length * sign;
-                if craft.kind.watercraft() {
-                    environment::water_surface(&world.0, x, z).unwrap_or(position[1])
-                } else {
-                    world.0.surface_height(x, z)
-                }
-            };
-            let pitch = ((surface(1.) - surface(-1.)) / (length * 2.))
-                .atan()
-                .clamp(-0.45, 0.45);
-            t.rotation = Quat::from_rotation_y(-craft.heading) * Quat::from_rotation_x(pitch);
+        if let Ok((mut t, mut visual)) = craft_transforms.get_mut(entity) {
+            let delta = Vec3::from_array(position) - t.translation;
+            if craft.kind == VehicleKind::Bike
+                && visual.movement_epoch == player.movement_epoch
+                && delta.length_squared() < 16.
+            {
+                // Signed travel rolls the wheels even while coasting; a stop,
+                // sideways slide or teleport does not pedal them in place.
+                visual.wheel_angle = (visual.wheel_angle + delta.dot(t.rotation * Vec3::Z) / 0.30)
+                    .rem_euclid(std::f32::consts::TAU);
+            }
+            visual.movement_epoch = player.movement_epoch;
+            t.translation = Vec3::from_array(position);
+            t.rotation = rotation(&world.0, position, craft);
         }
         let relative = (wind[0].atan2(-wind[1]) - craft.heading + std::f32::consts::PI)
             .rem_euclid(std::f32::consts::TAU)
@@ -378,7 +524,11 @@ pub(crate) fn update(
         }
         for (parent, mut t) in &mut flags {
             if parent.parent() == entity {
-                let v = player.body.velocity;
+                let v = if player.id == session.id {
+                    session.body.velocity
+                } else {
+                    player.body.velocity
+                };
                 let apparent = Vec2::new(wind[0] - v[0], wind[1] - v[2]);
                 let a = apparent.x.atan2(-apparent.y) - craft.heading;
                 t.translation = Vec3::new(a.sin() * 0.36, 3.42, -0.5 - a.cos() * 0.36);
@@ -441,7 +591,12 @@ pub(crate) fn update(
             } else if vehicle.kind == VehicleKind::Kayak {
                 format!("Current {:.1} m/s", flow[0].hypot(flow[1]))
             } else {
-                "Jump brakes · Sprint pedals".into()
+                if touch.enabled {
+                    "Brake slows · hold Pedal hard"
+                } else {
+                    "Space brakes · Shift pedals"
+                }
+                .into()
             };
             let next = format!("{} · {:.1} m/s\n{}", vehicle.kind.name(), speed, message);
             if text.0 != next {
@@ -449,6 +604,81 @@ pub(crate) fn update(
             }
         }
     }
+}
+
+#[allow(clippy::type_complexity)]
+pub(crate) fn animate_parts(
+    avatars: Res<crate::Avatars>,
+    avatar_children: Query<&Children, With<crate::Avatar>>,
+    crafts: Query<&Craft>,
+    limbs: Query<(&crate::Limb, &Transform), (Without<Wheel>, Without<Paddle>, Without<PedalPart>)>,
+    mut wheels: Query<
+        (&ChildOf, &mut Transform),
+        (With<Wheel>, Without<Paddle>, Without<PedalPart>),
+    >,
+    mut paddles: Query<
+        (&Paddle, &mut Transform),
+        (Without<Wheel>, Without<crate::Limb>, Without<PedalPart>),
+    >,
+    mut pedals: Query<
+        (&PedalPart, &mut Transform),
+        (Without<Wheel>, Without<Paddle>, Without<crate::Limb>),
+    >,
+) {
+    for (pedal, mut transform) in &mut pedals {
+        let phase = avatars
+            .player_pedal_phase
+            .get(&pedal.rider)
+            .copied()
+            .unwrap_or(0.);
+        *transform = pedal_transform(pedal.side, phase, pedal.crank);
+    }
+    for (parent, mut transform) in &mut wheels {
+        if let Ok(craft) = crafts.get(parent.parent()) {
+            transform.rotation = Quat::from_rotation_x(craft.wheel_angle);
+        }
+    }
+    for (paddle, mut transform) in &mut paddles {
+        let Some(children) = avatars
+            .players
+            .get(&paddle.rider)
+            .and_then(|rider| avatar_children.get(*rider).ok())
+        else {
+            continue;
+        };
+        let mut hands = [None; 2];
+        for child in children.iter() {
+            if let Ok((limb, arm)) = limbs.get(child)
+                && limb.arm
+            {
+                hands[usize::from(arm.translation.x > 0.)] =
+                    Some(arm.transform_point(Vec3::NEG_Y * 0.5));
+            }
+        }
+        if let [Some(left), Some(right)] = hands {
+            transform.translation = seat_offset(VehicleKind::Kayak) + (left + right) * 0.5;
+            transform.rotation = Quat::from_rotation_arc(Vec3::X, (right - left).normalize());
+        }
+    }
+}
+
+pub(crate) fn seat_offset(kind: VehicleKind) -> Vec3 {
+    // The torso's bottom is 0.70 m above its root. Place it on the actual
+    // saddle/cushion/bench, including the bench's position along the hull.
+    match kind {
+        VehicleKind::Bike => Vec3::new(0., 0.19, 0.20),
+        VehicleKind::Kayak => Vec3::new(0., -0.50, 0.12),
+        VehicleKind::Sailboat => Vec3::new(0., -0.28, 0.65),
+    }
+}
+
+pub(crate) fn rotation(
+    world: &rubblekin_core::world::World,
+    position: [f32; 3],
+    craft: rubblekin_core::vehicles::Vehicle,
+) -> Quat {
+    Quat::from_rotation_y(-craft.heading)
+        * Quat::from_rotation_x(rubblekin_core::vehicles::pitch(world, position, craft))
 }
 
 pub(crate) fn weather(

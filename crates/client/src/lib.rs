@@ -123,6 +123,7 @@ pub struct Session {
     pub(crate) glider_ride: Option<rubblekin_core::gliders::GliderRide>,
     pub(crate) gliding: bool,
     pub(crate) vehicle: Option<rubblekin_core::vehicles::Vehicle>,
+    pub(crate) vehicle_effort: f32,
     pub(crate) ride: Option<AirshipRide>,
     pub(crate) deck_position: Option<[f32; 3]>,
     pub(crate) airship_clock: airships::AirshipClock,
@@ -189,6 +190,7 @@ struct Avatars {
     players: HashMap<u64, Entity>,
     player_epochs: HashMap<u64, u64>,
     player_deck_motion: HashMap<u64, DeckMotion>,
+    player_pedal_phase: HashMap<u64, f32>,
     resident_deck_motion: HashMap<u64, DeckMotion>,
     npc: Option<Entity>,
     residents: HashMap<u64, Entity>,
@@ -504,7 +506,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             compass::update,
                         )
                             .chain(),
-                        update_avatars,
+                        (update_avatars, update_self_visibility).chain(),
                         work_animation::animate,
                         (work_tools::update, work_cues::update).chain(),
                         wildlife::update,
@@ -520,6 +522,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             gliders::update_scene,
                             gliders::animate_whips,
                             vehicles::update,
+                            vehicles::animate_parts,
                         )
                             .chain(),
                         crops::update_crops,
@@ -537,7 +540,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         )
                             .chain(),
                         (market::refresh, parcels::update).chain(),
-                        (inventory::refresh, tutorials::update).chain(),
+                        (inventory::refresh, tutorials::update, activities::layout).chain(),
                         join::leave_world,
                     )
                         .chain(),
@@ -756,7 +759,7 @@ fn receive_network(
                     session.status = format!("Filled {} blocks", changed.len());
                     session.status_until = time.elapsed_secs_f64() + 4.;
                     if let Some(t) = tutorials.as_deref_mut() {
-                        t.signal(tutorials::Signal::Edit(session.hotbar[session.selected]));
+                        t.signal(tutorials::Signal::BoxFill);
                     }
                 }
             }
@@ -1201,6 +1204,7 @@ fn controls(
         -session.pitch.sin(),
         -session.yaw.cos() * session.pitch.cos(),
     ]);
+    session.vehicle_effort = 0.;
     if connection.error.is_none() && dt > 0.0 {
         let session = &mut *session;
         if let Some(observer) = &mut session.observer {
@@ -1216,6 +1220,9 @@ fn controls(
                 false
             }
         } {
+            if session.vehicle.is_some() && !input.jump {
+                session.vehicle_effort = input.direction[0].hypot(input.direction[1]).min(1.);
+            }
             let obstacles = character_obstacles(
                 session.id,
                 &session.players,
@@ -1289,7 +1296,22 @@ fn camera(
         **transform = observer.transform(session.yaw, session.pitch);
         return;
     }
-    let eye = Vec3::from_array(session.body.position) + Vec3::Y * EYE_HEIGHT;
+    let position = Vec3::from_array(session.body.position);
+    let eye = if let Some(craft) = session.vehicle {
+        position
+            + vehicles::rotation(&world.0, session.body.position, craft)
+                * (vehicles::seat_offset(craft.kind) + Vec3::Y * EYE_HEIGHT)
+    } else {
+        // Carriage passengers sit below their physical controller root.
+        position
+            + Vec3::Y
+                * (EYE_HEIGHT
+                    - if session.glider_ride.is_some() {
+                        0.30
+                    } else {
+                        0.
+                    })
+    };
     let ship = session.ride.and_then(|ride| {
         session
             .airships
@@ -1329,6 +1351,38 @@ fn camera(
         transform.translation =
             follow.airship_camera_position(&ship, eye, transform.translation, time.delta_secs());
     }
+}
+
+fn update_self_visibility(
+    session: Res<Session>,
+    avatars: Res<Avatars>,
+    camera: Query<&Transform, With<GameCamera>>,
+    mut bodies: Query<(&Transform, &mut Visibility), With<Avatar>>,
+) {
+    let Some(&entity) = avatars.players.get(&session.id) else {
+        return;
+    };
+    let Ok((body, mut visibility)) = bodies.get_mut(entity) else {
+        return;
+    };
+    let Ok(view) = camera.single() else {
+        return;
+    };
+    // Terrain compression can place the view inside the local head. Use the
+    // rendered seat/pose, and hysteresis so a nearby wall cannot make it flicker.
+    let eye = body.transform_point(Vec3::Y * EYE_HEIGHT);
+    let reveal_distance = if *visibility == Visibility::Hidden {
+        1.2
+    } else {
+        1.0
+    };
+    *visibility = if session.observer.is_none()
+        && view.translation.distance_squared(eye) < reveal_distance * reveal_distance
+    {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1559,6 +1613,7 @@ fn character_with_role(
             MeshMaterial3d(shadow_material),
             Transform::from_xyz(0.0, 0.018, 0.0)
                 .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            Visibility::Inherited,
             GroundShadow,
             NotShadowCaster,
         ));
@@ -1667,8 +1722,16 @@ fn update_avatars(
     session: Res<Session>,
     mut avatars: ResMut<Avatars>,
     mut transforms: Query<&mut Transform, With<Avatar>>,
-    mut limbs: Query<(&mut Transform, &Limb, &ChildOf), Without<Avatar>>,
-    mut shadows: Query<(&mut Visibility, &ChildOf), (With<GroundShadow>, Without<CarriedGoods>)>,
+    mut limbs: Query<(&mut Transform, &Limb, &ChildOf), (Without<Avatar>, Without<GroundShadow>)>,
+    mut shadows: Query<
+        (&mut Transform, &mut Visibility, &ChildOf),
+        (
+            With<GroundShadow>,
+            Without<CarriedGoods>,
+            Without<Avatar>,
+            Without<Limb>,
+        ),
+    >,
     mut cargo: Query<(&mut Visibility, &ChildOf), (With<CarriedGoods>, Without<GroundShadow>)>,
     world: Res<VoxelWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -1735,6 +1798,7 @@ fn update_avatars(
     });
     avatars.player_deck_motion.retain(|id, _| live.contains(id));
     avatars.player_epochs.retain(|id, _| live.contains(id));
+    avatars.player_pedal_phase.retain(|id, _| live.contains(id));
     for (index, player) in session.players.iter().enumerate() {
         let teleported = avatars
             .player_epochs
@@ -1743,46 +1807,88 @@ fn update_avatars(
         if teleported {
             avatars.player_deck_motion.remove(&player.id);
         }
+        let glider_ride = if player.id == session.id {
+            session.glider_ride
+        } else {
+            player.glider_ride
+        };
+        let glider_pose = glider_ride.and_then(|ride| {
+            session
+                .gliders
+                .iter()
+                .find(|flight| flight.id == ride.carriage_id)
+                .map(|flight| (ride, flight.pose(session.airship_clock.time)))
+        });
+        let gliding = if player.id == session.id {
+            session.gliding
+        } else {
+            player.gliding
+        };
+        let vehicle = if player.id == session.id {
+            session.vehicle
+        } else {
+            player.vehicle
+        };
+        if vehicle.is_some_and(|v| v.kind == rubblekin_core::vehicles::VehicleKind::Bike) {
+            let effort = if player.id == session.id {
+                session.vehicle_effort
+            } else {
+                ((player.body.velocity[0].hypot(player.body.velocity[2]) - 0.15) / 2.).clamp(0., 1.)
+            };
+            let phase = avatars.player_pedal_phase.entry(player.id).or_default();
+            *phase = (*phase + time.delta_secs() * 5. * effort).rem_euclid(std::f32::consts::TAU);
+        } else {
+            avatars.player_pedal_phase.remove(&player.id);
+        }
+        let (position, yaw) = if let Some((ride, pose)) = glider_pose {
+            (
+                rubblekin_core::gliders::seat_position(pose, ride.seat),
+                player.yaw,
+            )
+        } else if player.id == session.id {
+            (session.body.position, session.yaw)
+        } else if player.ride.is_some() {
+            (positions[index], player.yaw)
+        } else {
+            (player.body.position, player.yaw)
+        };
+        let seat_offset = if glider_ride.is_some() {
+            Vec3::new(0., -0.30, 0.)
+        } else {
+            vehicle.map_or(Vec3::ZERO, |v| vehicles::seat_offset(v.kind))
+        };
         let entity = *avatars.players.entry(player.id).or_insert_with(|| {
             let entity = character(&mut commands, &mut meshes, &mut materials, false);
-            commands
-                .entity(entity)
-                .insert(Transform::from_translation(Vec3::from_array(
-                    positions[index],
-                )));
+            let rotation = if let Some((_, pose)) = glider_pose {
+                Quat::from_rotation_y(pose.yaw + std::f32::consts::PI)
+            } else if let Some(craft) = vehicle {
+                vehicles::rotation(&world.0, position, craft)
+            } else {
+                Quat::from_rotation_y(-yaw)
+            };
+            commands.entity(entity).insert(
+                Transform::from_translation(Vec3::from_array(position) + rotation * seat_offset)
+                    .with_rotation(rotation),
+            );
             entity
         });
         if let Ok(mut transform) = transforms.get_mut(entity) {
-            let vehicle = if player.id == session.id {
-                session.vehicle
+            let previous = transform.translation - transform.rotation * seat_offset;
+            transform.translation = if player.id == session.id
+                || player.ride.is_some()
+                || glider_ride.is_some()
+                || teleported
+            {
+                Vec3::from_array(position)
             } else {
-                player.vehicle
+                smoothed_avatar_position(
+                    &world.0,
+                    previous,
+                    &mut positions,
+                    index,
+                    (time.delta_secs() * 15.0).min(1.0),
+                )
             };
-            let (position, yaw) = if player.id == session.id {
-                (session.body.position, session.yaw)
-            } else if player.ride.is_some() {
-                (positions[index], player.yaw)
-            } else {
-                (player.body.position, player.yaw)
-            };
-            let seat_offset = vehicle.map_or(0., |v| match v.kind {
-                rubblekin_core::vehicles::VehicleKind::Bike => 0.12,
-                rubblekin_core::vehicles::VehicleKind::Kayak => -0.42,
-                rubblekin_core::vehicles::VehicleKind::Sailboat => 0.08,
-            });
-            let previous = transform.translation - Vec3::Y * seat_offset;
-            transform.translation =
-                if player.id == session.id || player.ride.is_some() || teleported {
-                    Vec3::from_array(position)
-                } else {
-                    smoothed_avatar_position(
-                        &world.0,
-                        previous,
-                        &mut positions,
-                        index,
-                        (time.delta_secs() * 15.0).min(1.0),
-                    )
-                };
             let (ride, local) = if player.id == session.id {
                 (session.ride, session.deck_position)
             } else {
@@ -1801,19 +1907,22 @@ fn update_avatars(
             } else {
                 avatars.player_deck_motion.remove(&player.id);
                 vehicle.is_none()
+                    && glider_ride.is_none()
+                    && !gliding
                     && previous.xz().distance_squared(transform.translation.xz()) > 0.000001
             };
             if walking {
                 moving.push(entity);
             }
-            transform.rotation = Quat::from_rotation_y(-vehicle.map_or(yaw, |v| v.heading));
-            if let Some(v) = vehicle {
-                transform.translation.y += match v.kind {
-                    rubblekin_core::vehicles::VehicleKind::Bike => 0.12,
-                    rubblekin_core::vehicles::VehicleKind::Kayak => -0.42,
-                    rubblekin_core::vehicles::VehicleKind::Sailboat => 0.08,
-                };
-            }
+            transform.rotation = if let Some((_, pose)) = glider_pose {
+                Quat::from_rotation_y(pose.yaw + std::f32::consts::PI)
+            } else if let Some(craft) = vehicle {
+                vehicles::rotation(&world.0, transform.translation.to_array(), craft)
+            } else {
+                Quat::from_rotation_y(-yaw)
+            };
+            let rotated_seat = transform.rotation * seat_offset;
+            transform.translation += rotated_seat;
         }
     }
     let npc = *avatars.npc.get_or_insert_with(|| {
@@ -1921,7 +2030,31 @@ fn update_avatars(
                 Visibility::Hidden
             };
     }
-    for (mut visibility, parent) in &mut shadows {
+    for (mut shadow_transform, mut visibility, parent) in &mut shadows {
+        shadow_transform.translation = Vec3::Y * 0.018;
+        shadow_transform.rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+        if let Some(player) = session
+            .players
+            .iter()
+            .find(|p| avatars.players.get(&p.id) == Some(&parent.parent()))
+        {
+            let vehicle = if player.id == session.id {
+                session.vehicle
+            } else {
+                player.vehicle
+            };
+            if let Some(craft) = vehicle
+                && craft.kind == rubblekin_core::vehicles::VehicleKind::Bike
+                && let Ok(root) = transforms.get(parent.parent())
+            {
+                // Keep the contact circle flat at the physical wheels, even
+                // while the rider sits forward and tilts with the frame.
+                shadow_transform.translation = -vehicles::seat_offset(craft.kind)
+                    + root.rotation.inverse() * (Vec3::Y * 0.018);
+                shadow_transform.rotation =
+                    root.rotation.inverse() * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+            }
+        }
         let grounded = if Some(parent.parent()) == avatars.npc {
             let p = session.npc.position;
             world
@@ -1945,9 +2078,9 @@ fn update_avatars(
                 .find(|p| avatars.players.get(&p.id) == Some(&parent.parent()))
                 .is_some_and(|p| {
                     if p.id == session.id {
-                        session.body.on_ground
+                        session.body.on_ground && session.glider_ride.is_none() && !session.gliding
                     } else {
-                        p.body.on_ground
+                        p.body.on_ground && p.glider_ride.is_none() && !p.gliding
                     }
                 })
         };
@@ -1958,32 +2091,116 @@ fn update_avatars(
         };
     }
     for (mut transform, limb, parent) in &mut limbs {
-        transform.translation.y = if limb.arm { 1.0 } else { 0.38 };
-        transform.translation.z = 0.;
-        let mounted = session
+        let side = transform.translation.x.signum();
+        transform.translation = if limb.arm {
+            Vec3::new(side * 0.31, 1.0, 0.)
+        } else {
+            Vec3::new(side * 0.13, 0.38, 0.)
+        };
+        transform.scale = if limb.arm {
+            Vec3::new(0.16, 0.52, 0.20)
+        } else {
+            Vec3::new(0.18, 0.66, 0.22)
+        };
+        let player = session
             .players
             .iter()
-            .find(|p| avatars.players.get(&p.id) == Some(&parent.parent()))
-            .and_then(|p| {
-                if p.id == session.id {
-                    session.vehicle
+            .find(|p| avatars.players.get(&p.id) == Some(&parent.parent()));
+        if let Some(player) = player {
+            let (seated, gliding) = if player.id == session.id {
+                (session.glider_ride.is_some(), session.gliding)
+            } else {
+                (player.glider_ride.is_some(), player.gliding)
+            };
+            if seated {
+                if limb.arm {
+                    transform.rotation = Quat::from_rotation_x(0.45);
                 } else {
-                    p.vehicle
+                    // Reach from the seated hip to just above the deck, rather
+                    // than rotating standing legs around their centres.
+                    let hip = Vec3::new(side * 0.13, 0.70, 0.);
+                    let foot = Vec3::new(side * 0.13, 0.36, -0.55);
+                    let leg = foot - hip;
+                    transform.translation = (hip + foot) * 0.5;
+                    transform.scale.y = leg.length();
+                    transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Y, leg.normalize());
                 }
-            });
-        if let Some(v) = mounted {
-            use rubblekin_core::vehicles::VehicleKind;
-            let pedalling = (time.elapsed_secs() * 5. + limb.phase).sin() * 0.25;
-            if !limb.arm && v.kind != VehicleKind::Sailboat {
-                transform.translation.y = 0.65;
-                transform.translation.z = -0.20;
+                continue;
             }
-            transform.rotation = Quat::from_rotation_x(match (v.kind, limb.arm) {
-                (VehicleKind::Bike, true) => 0.65,
-                (VehicleKind::Bike, false) => 0.9 + pedalling,
-                (VehicleKind::Kayak, true) => 0.5 + pedalling,
-                (VehicleKind::Kayak, false) => 1.35,
-                (VehicleKind::Sailboat, _) => 0.,
+            if gliding {
+                transform.rotation = Quat::from_rotation_x(if limb.arm { 2.6 } else { 0.12 });
+                continue;
+            }
+        }
+        let mounted = player.and_then(|p| {
+            if p.id == session.id {
+                session.vehicle
+            } else {
+                p.vehicle
+            }
+        });
+        if let Some((player, v)) = player.zip(mounted) {
+            use rubblekin_core::vehicles::VehicleKind;
+            if v.kind == VehicleKind::Bike && limb.arm {
+                let shoulder = Vec3::new(side * 0.31, 1.26, 0.);
+                let hand = vehicles::bike_grip(side) - vehicles::seat_offset(v.kind);
+                let reach = hand - shoulder;
+                transform.translation = (shoulder + hand) * 0.5;
+                transform.scale.y = reach.length();
+                transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Y, reach.normalize());
+                continue;
+            }
+            if v.kind == VehicleKind::Bike {
+                let phase = avatars.player_pedal_phase[&player.id];
+                let hip = Vec3::new(side * 0.13, 0.70, 0.);
+                let foot = vehicles::bike_pedal(side, phase) + Vec3::Y * 0.03
+                    - vehicles::seat_offset(v.kind);
+                let leg = foot - hip;
+                transform.translation = (hip + foot) * 0.5;
+                transform.scale.y = leg.length();
+                transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Y, leg.normalize());
+                continue;
+            }
+            if !limb.arm {
+                let hip = Vec3::new(side * 0.13, 0.70, 0.);
+                let foot_y = if v.kind == VehicleKind::Kayak {
+                    // Narrow legs fit above the shallow kayak floor.
+                    transform.scale.z = 0.18;
+                    0.73
+                } else {
+                    0.42
+                };
+                let foot = Vec3::new(side * 0.13, foot_y, -0.55);
+                let leg = foot - hip;
+                transform.translation = (hip + foot) * 0.5;
+                transform.scale.y = leg.length();
+                transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Y, leg.normalize());
+                continue;
+            }
+            let velocity = if player.id == session.id {
+                session.body.velocity
+            } else {
+                player.body.velocity
+            };
+            let effort = if player.id == session.id {
+                session.vehicle_effort
+            } else {
+                let flow = if v.kind.watercraft() {
+                    rubblekin_core::environment::current(
+                        &world.0,
+                        player.body.position[0],
+                        player.body.position[2],
+                    )
+                } else {
+                    [0.; 2]
+                };
+                (((velocity[0] - flow[0]).hypot(velocity[2] - flow[1]) - 0.15) / 2.).clamp(0., 1.)
+            };
+            let pedalling = (time.elapsed_secs() * 5. + limb.phase).sin() * 0.25 * effort;
+            transform.rotation = Quat::from_rotation_x(match v.kind {
+                VehicleKind::Bike => 0.9 + pedalling,
+                VehicleKind::Kayak => 0.5 + pedalling,
+                VehicleKind::Sailboat => 0.45,
             });
             continue;
         }

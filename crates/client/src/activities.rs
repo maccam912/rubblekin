@@ -173,7 +173,6 @@ pub(crate) struct Scene {
     numbered_pictures: [[Handle<Image>; 3]; 3],
     repair_pictures: [Handle<Image>; 3],
     repaired_picture: Handle<Image>,
-    repair_cost_pictures: [Handle<Image>; 2],
     flow_pictures: [[[Handle<Image>; 2]; 4]; 3],
     flow_finished: Handle<Image>,
     material: Handle<StandardMaterial>,
@@ -244,6 +243,10 @@ pub(crate) struct RepairRow;
 pub(crate) struct RepairCost;
 #[derive(Component)]
 pub(crate) struct RepairCostPicture;
+#[derive(Component)]
+pub(crate) struct RepairExchange;
+#[derive(Component)]
+pub(crate) struct RepairTrack;
 #[derive(Component)]
 pub(crate) struct RepairBar;
 #[derive(Component)]
@@ -442,7 +445,7 @@ pub(crate) fn has_action(session: &Session, world: &rubblekin_core::world::World
             a.repair.is_some() && can_interact(world, session.body.position, a.plan.sockets[2])
         })
 }
-fn focused<'a>(
+pub(crate) fn focused<'a>(
     session: &'a Session,
     world: &rubblekin_core::world::World,
 ) -> Option<&'a ActivitySnapshot> {
@@ -507,6 +510,38 @@ pub(crate) fn touch_opportunity(session: &Session) -> bool {
             rubblekin_core::economy::can_reach_market(session.body.position, market)
         }))
 }
+
+/// Keep picture feedback beside the player and outside the touch action column.
+#[allow(clippy::type_complexity)]
+pub(crate) fn layout(
+    touch: Res<TouchControls>,
+    tutorials: Res<crate::tutorials::Tutorials>,
+    notices: Query<
+        (&Node, &ComputedNode, &UiGlobalTransform),
+        (With<crate::ui::NoticePanel>, Without<Card>),
+    >,
+    mut cards: Query<&mut Node, (With<Card>, Without<crate::ui::NoticePanel>)>,
+) {
+    if !touch.enabled {
+        return;
+    }
+    let mut top: f32 = 94.;
+    if let Some(rect) = tutorials.world_rect {
+        top = top.max(rect.max.y + 8.);
+    }
+    for (node, computed, transform) in &notices {
+        if node.display != Display::None && computed.size().min_element() > 0. {
+            let bottom =
+                (transform.translation.y + computed.size().y * 0.5) * computed.inverse_scale_factor;
+            top = top.max(bottom + 8.);
+        }
+    }
+    for mut card in &mut cards {
+        card.left = px(12.);
+        card.top = px(top);
+    }
+}
+
 pub(crate) fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -519,6 +554,7 @@ pub(crate) fn setup(
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
+    let heading = crate::ui::heading_font(&mut fonts);
     let repair_art = crate::cart_repairs::Art::new(&mut meshes, &mut images, &mut materials);
     let repair_pictures = repair_art.pictures.clone();
     let repaired_picture = repair_art.finished.clone();
@@ -545,10 +581,6 @@ pub(crate) fn setup(
         repaired_picture,
         flow_pictures,
         flow_finished,
-        repair_cost_pictures: [
-            trade.resource(rubblekin_core::settlement::ResourceKind::Timber),
-            trade.coins.clone(),
-        ],
         material: materials.add(StandardMaterial {
             perceptual_roughness: 1.,
             unlit: true,
@@ -580,9 +612,9 @@ pub(crate) fn setup(
                 top: px(if touch.enabled { 70. } else { 114. }),
                 left: percent(36.),
                 width: px(if touch.enabled { 210. } else { 250. }),
-                padding: UiRect::all(px(8.)),
+                padding: UiRect::all(px(if touch.enabled { 3. } else { 8. })),
                 flex_direction: FlexDirection::Column,
-                row_gap: px(4.),
+                row_gap: px(if touch.enabled { 3. } else { 4. }),
                 display: Display::None,
                 border_radius: BorderRadius::all(px(8.)),
                 ..default()
@@ -594,7 +626,7 @@ pub(crate) fn setup(
             p.spawn((
                 CardTitle,
                 Text::new(""),
-                TextFont::from_font_size(16.).with_font(font.clone()),
+                TextFont::from_font_size(16.).with_font(heading),
                 TextColor(Color::srgb(0.94, 0.88, 0.72)),
             ));
             p.spawn((
@@ -631,7 +663,7 @@ pub(crate) fn setup(
             .with_children(|row| {
                 row.spawn(Node {
                     align_items: AlignItems::Center,
-                    column_gap: px(6.),
+                    column_gap: px(4.),
                     ..default()
                 })
                 .with_children(|cost| {
@@ -641,8 +673,8 @@ pub(crate) fn setup(
                             trade.resource(rubblekin_core::settlement::ResourceKind::Timber),
                         ),
                         Node {
-                            width: px(28.),
-                            height: px(28.),
+                            width: px(if touch.enabled { 24. } else { 28. }),
+                            height: px(if touch.enabled { 24. } else { 28. }),
                             ..default()
                         },
                     ));
@@ -652,8 +684,33 @@ pub(crate) fn setup(
                         TextFont::from_font_size(14.).with_font(font.clone()),
                         TextColor(Color::srgb(0.94, 0.88, 0.72)),
                     ));
+                    cost.spawn((
+                        RepairExchange,
+                        ImageNode::new(trade.arrow.clone()),
+                        Node {
+                            width: px(18.),
+                            height: px(18.),
+                            ..default()
+                        },
+                    ));
+                    cost.spawn((
+                        RepairExchange,
+                        ImageNode::new(trade.coins.clone()),
+                        Node {
+                            width: px(if touch.enabled { 24. } else { 28. }),
+                            height: px(if touch.enabled { 24. } else { 28. }),
+                            ..default()
+                        },
+                    ));
+                    cost.spawn((
+                        RepairExchange,
+                        Text::new("+2"),
+                        TextFont::from_font_size(14.).with_font(font.clone()),
+                        TextColor(Color::srgb(0.94, 0.88, 0.72)),
+                    ));
                 });
                 row.spawn((
+                    RepairTrack,
                     Node {
                         height: px(6.),
                         width: percent(100.),
@@ -677,7 +734,7 @@ pub(crate) fn setup(
                 DemoStage,
                 Node {
                     width: px(194.),
-                    height: px(90.),
+                    height: px(if touch.enabled { 76. } else { 90. }),
                     display: Display::None,
                     border: UiRect::all(px(2.)),
                     ..default()
@@ -692,7 +749,7 @@ pub(crate) fn setup(
                     Node {
                         position_type: PositionType::Absolute,
                         left: px(126.),
-                        top: px(32.),
+                        top: px(if touch.enabled { 22. } else { 32. }),
                         width: px(52.),
                         height: px(52.),
                         border: UiRect::all(px(2.)),
@@ -856,19 +913,45 @@ pub(crate) fn update(
             Without<RepairRow>,
             Without<RepairBar>,
             Without<PictureRow>,
+            Without<RepairCostPicture>,
+            Without<RepairExchange>,
+            Without<RepairTrack>,
+            Without<CardPicture>,
         ),
     >,
     mut title: Query<&mut Text, (With<CardTitle>, Without<RepairCost>)>,
     mut pictures: Query<
-        (&CardPicture, &mut ImageNode, &mut BorderColor),
-        Without<RepairCostPicture>,
-    >,
-    mut cost_picture: Query<&mut ImageNode, (With<RepairCostPicture>, Without<CardPicture>)>,
-    mut repair_ui: Query<
-        (&mut Node, Option<&RepairBar>, Option<&PictureRow>),
+        (&CardPicture, &mut ImageNode, &mut BorderColor, &mut Node),
         (
-            Or<(With<RepairRow>, With<RepairBar>, With<PictureRow>)>,
+            Without<RepairCostPicture>,
             Without<Card>,
+            Without<RepairRow>,
+            Without<RepairBar>,
+            Without<PictureRow>,
+            Without<RepairExchange>,
+            Without<RepairTrack>,
+        ),
+    >,
+    mut repair_ui: Query<
+        (
+            &mut Node,
+            Option<&RepairBar>,
+            Option<&PictureRow>,
+            Option<&RepairCostPicture>,
+            Option<&RepairExchange>,
+            Option<&RepairTrack>,
+        ),
+        (
+            Or<(
+                With<RepairRow>,
+                With<RepairBar>,
+                With<PictureRow>,
+                With<RepairCostPicture>,
+                With<RepairExchange>,
+                With<RepairTrack>,
+            )>,
+            Without<Card>,
+            Without<CardPicture>,
         ),
     >,
     mut repair_cost: Query<&mut Text, (With<RepairCost>, Without<CardTitle>)>,
@@ -1046,22 +1129,29 @@ pub(crate) fn update(
         || market.input_blocked
         || travel.open()
         || travel.input_blocked;
+    let repair = focused.filter(|a| a.plan.kind == ActivityKind::CartRepair);
+    // A transient receipt/error takes the compact repair card's space. Keep
+    // the controls live; the pictures resume as soon as the notice expires.
+    let repair_notice = touch.enabled
+        && repair.is_some()
+        && (session.prediction.waiting()
+            || (time.elapsed_secs_f64() < session.status_until && !session.status.is_empty()));
     for mut n in &mut card {
-        n.display = if focused.is_some() && !blocked {
+        n.display = if focused.is_some() && !blocked && !repair_notice {
             Display::Flex
         } else {
             Display::None
         };
     }
-    let repair = focused.filter(|a| a.plan.kind == ActivityKind::CartRepair);
-    if let Some(a) = repair {
-        for mut img in &mut cost_picture {
-            img.image = scene.repair_cost_pictures
-                [usize::from(a.props[..2].iter().all(|p| *p == PropState::Placed))]
-            .clone();
-        }
-    }
-    for (mut n, bar, picture_row) in &mut repair_ui {
+    let timber = market.ledger.as_ref().map_or(0, |l| {
+        l.cargo[rubblekin_core::economy::resource_index(
+            rubblekin_core::settlement::ResourceKind::Timber,
+        )]
+    });
+    let repair_open = repair.is_some_and(|a| a.available && !a.complete);
+    let hammering = repair.is_some_and(|a| a.repair.is_some());
+    let needs_timber = repair.is_some_and(|a| a.props[..2].contains(&PropState::Home));
+    for (mut n, bar, picture_row, input, exchange, track) in &mut repair_ui {
         if bar.is_some() {
             n.width = percent(repair.map_or(0., |a| {
                 if a.complete {
@@ -1072,7 +1162,18 @@ pub(crate) fn update(
                 }
             }));
         } else {
-            n.display = if !scene.demonstrating() && (picture_row.is_some() || repair.is_some()) {
+            let visible = if picture_row.is_some() {
+                true
+            } else if track.is_some() {
+                repair_open && hammering
+            } else if input.is_some() {
+                repair_open && needs_timber && !hammering
+            } else if exchange.is_some() {
+                repair_open && !hammering
+            } else {
+                repair_open
+            };
+            n.display = if !scene.demonstrating() && visible {
                 Display::Flex
             } else {
                 Display::None
@@ -1081,19 +1182,18 @@ pub(crate) fn update(
     }
     for mut text in &mut repair_cost {
         if let Some(a) = repair {
-            let timber = market.ledger.as_ref().map_or(0, |l| {
-                l.cargo[rubblekin_core::economy::resource_index(
-                    rubblekin_core::settlement::ResourceKind::Timber,
-                )]
-            });
-            text.0 = if a.complete {
-                "Repaired · each step paid once".into()
-            } else if a.props[..2].iter().all(|p| *p == PropState::Placed) {
-                "Hammer: +2 coins · 6 seconds".into()
+            text.0 = if let Some(w) = a.repair {
+                if w.player_id == session.id {
+                    "Stay here · walk to stop".into()
+                } else {
+                    "Someone is finishing".into()
+                }
+            } else if !needs_timber {
+                "6s".into()
+            } else if touch.enabled {
+                "1".into()
             } else {
-                format!(
-                    "Cargo: {timber} Timber\nEach part: spend 1 · +2 coins\nMarket or timber salvage"
-                )
+                format!("1 (have {timber})")
             };
         }
     }
@@ -1121,20 +1221,17 @@ pub(crate) fn update(
                 } else if scene.pending.is_some() {
                     "…".into()
                 } else if let Some(w) = a.repair {
-                    let instruction = if w.player_id == session.id {
-                        "Stay here · walk to stop"
-                    } else {
-                        "Someone is finishing"
-                    };
-                    format!("Hammering {:.1} / 6s\n{instruction}", w.elapsed_seconds)
+                    format!("Hammering {:.1} / 6s", w.elapsed_seconds)
                 } else if a.props[..2].iter().all(|p| *p == PropState::Placed) {
                     if touch.enabled {
                         "Hammer: finish the cart".into()
                     } else {
                         "T: finish with hammer".into()
                     }
+                } else if timber == 0 {
+                    "Need Timber · market".into()
                 } else if touch.enabled {
-                    "Fit part · Show me".into()
+                    format!("Fit part · Timber {timber}")
                 } else {
                     "T: fit part · J: show me".into()
                 }
@@ -1164,7 +1261,14 @@ pub(crate) fn update(
                 text.0 = s;
             }
         }
-        for (index, mut img, mut border) in &mut pictures {
+        for (index, mut img, mut border, mut node) in &mut pictures {
+            let size = if touch.enabled && a.plan.kind == ActivityKind::CartRepair {
+                44.
+            } else {
+                52.
+            };
+            node.width = px(size);
+            node.height = px(size);
             let i = index.0;
             img.image = if a.plan.kind == ActivityKind::SpilledSupplies {
                 scene.supply_pictures[i].clone()
@@ -1278,12 +1382,13 @@ pub(crate) fn update(
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn update_demo(
     session: Res<Session>,
     world: Res<VoxelWorld>,
     mut scene: ResMut<Scene>,
     time: Res<Time>,
+    touch: Res<TouchControls>,
     mut stage: Query<
         &mut Node,
         (
@@ -1330,7 +1435,11 @@ pub(crate) fn update_demo(
     let demo = scene.demonstration.as_ref().unwrap();
     for (mut n, mut img) in &mut object {
         n.left = px(frame.x);
-        n.top = px(frame.y);
+        n.top = px(if touch.enabled {
+            frame.y * (22. / 32.)
+        } else {
+            frame.y
+        });
         n.width = px(frame.width);
         img.image = if demo.kind == ActivityKind::SpilledSupplies {
             scene.supply_pictures[demo.item].clone()
@@ -1363,6 +1472,140 @@ pub(crate) fn update_demo(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repair_card_follows_confirmed_cost_work_and_shared_completion_without_changing_the_ledger() {
+        use bevy::gizmos::{AppGizmoBuilder, config::DefaultGizmoConfigGroup};
+        let (world, mut session) = crate::join::session_from_welcome(
+            crate::join::tests::welcome(rubblekin_core::protocol::SessionMode::Player),
+            "receipt".into(),
+            crate::graphics::GraphicsQuality::Low,
+            0.,
+            rubblekin_core::protocol::SessionMode::Player,
+        )
+        .unwrap();
+        let mut plan = review_plans(&world)[0].clone();
+        plan.kind = ActivityKind::CartRepair;
+        session.body.position = plan.sockets[0];
+        session.help = false;
+        session.inspector = false;
+        session.activities = vec![ActivitySnapshot {
+            plan,
+            revision: 0,
+            props: [PropState::Home; 3],
+            faces: [0; 3],
+            complete: false,
+            available: true,
+            repair: None,
+        }];
+        let player = session.id;
+        let mut app = App::new();
+        app.insert_resource(session)
+            .insert_resource(VoxelWorld(world))
+            .init_resource::<Time>()
+            .init_resource::<TouchControls>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<crate::block_textures::BlockIcons>()
+            .init_resource::<crate::trade_pictures::TradePictures>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<crate::pause::PauseMenu>()
+            .init_resource::<crate::world_map::WorldMap>()
+            .init_resource::<crate::admin_console::AdminConsole>()
+            .init_resource::<crate::market::MarketPanel>()
+            .init_resource::<crate::airships::PilotConversation>()
+            .init_gizmo_group::<DefaultGizmoConfigGroup>()
+            .add_systems(Startup, setup)
+            .add_systems(Update, update);
+        app.world_mut().resource_mut::<TouchControls>().enabled = true;
+        app.world_mut().resource_mut::<Session>().status_until = 0.;
+        app.world_mut()
+            .resource_mut::<crate::market::MarketPanel>()
+            .ledger = Some(rubblekin_core::economy::PlayerEconomy::default());
+        app.world_mut().run_schedule(Startup);
+        app.world_mut().run_schedule(Update);
+        let mut title = app.world_mut().query_filtered::<&Text, With<CardTitle>>();
+        let mut cost = app.world_mut().query_filtered::<&Text, With<RepairCost>>();
+        let mut input = app
+            .world_mut()
+            .query_filtered::<&Node, With<RepairCostPicture>>();
+        let mut track = app.world_mut().query_filtered::<&Node, With<RepairTrack>>();
+        let mut row = app.world_mut().query_filtered::<&Node, With<RepairRow>>();
+        let mut bar = app.world_mut().query_filtered::<&Node, With<RepairBar>>();
+        let mut card = app.world_mut().query_filtered::<&Node, With<Card>>();
+        assert!(title.single(app.world()).unwrap().0.contains("Need Timber"));
+        assert_eq!(cost.single(app.world()).unwrap().0, "1");
+        assert_eq!(input.single(app.world()).unwrap().display, Display::Flex);
+        assert_eq!(track.single(app.world()).unwrap().display, Display::None);
+        {
+            let mut session = app.world_mut().resource_mut::<Session>();
+            session.status = "Needs one Timber".into();
+            session.status_until = 4.;
+        }
+        app.world_mut().run_schedule(Update);
+        assert_eq!(card.single(app.world()).unwrap().display, Display::None);
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(5));
+        app.world_mut().run_schedule(Update);
+        assert_eq!(card.single(app.world()).unwrap().display, Display::Flex);
+        app.world_mut()
+            .resource_mut::<crate::market::MarketPanel>()
+            .ledger
+            .as_mut()
+            .unwrap()
+            .cargo[rubblekin_core::economy::resource_index(
+            rubblekin_core::settlement::ResourceKind::Timber,
+        )] = 2;
+        app.world_mut().run_schedule(Update);
+        assert!(title.single(app.world()).unwrap().0.contains("Timber 2"));
+        let ledger = app
+            .world()
+            .resource::<crate::market::MarketPanel>()
+            .ledger
+            .clone();
+        // A shared parts update may come from someone else's contribution. It
+        // changes the next offered step, without claiming a private payment.
+        app.world_mut().resource_mut::<Session>().activities[0].props[..2].fill(PropState::Placed);
+        app.world_mut().run_schedule(Update);
+        assert_eq!(cost.single(app.world()).unwrap().0, "6s");
+        assert_eq!(input.single(app.world()).unwrap().display, Display::None);
+        assert_eq!(track.single(app.world()).unwrap().display, Display::None);
+        for (worker, instruction) in [
+            (player, "Stay here · walk to stop"),
+            (player + 1, "Someone is finishing"),
+        ] {
+            app.world_mut().resource_mut::<Session>().activities[0].repair = Some(RepairProgress {
+                player_id: worker,
+                elapsed_seconds: 3.,
+            });
+            app.world_mut().run_schedule(Update);
+            assert_eq!(cost.single(app.world()).unwrap().0, instruction);
+            assert_eq!(track.single(app.world()).unwrap().display, Display::Flex);
+            assert_eq!(bar.single(app.world()).unwrap().width, percent(50.));
+            let mut exchange = app
+                .world_mut()
+                .query_filtered::<&Node, With<RepairExchange>>();
+            assert!(
+                exchange
+                    .iter(app.world())
+                    .all(|n| n.display == Display::None)
+            );
+        }
+        {
+            let mut session = app.world_mut().resource_mut::<Session>();
+            session.activities[0].repair = None;
+            session.activities[0].complete = true;
+        }
+        app.world_mut().run_schedule(Update);
+        assert_eq!(title.single(app.world()).unwrap().0, "Cart repaired!");
+        assert_eq!(row.single(app.world()).unwrap().display, Display::None);
+        assert_eq!(track.single(app.world()).unwrap().display, Display::None);
+        assert_eq!(
+            app.world().resource::<crate::market::MarketPanel>().ledger,
+            ledger
+        );
+    }
     #[test]
     fn garden_targets_and_replays_follow_connections_and_remain_usable_after_watering() {
         let (_, mut session) = crate::join::session_from_welcome(

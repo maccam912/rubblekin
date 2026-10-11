@@ -378,6 +378,7 @@ fn paused_player_sends_neutral_input_and_suppresses_edits_and_admin_commands() {
     session.captured = true;
     session.inspector = false;
     session.help = false;
+    session.vehicle_effort = 1.;
     let position_before = session.body.position;
     let yaw_before = session.yaw;
     let pitch_before = session.pitch;
@@ -472,6 +473,7 @@ fn paused_player_sends_neutral_input_and_suppresses_edits_and_admin_commands() {
             "Paused player sent gameplay input: {line}"
         );
         let session = app.world().resource::<Session>();
+        assert_eq!(session.vehicle_effort, 0., "paused riding effort must stop");
         assert_eq!(session.body.position[0], position_before[0]);
         assert_eq!(session.body.position[2], position_before[2]);
         assert_eq!(session.yaw, yaw_before);

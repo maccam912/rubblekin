@@ -647,6 +647,7 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     let font = fonts.add(Font::from_bytes(
         include_bytes!("../../../assets/fonts/AtkinsonHyperlegible-Regular.ttf").to_vec(),
     ));
+    let heading = crate::ui::heading_font(&mut fonts);
     commands.spawn((GameEntity, MarketRoot, GlobalZIndex(92),
         Node { display: Display::None, width: percent(100), height: percent(100), padding: UiRect::all(px(12)),
             align_items: AlignItems::Center, justify_content: JustifyContent::Center,
@@ -660,7 +661,7 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
                 BackgroundColor(Color::srgb(0.08, 0.15, 0.14))))
                 .with_children(|panel| {
                     crate::tutorials::panel(panel, &font, crate::tutorials::Context::Market);
-                    panel.spawn((Label::Title, Text::new("Cargo & work"), TextFont::from_font_size(24.).with_font(font.clone()),
+                    panel.spawn((Label::Title, Text::new("Cargo & work"), TextFont::from_font_size(24.).with_font(heading.clone()),
                         TextColor(Color::srgb(0.95, 0.83, 0.56)), Node { flex_shrink: 0., ..default() }));
                     panel.spawn(Node { align_items: AlignItems::Center, column_gap: px(8), flex_shrink: 0., ..default() }).with_children(|row| {
                         row.spawn(trade_picture(TradePicture::Coins, 28.));

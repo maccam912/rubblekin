@@ -218,7 +218,7 @@ Beside a V6 quarry’s loose Stone pile, **Collect stone** removes one actual pi
 
 The panel has large buttons, keyboard selection with Tab/arrows and Enter, and mouse-wheel or touch scrolling. Its title, wallet, Close, quantity, and Refresh controls stay visible above the scrolling work, delivery, and trade body; a fixed footer explains scrolling. B, Escape, Android Back, or Close returns to play. Opening a panel stops your controls while the shared world keeps running. The HUD retains your active delivery destination.
 
-Press **V** or choose **Menu → Vehicles** for free mountain bikes, kayaks and sailboats. Select a picture on dry clear ground for a bike, or wade into clear water for a boat. **Movement** steers and pedals/paddles; **Sprint** adds effort; **Jump** brakes (and de-powers a sail). Sailboats trim automatically: steer across the wind and tack for upwind travel. The mast ribbon shows the wind; moving river streaks show the local current. Bikes coast downhill and boats drift through river bends. **Leave vehicle** puts it away; creative flight also detaches. One personal ride per player restores at rest on reconnect if its footprint is still clear. Protocol33 requires rebuilt clients and servers; Save12 reads saves1–11.
+Press **V** or choose **Menu → Vehicles** for free mountain bikes, kayaks and sailboats. Select a picture on dry clear ground for a bike, or wade into clear water for a boat. **Movement** steers and pedals/paddles; **Sprint** adds effort; **Jump** brakes (and de-powers a sail). Sailboats trim automatically: steer across the wind and tack for upwind travel. The mast ribbon shows the wind; moving river streaks show the local current. Bikes coast downhill and boats drift through river bends. **Leave vehicle** puts it away; creative flight also detaches. One personal ride per player restores at rest on reconnect if its footprint is still clear. Protocol34 requires rebuilt clients and servers; Save12 reads saves1–11.
 
 Use the same **character name** to keep progress on this device. `player-profiles.json` in the game data directory stores private guest tokens scoped to the local save or remote address and character name. Back it up with your world save; losing the token loses access to that character’s progress. A different name creates a separate character. The server saves coins, cargo, job, and location in the world file; reconnecting while airborne restores a personal canopy at the saved location. Two sessions cannot use the same character simultaneously. Existing worlds gain markets without regenerating their terrain. Delivery/local-work rewards and sales create coins; purchases remove them. Village treasuries and a balanced monetary supply are outside this prototype.
 
@@ -238,7 +238,7 @@ First use introduces a small lesson for that mechanic: hotbar, building, map, ca
 
 ## Building and finding your way
 
-Substantial player builds (initially 64 connected blocks spanning 4 m) appear at distance and receive gold build markers on everyone's map. Menu → Building switches touch controls to Select and Fill with a preview; fills are limited to 4096 blocks within 64 m. Torch and Lamp are available under Decor and illuminate nearby surfaces. The compass shows your heading and bearings to the nearest two players (one on compact touch). Menu → Return to town deploys a free personal one-use whip station; Launch consumes it, and cancelling or disconnecting puts an unused station away. It can return beyond the normal station range. These additions use Protocol33 and require matching rebuilt client/server binaries.
+Substantial player builds (initially 64 connected blocks spanning 4 m) appear at distance and receive gold build markers on everyone's map. Menu → Building switches touch controls to Select and Fill with a preview; fills are limited to 4096 blocks within 64 m. Torch and Lamp are available under Decor and illuminate nearby surfaces. The compass shows your heading and bearings to the nearest two players (one on compact touch). Menu → Return to town deploys a free personal one-use whip station; Launch consumes it, and cancelling or disconnecting puts an unused station away. It can return beyond the normal station range. These additions use Protocol34 and require matching rebuilt client/server binaries.
 
 ## Controls
 
@@ -312,7 +312,7 @@ NPC traders now walk between villages. The old airship landings remain in the ge
 
 ## Observe without a player avatar
 
-Choose **Observe as admin** on the join screen, then **Local world** or **Join server**. Direct startup also works:
+Choose **Observe as admin** on the join screen (**Admin camera** on touch), then **Local world** or **Join server**. Direct startup also works:
 
 ```sh
 cargo run --locked -p rubblekin_client -- --local --observe
@@ -321,11 +321,11 @@ cargo run --locked -p rubblekin_client -- --connect 127.0.0.1:7878 --observe
 
 Observer sessions require an admin-enabled server (`--allow-admin` on dedicated hosting). Local hosting enables this; the public test server has it disabled. The existing admin setting applies to everyone who can connect, so it is not per-user authentication.
 
-The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 3–96 m/s (initially 18), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed; **V** visits the next village in GeographyV3–V6. Tab closes inspection or opens it on the aimed character, block, or plot. F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer**.
+The read-only camera creates no avatar and passes freely through terrain. WASD flies along the view, Q/E descends/ascends, mouse or arrows look, scroll changes speed from 3–96 m/s (initially 18), and Shift gives a 5× boost. **R or Home** returns to spawn and resets speed; **V** visits the next village in GeographyV3–V6. Tab closes inspection or opens it on the aimed character, block, or plot. F2 changes graphics, and F10 returns to the join screen, where you can switch back to **Play as explorer** (**Explorer** on touch).
 
 Observers see live terrain edits, other players, and NPC activity. They cannot build or change NPC settings; the server enforces this even for custom clients. In geographic worlds, nearby detailed terrain follows the camera and distant landforms cover the full 32.768 km region. The old 160 × 160 m valley renderer remains available for legacy saves.
 
-The current handshake uses **protocol v32**. Rebuild/restart both client and server together: player walking, sprinting and creative flight are 50% faster and must agree for prediction. Seeded terrain uses pinned portable math so Android and server village IDs, stations and landforms agree. Whip stations launch from clear roadside areas on the outskirts while arrivals remain near the central storehouse. Older clients are rejected at connection. Save version 12 retains terrain edits, village life, player trading progress, shared salvage/ecology, activity contributions and personal vehicle kind/heading. Versions 1–11 load additively. Generation identifiers remain explicit, but pre-release geometry may change in place under the October 8 save waiver. Original valleys remain a separate generator.
+The current handshake uses **protocol v34**. Rebuild/restart both client and server together: river hull collision and the 50% faster player movement must agree for prediction. Seeded terrain uses pinned portable math so Android and server village IDs, stations and landforms agree. Whip stations launch from clear roadside areas on the outskirts while arrivals remain near the central storehouse. Older clients are rejected at connection. Save version 12 retains terrain edits, village life, player trading progress, shared salvage/ecology, activity contributions and personal vehicle kind/heading. Versions 1–11 load additively. Generation identifiers remain explicit, but pre-release geometry may change in place under the October 8 save waiver. Original valleys remain a separate generator.
 
 ## Graphics
 
