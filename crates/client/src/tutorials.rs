@@ -773,7 +773,7 @@ pub(crate) fn update(
         })
         .flatten()
         .filter(|lesson| {
-            // Touch transport lessons share the ordinary notice strip. Server
+            // Touch lessons share the ordinary notice strip. Server
             // messages and a stalled connection must remain readable there.
             !(touch.enabled
                 && ((context == Context::World
@@ -785,6 +785,7 @@ pub(crate) fn update(
                             | Lesson::Travel
                             | Lesson::Glide
                             | Lesson::Flight
+                            | Lesson::Work
                     ))
                     || context == Context::Activity)
                 && (s.prediction.waiting()
@@ -805,7 +806,7 @@ pub(crate) fn update(
         } else {
             Display::None
         };
-        let touch_transport = touch.enabled
+        let touch_strip = touch.enabled
             && (touch_activity
                 || matches!(
                     visible,
@@ -816,9 +817,10 @@ pub(crate) fn update(
                             | Lesson::Travel
                             | Lesson::Glide
                             | Lesson::Flight
+                            | Lesson::Work
                     )
                 ));
-        root.left = px(if touch_transport {
+        root.left = px(if touch_strip {
             12.
         } else if touch.enabled {
             210.
@@ -828,15 +830,19 @@ pub(crate) fn update(
         root.top = px(match (visible, touch.enabled) {
             (Some(Lesson::BoxBuilding), true) => 158.,
             (Some(Lesson::BoxBuilding), false) => 210.,
-            (_, true) if touch_transport => 58.,
+            (_, true) if touch_strip => 58.,
             (_, true) => 100.,
             (_, false) => 116.,
         });
-        root.width = px(if touch_transport {
+        root.width = px(if touch_strip {
             let scale = (window.width() / 840.)
                 .min(window.height() / 400.)
                 .clamp(0.5, 1.);
-            let actions = if touch_activity { 328. } else { 88. };
+            let actions = if touch_activity || visible == Some(Lesson::Work) {
+                328.
+            } else {
+                88.
+            };
             (window.width() - actions * scale - 32.).clamp(240., 800.)
         } else if touch.enabled {
             300.
@@ -864,7 +870,13 @@ pub(crate) fn update(
         {
             let stage = t.stages[&lesson];
             let body = lesson.instruction(stage, touch.enabled);
-            let value = format!("{}\n{}", lesson.title(), body);
+            let value = if touch.enabled && lesson == Lesson::Work {
+                // The pictured work card already names the job. Keep the
+                // first-use instruction short enough to clear Sprint below it.
+                body.to_owned()
+            } else {
+                format!("{}\n{}", lesson.title(), body)
+            };
             if text.0 != value {
                 text.0 = value;
             }
@@ -1639,6 +1651,63 @@ mod tests {
             app.world().resource::<Tutorials>().stages[&Lesson::Glide],
             0
         );
+    }
+
+    #[test]
+    fn confirmed_touch_work_uses_the_header_strip_and_resumes_after_an_error() {
+        use rubblekin_core::economy::{
+            PlayerEconomy, WorkKind, WorkOffer, WorkProgress, WorkSite, WorkState,
+        };
+        let (mut app, _peer) = app();
+        app.world_mut().resource_mut::<TouchControls>().enabled = true;
+        app.world_mut().resource_mut::<Session>().status_until = 0.;
+        let position = app.world().resource::<Session>().body.position;
+        app.world_mut()
+            .resource_mut::<crate::market::MarketPanel>()
+            .work_reply(
+                1,
+                WorkState {
+                    offer: None,
+                    active: Some(WorkProgress {
+                        offer: WorkOffer {
+                            site: WorkSite {
+                                village_id: 1,
+                                kind: WorkKind::Salvage,
+                                index: 0,
+                            },
+                            position,
+                            label: "Collect timber".into(),
+                            reward: rubblekin_core::economy::WorkReward::Cargo {
+                                kind: rubblekin_core::settlement::ResourceKind::Timber,
+                                amount: 1,
+                            },
+                            duration_seconds: 6.,
+                            unavailable_reason: None,
+                        },
+                        elapsed_seconds: 1.,
+                    }),
+                },
+                PlayerEconomy::default(),
+                String::new(),
+                true,
+            );
+        app.update();
+        let mut roots = app.world_mut().query_filtered::<&Node, With<WorldCard>>();
+        let node = roots.single(app.world()).unwrap();
+        assert_eq!(node.display, Display::Flex);
+        assert_eq!(node.left, px(12.));
+        assert_eq!(node.top, px(58.));
+        {
+            let mut session = app.world_mut().resource_mut::<Session>();
+            session.status = "The worksite changed; review Cargo.".into();
+            session.status_until = 100.;
+        }
+        app.update();
+        assert_eq!(roots.single(app.world()).unwrap().display, Display::None);
+        assert_eq!(app.world().resource::<Tutorials>().stages[&Lesson::Work], 0);
+        app.world_mut().resource_mut::<Session>().status_until = 0.;
+        app.update();
+        assert_eq!(roots.single(app.world()).unwrap().display, Display::Flex);
     }
 
     #[test]

@@ -114,6 +114,160 @@ fn acknowledge(app: &mut App, peer: &mut BufReader<TcpStream>, player: &PlayerSn
 }
 
 #[test]
+fn work_receive_uses_confirmed_pictures_but_keeps_rejections_and_cancellations() {
+    use rubblekin_core::economy::{
+        PlayerEconomy, WorkKind, WorkOffer, WorkProgress, WorkReward, WorkSite, WorkState,
+    };
+    let (mut app, mut peer, _) = fixture();
+    app.init_resource::<market::MarketPanel>();
+    app.world_mut().resource_mut::<Session>().status.clear();
+    let offer = WorkOffer {
+        site: WorkSite {
+            village_id: 1,
+            kind: WorkKind::TendField,
+            index: 0,
+        },
+        position: app.world().resource::<Session>().body.position,
+        label: "Tend field".into(),
+        reward: WorkReward::Coins(2),
+        duration_seconds: 6.,
+        unavailable_reason: None,
+    };
+    let active = WorkState {
+        offer: None,
+        active: Some(WorkProgress {
+            offer,
+            elapsed_seconds: 0.,
+        }),
+    };
+    let message = |id, work, ledger, notice: &str, accepted| ServerMessage::WorkState {
+        request_id: id,
+        work,
+        ledger,
+        notice: notice.into(),
+        accepted,
+    };
+    fn receive(
+        app: &mut App,
+        peer: &mut BufReader<TcpStream>,
+        message: ServerMessage,
+        done: impl Fn(&App) -> bool,
+    ) {
+        serde_json::to_writer(peer.get_mut(), &message).unwrap();
+        peer.get_mut().write_all(b"\n").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            app.world_mut().run_schedule(PostUpdate);
+            if done(app) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "work reply never arrived");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    receive(
+        &mut app,
+        &mut peer,
+        message(
+            1,
+            active.clone(),
+            PlayerEconomy::default(),
+            "Stay at the work site for six seconds.",
+            true,
+        ),
+        |app| {
+            app.world()
+                .resource::<market::MarketPanel>()
+                .active_work()
+                .is_some()
+        },
+    );
+    assert!(app.world().resource::<Session>().status.is_empty());
+    receive(
+        &mut app,
+        &mut peer,
+        message(
+            2,
+            active.clone(),
+            PlayerEconomy::default(),
+            "Finish or cancel your current work first.",
+            false,
+        ),
+        |app| {
+            app.world().resource::<Session>().status == "Finish or cancel your current work first."
+        },
+    );
+    receive(
+        &mut app,
+        &mut peer,
+        message(
+            3,
+            WorkState::default(),
+            PlayerEconomy::default(),
+            "Work cancelled.",
+            true,
+        ),
+        |app| app.world().resource::<Session>().status == "Work cancelled.",
+    );
+    assert!(
+        app.world()
+            .resource::<market::MarketPanel>()
+            .active_work()
+            .is_none()
+    );
+    app.world_mut().resource_mut::<Session>().status.clear();
+    receive(
+        &mut app,
+        &mut peer,
+        message(
+            4,
+            active,
+            PlayerEconomy::default(),
+            "Stay at the work site for six seconds.",
+            true,
+        ),
+        |app| {
+            app.world()
+                .resource::<market::MarketPanel>()
+                .active_work()
+                .is_some()
+        },
+    );
+    receive(
+        &mut app,
+        &mut peer,
+        message(
+            0,
+            WorkState::default(),
+            PlayerEconomy {
+                coins: 2,
+                revision: 1,
+                ..default()
+            },
+            "Earned two coins.",
+            true,
+        ),
+        |app| {
+            app.world()
+                .resource::<market::MarketPanel>()
+                .ledger
+                .as_ref()
+                .is_some_and(|l| l.revision == 1)
+        },
+    );
+    assert!(app.world().resource::<Session>().status.is_empty());
+    assert_eq!(
+        app.world()
+            .resource::<market::MarketPanel>()
+            .ledger
+            .as_ref()
+            .unwrap()
+            .coins,
+        2
+    );
+}
+
+#[test]
 fn mouse_camera_aim_is_sent_and_steers_the_canopy_without_walking_keys() {
     let (mut app, mut peer, _) = fixture();
     {

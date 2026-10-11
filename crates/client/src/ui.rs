@@ -579,7 +579,18 @@ pub fn update_ui(
         set_text(&mut text, value);
     }
     let mut notice = notice_text(&session, &world, time.elapsed_secs_f64(), touch_enabled);
-    if let Some(market) = &market {
+    let pictured_work = market.as_ref().is_some_and(|panel| {
+        crate::work_cues::has_cue(panel, &session, &world, time.elapsed_secs_f64())
+    });
+    if pictured_work
+        && !session.prediction.waiting()
+        && !(time.elapsed_secs_f64() < session.status_until && !session.status.is_empty())
+    {
+        notice.clear();
+    }
+    if let Some(market) = &market
+        && !pictured_work
+    {
         let cargo = crate::market::hud_text(
             market,
             &session,

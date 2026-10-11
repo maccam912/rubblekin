@@ -61,10 +61,27 @@ fn mesh(index: usize) -> Mesh {
 }
 
 pub(crate) fn picture(index: usize) -> Image {
-    let parts: Vec<_> = parts(index)
-        .into_iter()
-        .map(|(at, size, color)| (at + Vec3::Y * 0.85, size, color))
-        .collect();
+    let mut parts = parts(index);
+    if index == 1 {
+        // Hold the hammer upright in its picture; its hand-held mesh keeps the
+        // existing downward working orientation.
+        for (at, _, _) in &mut parts {
+            at.y = -at.y;
+        }
+    }
+    let (low, high) = parts.iter().fold(
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        |(low, high), (at, size, _)| (low.min(*at - *size * 0.5), high.max(*at + *size * 0.5)),
+    );
+    let span = high - low;
+    // The shared front-view picture canvas fits 1.1m across and 0.9m high.
+    // Frame each actual tool, rather than leaving the smaller props as specks.
+    let scale = (1.1 / span.x).min(0.9 / span.y);
+    for (at, size, _) in &mut parts {
+        at.x = (at.x - (low.x + high.x) * 0.5) * scale;
+        at.y = 0.08 + (at.y - low.y) * scale;
+        *size *= scale;
+    }
     crate::activities::picture(&parts)
 }
 

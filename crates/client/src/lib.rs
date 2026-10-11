@@ -809,13 +809,17 @@ fn receive_network(
                 notice,
                 accepted,
             } => {
-                if let Some(panel) = &mut market
-                    && panel.work_reply(request_id, work, ledger, notice.clone(), accepted)
-                    && let Some(t) = tutorials.as_deref_mut()
-                {
+                let active = work.active.is_some();
+                let completed = market.as_mut().is_some_and(|panel| {
+                    panel.work_reply(request_id, work, ledger, notice.clone(), accepted)
+                });
+                if completed && let Some(t) = tutorials.as_deref_mut() {
                     t.signal(tutorials::Signal::Finished(tutorials::Lesson::Work));
                 }
-                if !notice.is_empty() {
+                // Confirmed work has its pictured progress/reward and lesson.
+                // Keep cancellation and rejection notices without repeating
+                // the successful start over those same instructions.
+                if !(accepted && (active || completed)) && !notice.is_empty() {
                     session.status = notice;
                     session.status_until = time.elapsed_secs_f64() + 5.0;
                 }
