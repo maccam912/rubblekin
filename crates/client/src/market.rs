@@ -649,12 +649,12 @@ pub(crate) fn setup(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     ));
     let heading = crate::ui::heading_font(&mut fonts);
     commands.spawn((GameEntity, MarketRoot, GlobalZIndex(92),
-        Node { display: Display::None, width: percent(100), height: percent(100), padding: UiRect::all(px(12)),
+        Node { display: Display::None, width: percent(100), min_width: px(0), height: percent(100), padding: UiRect::all(px(12)),
             align_items: AlignItems::Center, justify_content: JustifyContent::Center,
             flex_direction: FlexDirection::Column, overflow: Overflow::clip(), ..default() },
         BackgroundColor(Color::srgba(0.02, 0.05, 0.05, 0.60))))
         .with_children(|root| {
-            root.spawn((Panel, Node { width: px(720), max_width: percent(100), height: percent(100),
+            root.spawn((Panel, Node { width: px(720), max_width: percent(100), min_width: px(0), height: percent(100),
                 max_height: px(760), min_height: px(0), padding: UiRect::all(px(18)),
                 flex_direction: FlexDirection::Column, row_gap: px(10),
                 border_radius: BorderRadius::all(px(9)), ..default() },
@@ -2285,6 +2285,78 @@ mod tests {
         }
         app.update();
         (app, window, close, peer)
+    }
+
+    #[test]
+    fn first_use_market_lesson_and_actions_fit_a_real_640_by_360_viewport() {
+        let (mut app, window, _, _peer) = test_app(true);
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .resolution
+            .set(640., 360.);
+        {
+            let mut cameras = app.world_mut().query::<&mut Camera>();
+            for mut camera in cameras.iter_mut(app.world_mut()) {
+                camera.viewport.as_mut().unwrap().physical_size = UVec2::new(640, 360);
+                camera.computed.target_info.as_mut().unwrap().physical_size = UVec2::new(640, 360);
+            }
+        }
+        app.world_mut().resource_mut::<TouchControls>().enabled = true;
+        app.init_resource::<crate::tutorials::Tutorials>()
+            .add_systems(Update, crate::tutorials::update.after(refresh));
+        for _ in 0..4 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let (card, transform) = world
+            .query_filtered::<(&ComputedNode, &UiGlobalTransform), With<Panel>>()
+            .single(world)
+            .unwrap();
+        let left = transform.translation.x - card.size.x * 0.5;
+        let right = transform.translation.x + card.size.x * 0.5;
+        let root = world
+            .query_filtered::<&ComputedNode, With<MarketRoot>>()
+            .single(world)
+            .unwrap();
+        assert_eq!(root.size, Vec2::new(640., 360.));
+        assert!(
+            left >= 12. && right <= 628.,
+            "market card escapes the viewport: {left}..{right}"
+        );
+        let mut skip_count = 0;
+        for (node, transform, _) in world
+            .query_filtered::<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), Without<MarketRoot>>()
+            .iter(world)
+            .filter(|(node, _, visibility)| visibility.get() && node.size.x > 0.)
+        {
+            assert!(
+                transform.translation.x + node.size.x * 0.5 <= 628.,
+                "visible market child extends off screen"
+            );
+        }
+        for (_, node, transform) in world
+            .query::<(&crate::tutorials::Skip, &ComputedNode, &UiGlobalTransform)>()
+            .iter(world)
+        {
+            if node.size.x > 0. {
+                skip_count += 1;
+                assert!(node.size.x >= 48. && node.size.y >= 44.);
+                assert!(transform.translation.x + node.size.x * 0.5 <= 628.);
+            }
+        }
+        assert_eq!(
+            skip_count, 1,
+            "the real first-use Skip button must remain visible"
+        );
+        let body = world
+            .query_filtered::<&ComputedNode, With<MarketScroll>>()
+            .single(world)
+            .unwrap();
+        assert!(
+            body.size.y >= 44.,
+            "the scrolling offers need a usable touch area"
+        );
     }
 
     #[test]
