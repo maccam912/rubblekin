@@ -8,7 +8,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 // River hull collision, bank recovery and prediction require rebuilt peers.
-pub const PROTOCOL_VERSION: u32 = 34;
+pub const PROTOCOL_VERSION: u32 = 35;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum simulated duration of one movement command, including a long frame.
 pub const MAX_INPUT_DT: f32 = 0.25;
@@ -304,6 +304,8 @@ pub struct ResidentSnapshot {
     pub energy: f32,
     #[serde(default = "resident_initial_reason")]
     pub reason: String,
+    #[serde(default)]
+    pub glider_ride: Option<crate::gliders::GliderRide>,
     #[serde(default)]
     pub ride: Option<AirshipRide>,
     #[serde(default)]

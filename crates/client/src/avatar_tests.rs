@@ -61,6 +61,86 @@ fn player_limbs(app: &mut App, id: u64) -> Vec<(bool, Transform)> {
 }
 
 #[test]
+fn trader_carriage_avatar_uses_the_continuous_seat_and_seated_limbs() {
+    let mut app = avatar_app();
+    {
+        let mut session = app.world_mut().resource_mut::<Session>();
+        session.gliders.push(GliderFlight {
+            emergency: false,
+            id: 92,
+            station_id: 0,
+            destination: GliderDestination::Village(1),
+            destination_name: "Town".into(),
+            from: [10., 50., 20.],
+            to: [500., 50., 400.],
+            apex: 600.,
+            duration: 30.,
+            created_at: 0.,
+            started_at: Some(0.),
+        });
+        session
+            .residents
+            .push(rubblekin_core::protocol::ResidentSnapshot {
+                id: 41,
+                village_id: 0,
+                name: "Trader".into(),
+                position: [10., 50., 20.],
+                role: rubblekin_core::protocol::ResidentRole::Trader,
+                action: rubblekin_core::protocol::ResidentAction::Delivering,
+                target: Some([500., 50., 400.]),
+                carrying: Some(rubblekin_core::protocol::ResourceCargo {
+                    kind: rubblekin_core::settlement::ResourceKind::Timber,
+                    amount: 6.,
+                }),
+                hunger: 25.,
+                energy: 85.,
+                reason: "Flying to trade".into(),
+                ride: None,
+                deck_position: None,
+                glider_ride: Some(GliderRide {
+                    carriage_id: 92,
+                    seat: 2,
+                }),
+            });
+    }
+    frame(&mut app);
+    for time in [0., 8.5, 15., 23., 30.] {
+        app.world_mut().resource_mut::<Session>().airship_clock.time = time;
+        frame(&mut app);
+        let entity = app.world().resource::<Avatars>().residents[&41];
+        let pose = app.world().resource::<Session>().gliders[0].pose(time);
+        let root = app.world().get::<Transform>(entity).unwrap();
+        assert!(
+            root.translation
+                .distance(Vec3::from_array(seat_position(pose, 2)) - Vec3::Y * 0.30)
+                < 0.0001
+        );
+        for (limb, parent, transform) in app
+            .world_mut()
+            .query::<(&Limb, &ChildOf, &Transform)>()
+            .iter(app.world())
+        {
+            if parent.parent() == entity && !limb.arm {
+                let hip = transform.transform_point(Vec3::Y * 0.5);
+                assert!((hip.y - 0.70).abs() < 0.0001);
+            }
+        }
+    }
+    app.world_mut().resource_mut::<Session>().residents[0].glider_ride = None;
+    frame(&mut app);
+    let entity = app.world().resource::<Avatars>().residents[&41];
+    for (limb, parent, transform) in app
+        .world_mut()
+        .query::<(&Limb, &ChildOf, &Transform)>()
+        .iter(app.world())
+    {
+        if parent.parent() == entity && !limb.arm {
+            assert_eq!(transform.scale.y, 0.66);
+        }
+    }
+}
+
+#[test]
 fn carriage_passengers_follow_continuous_seats_without_walking_between_packets() {
     let mut app = avatar_app();
     {
@@ -193,7 +273,11 @@ fn coasting_bikes_and_drifting_kayaks_rest_while_active_riders_animate() {
     use rubblekin_core::vehicles::{Vehicle, VehicleKind};
     for kind in [VehicleKind::Bike, VehicleKind::Kayak] {
         let mut app = avatar_app();
-        app.world_mut().resource_mut::<Session>().vehicle = Some(Vehicle { kind, heading: 0. });
+        app.world_mut().resource_mut::<Session>().vehicle = Some(Vehicle {
+            tilt: 0.0,
+            kind,
+            heading: 0.,
+        });
         frame(&mut app);
         frame(&mut app);
         let still = player_limbs(&mut app, 17);
@@ -235,7 +319,11 @@ fn remote_vehicles_share_the_rendered_rider_pose_through_packets_teleports_and_d
             let mut remote = session.players[0].clone();
             remote.id = 31;
             remote.body.position = [10., 8., 10.];
-            remote.vehicle = Some(Vehicle { kind, heading: 0.7 });
+            remote.vehicle = Some(Vehicle {
+                tilt: 0.0,
+                kind,
+                heading: 0.7,
+            });
             session.players.push(remote);
         }
         frame(&mut app);
@@ -298,6 +386,7 @@ fn bike_wheels_roll_with_signed_travel_and_hold_through_stops_and_teleports() {
             let mut session = app.world_mut().resource_mut::<Session>();
             session.body.position = start.to_array();
             session.vehicle = Some(Vehicle {
+                tilt: 0.0,
                 kind: VehicleKind::Bike,
                 heading,
             });
@@ -365,6 +454,7 @@ fn kayak_paddle_follows_both_hands_while_resting_and_stroking() {
         let mut session = app.world_mut().resource_mut::<Session>();
         session.body.position = [10., 80., 10.];
         session.vehicle = Some(Vehicle {
+            tilt: 0.0,
             kind: VehicleKind::Kayak,
             heading: 0.7,
         });
@@ -427,6 +517,7 @@ fn bike_hands_reach_the_handlebar_and_arm_shapes_restore_after_riding() {
             let mut session = app.world_mut().resource_mut::<Session>();
             session.body.position = [-386.25, 183.5, 7808.25];
             session.vehicle = Some(Vehicle {
+                tilt: 0.0,
                 kind: VehicleKind::Bike,
                 heading,
             });
@@ -463,6 +554,7 @@ fn bike_hands_reach_the_handlebar_and_arm_shapes_restore_after_riding() {
         }
         for mounted in [
             Some(Vehicle {
+                tilt: 0.0,
                 kind: VehicleKind::Kayak,
                 heading,
             }),
@@ -505,6 +597,7 @@ fn bike_feet_follow_opposed_pedals_and_hold_their_phase_while_coasting() {
         let mut session = app.world_mut().resource_mut::<Session>();
         session.body.position = [-386.25, 183.5, 7808.25];
         session.vehicle = Some(Vehicle {
+            tilt: 0.0,
             kind: VehicleKind::Bike,
             heading: 0.7,
         });
@@ -641,6 +734,7 @@ fn vehicle_riders_sit_on_the_actual_seats_and_follow_the_hulls_pitch() {
         let mut app = avatar_app();
         app.insert_resource(VoxelWorld(world.clone()));
         let craft = Vehicle {
+            tilt: if kind == VehicleKind::Bike { 0.30 } else { 0.0 },
             kind,
             heading: std::f32::consts::PI,
         };
@@ -856,6 +950,7 @@ fn close_view_visibility_uses_the_pitched_seat_and_does_not_flicker_at_the_bound
             let mut session = app.world_mut().resource_mut::<Session>();
             session.body.position = [64., 49.955513, -11067.809];
             session.vehicle = Some(Vehicle {
+                tilt: 0.0,
                 kind,
                 heading: std::f32::consts::PI,
             });
@@ -906,6 +1001,7 @@ fn riding_camera_matches_the_seated_pose_and_smoothly_returns_to_standing() {
             let mut session = app.world_mut().resource_mut::<Session>();
             session.body.position = [64., 49.955513, -11067.809];
             session.vehicle = Some(Vehicle {
+                tilt: 0.0,
                 kind,
                 heading: std::f32::consts::PI,
             });

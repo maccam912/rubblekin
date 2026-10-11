@@ -37,6 +37,9 @@ impl VehicleKind {
 pub struct Vehicle {
     pub kind: VehicleKind,
     pub heading: f32,
+    /// Shared suspension/airborne pitch for the bike; boats sample water.
+    #[serde(default)]
+    pub tilt: f32,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum VehicleAction {
@@ -58,6 +61,14 @@ fn solid(world: &World, p: [f32; 3]) -> bool {
 /// The rendered hull and its collision samples use the same bounded pitch.
 /// A flat envelope can hit the river bed while the visible bow is above it.
 pub fn pitch(world: &World, position: [f32; 3], vehicle: Vehicle) -> f32 {
+    if vehicle.kind == VehicleKind::Bike {
+        vehicle.tilt
+    } else {
+        terrain_pitch(world, position, vehicle)
+    }
+}
+
+fn terrain_pitch(world: &World, position: [f32; 3], vehicle: Vehicle) -> f32 {
     let f = forward(vehicle.heading);
     let length = vehicle.kind.dimensions()[2];
     let surface = |sign: f32| {
@@ -66,10 +77,15 @@ pub fn pitch(world: &World, position: [f32; 3], vehicle: Vehicle) -> f32 {
         if vehicle.kind.watercraft() {
             environment::water_surface(world, x, z).unwrap_or(position[1])
         } else {
-            world.surface_height(x, z)
+            bike_ground(world, position[1], x, z)
         }
     };
-    libm::atanf((surface(1.) - surface(-1.)) / (length * 2.)).clamp(-0.45, 0.45)
+    let limit = if vehicle.kind == VehicleKind::Bike {
+        0.95
+    } else {
+        0.45
+    };
+    libm::atanf((surface(1.) - surface(-1.)) / (length * 2.)).clamp(-limit, limit)
 }
 
 fn floating_height(world: &World, p: [f32; 3], vehicle: Vehicle) -> Option<f32> {
@@ -97,16 +113,15 @@ pub fn position_is_clear(
     vehicle: Vehicle,
     obstacles: &[[f32; 3]],
 ) -> bool {
-    if !vehicle.heading.is_finite() || !character_position_is_clear(world, p, obstacles) {
+    if !vehicle.heading.is_finite()
+        || !vehicle.tilt.is_finite()
+        || !character_position_is_clear(world, p, obstacles)
+    {
         return false;
     }
     let [width, draft, length] = vehicle.kind.dimensions();
     let f = forward(vehicle.heading);
-    let slope = if vehicle.kind.watercraft() {
-        libm::tanf(pitch(world, p, vehicle))
-    } else {
-        0.
-    };
+    let slope = libm::tanf(pitch(world, p, vehicle));
     let nx = (width * 2.0 / 0.24).ceil() as usize;
     let nz = (length * 2.0 / 0.24).ceil() as usize;
     for x in 0..=nx {
@@ -139,8 +154,8 @@ pub fn position_is_clear(
                         }
                     }
                 }
-            } else if solid(world, [q[0], p[1] + 0.55, q[2]])
-                || solid(world, [q[0], p[1] + 0.85, q[2]])
+            } else if solid(world, [q[0], q[1] + 0.55, q[2]])
+                || solid(world, [q[0], q[1] + 0.85, q[2]])
             {
                 return false;
             }
@@ -191,11 +206,15 @@ pub fn spawn(
     heading: f32,
     obstacles: &[[f32; 3]],
 ) -> Result<Vehicle, &'static str> {
-    let vehicle = Vehicle {
+    let mut vehicle = Vehicle {
+        tilt: 0.0,
         kind,
         heading: heading.rem_euclid(std::f32::consts::TAU),
     };
     let mut p = body.position;
+    if kind == VehicleKind::Bike {
+        vehicle.tilt = terrain_pitch(world, p, vehicle);
+    }
     if kind.watercraft() {
         let Some(level) = environment::water_surface(world, p[0], p[2]) else {
             return Err("Move into open water to launch this boat.");
@@ -208,6 +227,12 @@ pub fn spawn(
         || environment::water_surface(world, p[0], p[2]).is_some_and(|level| p[1] < level + 0.2)
     {
         return Err("Stand on dry ground to ride a bike.");
+    }
+    if kind == VehicleKind::Bike {
+        let support = bike_support(world, p, vehicle);
+        if (support - p[1]).abs() <= 1.5 {
+            p[1] = support;
+        }
     }
     if !position_is_clear(world, p, vehicle, obstacles) {
         return Err("Find more clear space for the whole vehicle.");
@@ -255,6 +280,7 @@ pub fn advance(
         return true;
     }
     if !craft.heading.is_finite()
+        || !craft.tilt.is_finite()
         || body
             .position
             .iter()
@@ -292,39 +318,7 @@ pub fn advance(
         }
         let f = forward(craft.heading);
         if craft.kind == VehicleKind::Bike {
-            let slope = if body.on_ground {
-                [
-                    (world.surface_height(body.position[0] + 0.75, body.position[2])
-                        - world.surface_height(body.position[0] - 0.75, body.position[2]))
-                        / 1.5,
-                    (world.surface_height(body.position[0], body.position[2] + 0.75)
-                        - world.surface_height(body.position[0], body.position[2] - 0.75))
-                        / 1.5,
-                ]
-            } else {
-                [0.0; 2]
-            };
-            let v = [body.velocity[0], body.velocity[2]];
-            let along = v[0] * f[0] + v[1] * f[1];
-            for (axis, k) in [(0, 0), (2, 1)] {
-                let pedal = if input.jump {
-                    0.0
-                } else {
-                    throttle * if input.sprint { 5.0 } else { 3.2 }
-                };
-                let acceleration = f[k] * pedal
-                    - slope[k].clamp(-1.5, 1.5) * 8.0
-                    - v[k] * (0.12 + norm(v) * 0.018 + if input.jump { 5.0 } else { 0.0 })
-                    + (f[k] * along - v[k]) * 4.0;
-                body.velocity[axis] = (v[k] + acceleration * step).clamp(-28.0, 28.0);
-            }
-            let before = body.clone();
-            crate::physics::move_rolling_body(world, body, step, obstacles);
-            if !position_is_clear(world, body.position, craft, obstacles) {
-                *body = before;
-                body.velocity[0] = 0.;
-                body.velocity[2] = 0.;
-            }
+            advance_bike(world, body, &mut craft, input, throttle, step, obstacles);
         } else {
             // A bank can leave room to paddle out but no room to swing the
             // bow. Scull toward the requested direction until turning clears,
@@ -398,6 +392,199 @@ pub fn advance(
     true
 }
 
+// Contact probes look near the wheels, not at the highest roof/tree in a
+// column. A bike underneath a canopy must still find the ground below it.
+fn bike_ground(world: &World, reference: f32, x: f32, z: f32) -> f32 {
+    let x = (x / CELL_SIZE).floor() as i32;
+    let z = (z / CELL_SIZE).floor() as i32;
+    let top = ((reference + 1.0) / CELL_SIZE).floor() as i32;
+    if world.block(BlockPos::new(x, top, z)).is_solid() {
+        return reference + 2.0;
+    }
+    let bottom = ((reference - 5.0) / CELL_SIZE).floor() as i32;
+    for y in (bottom..top).rev() {
+        if world.block(BlockPos::new(x, y, z)).is_solid() {
+            return (y + 1) as f32 * CELL_SIZE;
+        }
+    }
+    reference - 5.0
+}
+
+// Wheel patches bridge the voxel stair edges. The centre support prevents the
+// rider clipping a narrow ridge between the wheels. No terrain is altered.
+fn bike_support(world: &World, p: [f32; 3], craft: Vehicle) -> f32 {
+    let f = forward(craft.heading);
+    let wheel = |along: f32| {
+        [-0.18, 0.0, 0.18]
+            .into_iter()
+            .map(|offset| {
+                bike_ground(
+                    world,
+                    p[1],
+                    p[0] + f[0] * (along + offset),
+                    p[2] + f[1] * (along + offset),
+                )
+            })
+            .sum::<f32>()
+            / 3.0
+    };
+    let mut support = (wheel(-0.7) + wheel(0.7)) * 0.5;
+    for x in [-0.28, 0.0, 0.28] {
+        for z in [-0.28, 0.0, 0.28] {
+            support = support.max(bike_ground(world, p[1], p[0] + x, p[2] + z));
+        }
+    }
+    // Keep the pitched frame above every tread under its footprint, including
+    // a small isolated bump between the wheel patches. Tall obstacles still
+    // exceed the suspension's bounded step and stop the swept movement.
+    let slope = libm::tanf(craft.tilt);
+    for side in [-0.32, 0.0, 0.32] {
+        for i in 0..=9 {
+            let along = -0.9 + i as f32 * 0.2;
+            let height = bike_ground(
+                world,
+                p[1],
+                p[0] + f[1] * side + f[0] * along,
+                p[2] - f[0] * side + f[1] * along,
+            );
+            support = support.max(height - along * slope - 0.50);
+        }
+    }
+    support
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_bike(
+    world: &World,
+    body: &mut Body,
+    craft: &mut Vehicle,
+    input: MoveInput,
+    throttle: f32,
+    dt: f32,
+    obstacles: &[[f32; 3]],
+) {
+    let f = forward(craft.heading);
+    let v = [body.velocity[0], body.velocity[2]];
+    let speed = norm(v);
+    let along = v[0] * f[0] + v[1] * f[1];
+    let grounded = body.on_ground;
+    let grade = if grounded {
+        libm::tanf(terrain_pitch(world, body.position, *craft))
+    } else {
+        0.0
+    };
+    let old_tilt = craft.tilt;
+    let target_tilt = if grounded {
+        libm::atanf(grade)
+    } else {
+        libm::atan2f(body.velocity[1], speed.max(0.1)).clamp(-0.95, 0.95)
+    };
+    craft.tilt += (target_tilt - craft.tilt) * (1.0 - libm::expf(-12.0 * dt));
+    let drive = if grounded {
+        (if input.jump {
+            0.0
+        } else {
+            throttle * if input.sprint { 7.0 } else { 4.0 }
+        }) - 32.0 * grade / (1.0 + grade * grade)
+    } else {
+        0.0
+    };
+    for (axis, k) in [(0, 0), (2, 1)] {
+        let drag = if grounded {
+            0.04 + speed * 0.003 + if input.jump { 7.0 } else { 0.0 }
+        } else {
+            0.015
+        };
+        let grip = if grounded { 7.0 } else { 0.35 };
+        body.velocity[axis] += (f[k] * drive - v[k] * drag + (f[k] * along - v[k]) * grip) * dt;
+    }
+    let speed = norm([body.velocity[0], body.velocity[2]]);
+    if speed > 48.0 {
+        body.velocity[0] *= 48.0 / speed;
+        body.velocity[2] *= 48.0 / speed;
+    }
+    let before = body.clone();
+    body.velocity[1] = (body.velocity[1] - 22.0 * dt).max(-40.0);
+    let mut next = body.position;
+    for (position, velocity) in next.iter_mut().zip(body.velocity) {
+        *position += velocity * dt;
+    }
+    let support = bike_support(world, next, *craft);
+    // Suspension absorbs small steps. Crests leave the wheels airborne when
+    // the outgoing tangent carries the bike above the next patch of ground.
+    let droop = if grounded && body.velocity[1] <= 0.0 {
+        0.55
+    } else {
+        0.04
+    };
+    let mut contact = next[1] <= support + droop && support <= before.position[1] + 0.85;
+    if contact {
+        next[1] = support;
+    }
+    if !position_is_clear(world, next, *craft, obstacles) {
+        // On landing, the front tyre can touch before the upright rider does.
+        // Settle the frame onto the actual slope without losing forward speed.
+        let landing = Vehicle {
+            tilt: terrain_pitch(world, next, *craft),
+            ..*craft
+        };
+        let height = bike_support(world, next, landing);
+        let p = [next[0], height, next[2]];
+        if height <= before.position[1] + 0.85
+            && height >= next[1] - 0.6
+            && position_is_clear(world, p, landing, obstacles)
+        {
+            *craft = landing;
+            next = p;
+            contact = true;
+        }
+    }
+    if position_is_clear(world, next, *craft, obstacles) {
+        body.position = next;
+        body.on_ground = contact;
+        if contact {
+            // Use a wheelbase grade rather than the discontinuous voxel step
+            // velocity, so rough ground cannot kick the bike into the sky.
+            body.velocity[1] = (libm::tanf(craft.tilt) * along).clamp(-30.0, 30.0);
+            if !grounded {
+                body.velocity[1] = 0.0;
+            }
+        }
+    } else {
+        // A tyre/frame can land before the upright rider's feet. Sweep the
+        // entire envelope vertically so contact supports the bike instead of
+        // repeatedly rolling gravity back and leaving it suspended in midair.
+        *body = before;
+        craft.tilt = old_tilt;
+        body.velocity[1] = (body.velocity[1] - 22.0 * dt).max(-40.0);
+        let vertical = body.velocity[1] * dt;
+        let mut low = 0.0;
+        let mut high = 1.0;
+        let mut p = body.position;
+        p[1] += vertical;
+        let blocked = !position_is_clear(world, p, *craft, obstacles);
+        if blocked {
+            for _ in 0..10 {
+                let mid = (low + high) * 0.5;
+                p[1] = body.position[1] + vertical * mid;
+                if position_is_clear(world, p, *craft, obstacles) {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            body.position[1] += vertical * low;
+            body.on_ground = vertical < 0.0;
+            body.velocity[1] = 0.0;
+        } else {
+            body.position = p;
+            body.on_ground = false;
+        }
+        body.velocity[0] = 0.0;
+        body.velocity[2] = 0.0;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +597,195 @@ mod tests {
         static WORLD: std::sync::OnceLock<World> = std::sync::OnceLock::new();
         WORLD.get_or_init(|| World::generate(2_689_504_302, WorldGeneration::GeographyV6))
     }
+    #[test]
+    fn bike_rolls_under_canopies_and_does_not_hang_on_a_sloping_landing() {
+        let mut world = World::new(42);
+        for x in -40..120 {
+            for z in -4..=4 {
+                world
+                    .set_block(BlockPos::new(x, 60, z), Block::Stone)
+                    .unwrap();
+                if (0..60).contains(&x) {
+                    world
+                        .set_block(BlockPos::new(x, 72, z), Block::Wood)
+                        .unwrap();
+                }
+            }
+        }
+        let mut body = Body::new([-5.25, 30.5, 0.25]);
+        body.on_ground = true;
+        let mut craft = Some(
+            spawn(
+                &world,
+                &mut body,
+                VehicleKind::Bike,
+                std::f32::consts::FRAC_PI_2,
+                &[],
+            )
+            .unwrap(),
+        );
+        body.velocity[0] = 20.0;
+        for _ in 0..240 {
+            advance(
+                &world,
+                &mut body,
+                MoveInput::default(),
+                1.0 / 120.0,
+                &[],
+                0.,
+                &mut craft,
+            );
+        }
+        assert!(
+            body.position[0] > 28.0 && body.velocity[0] > 12.0,
+            "{body:?}"
+        );
+        assert!((body.position[1] - 30.5).abs() < 0.01);
+        let world = public_island();
+        let mut body = Body::new([-9154.564, 892.2719, -3848.0686]);
+        body.velocity = [0., -13.774599, 0.];
+        let mut craft = Some(Vehicle {
+            kind: VehicleKind::Bike,
+            heading: -2.2655,
+            tilt: -0.37413692,
+        });
+        let mut landed = false;
+        for _ in 0..120 {
+            advance(
+                world,
+                &mut body,
+                MoveInput::default(),
+                1.0 / 120.0,
+                &[],
+                0.,
+                &mut craft,
+            );
+            landed |= body.on_ground;
+        }
+        assert!(
+            landed && craft.is_some(),
+            "a frame contact must support a landing: {body:?}"
+        );
+    }
+
+    #[test]
+    fn public_mountain_run_keeps_downhill_speed_over_hundreds_of_metres() {
+        let world = public_island();
+        let mut body = Body::new([-8959.75, 1055., -3967.75]);
+        body.on_ground = true;
+        let heading = (-6.0_f32).atan2(5.25);
+        let mut craft = Some(spawn(world, &mut body, VehicleKind::Bike, heading, &[]).unwrap());
+        let start = body.position;
+        let mut peak = 0.0_f32;
+        for _ in 0..200 {
+            advance(
+                world,
+                &mut body,
+                MoveInput::default(),
+                0.05,
+                &[],
+                0.,
+                &mut craft,
+            );
+            peak = peak.max(norm([body.velocity[0], body.velocity[2]]));
+        }
+        assert!(craft.is_some());
+        assert!(
+            (body.position[0] - start[0]).hypot(body.position[2] - start[2]) > 250.0,
+            "{body:?}"
+        );
+        assert!(
+            start[1] - body.position[1] > 180.0 && peak > 35.0,
+            "{body:?}, peak={peak}"
+        );
+    }
+
+    #[test]
+    fn bike_carries_speed_over_rough_downhill_and_jumps_from_a_ramp() {
+        let mut world = World::new(42);
+        // A 100 m rough downhill with half-metre ripples, a kicker and a
+        // landing run-out. The ramp is real solid voxel terrain.
+        for x in -150_i32..150 {
+            let height = if x < 30 {
+                110 - (x + 150) / 4 + i32::from(x.rem_euclid(14) == 0)
+            } else if x < 45 {
+                66 + (x - 30) / 2
+            } else {
+                62
+            };
+            for z in -5..=5 {
+                for y in height - 3..=height {
+                    world
+                        .set_block(BlockPos::new(x, y, z), Block::Stone)
+                        .unwrap();
+                }
+            }
+        }
+        let mut body = Body::new([-68.25, 0., 0.25]);
+        body.position[1] = world.surface_height(body.position[0], body.position[2]);
+        body.on_ground = true;
+        let mut craft = Some(
+            spawn(
+                &world,
+                &mut body,
+                VehicleKind::Bike,
+                std::f32::consts::FRAC_PI_2,
+                &[],
+            )
+            .unwrap(),
+        );
+        let mut peak_speed = 0.0_f32;
+        let mut jump_clearance = 0.0_f32;
+        let mut landed_fast = false;
+        let mut min_running_speed = f32::MAX;
+        for _ in 0..2400 {
+            advance(
+                &world,
+                &mut body,
+                MoveInput::default(),
+                1.0 / 120.0,
+                &[],
+                0.0,
+                &mut craft,
+            );
+            let speed = norm([body.velocity[0], body.velocity[2]]);
+            peak_speed = peak_speed.max(speed);
+            if body.position[0] > -40.0 && body.position[0] < 12.0 {
+                min_running_speed = min_running_speed.min(speed);
+            }
+            if body.position[0] > 22.5 {
+                jump_clearance = jump_clearance.max(
+                    body.position[1] - world.surface_height(body.position[0], body.position[2]),
+                );
+                if body.position[0] > 32.0 && jump_clearance > 2.0 && body.on_ground {
+                    landed_fast = speed > 10.0;
+                    break;
+                }
+            }
+            assert!(craft.is_some());
+        }
+        assert!(
+            peak_speed > 18.0 && min_running_speed > 8.0 && jump_clearance > 2.0 && landed_fast,
+            "peak={peak_speed} minimum={min_running_speed} jump={jump_clearance} landed={landed_fast} body={body:?}"
+        );
+        let before = norm([body.velocity[0], body.velocity[2]]);
+        for _ in 0..120 {
+            advance(
+                &world,
+                &mut body,
+                MoveInput {
+                    jump: true,
+                    ..Default::default()
+                },
+                1.0 / 120.0,
+                &[],
+                0.,
+                &mut craft,
+            );
+        }
+        assert!(norm([body.velocity[0], body.velocity[2]]) < before * 0.2);
+    }
+
     #[test]
     fn sailing_requires_tacking_and_retains_momentum_when_braked() {
         let world = island();
@@ -686,6 +1062,7 @@ mod tests {
         let world = public_island();
         let start = [63.915215, 41.55425, -11130.15];
         let trapped = Vehicle {
+            tilt: 0.0,
             kind: VehicleKind::Kayak,
             heading: 4.582626,
         };
@@ -729,6 +1106,7 @@ mod tests {
         let mut world = public_island().clone();
         let start = [63.915215, 41.55425, -11130.15];
         let trapped = Vehicle {
+            tilt: 0.0,
             kind: VehicleKind::Kayak,
             heading: 4.582626,
         };
@@ -783,7 +1161,7 @@ mod tests {
     #[test]
     fn a_coasting_bike_accelerates_downhill_and_stops_at_a_thin_wall() {
         let mut world = World::new(42);
-        for x in -8..60 {
+        for x in -80..60 {
             for z in -4..=4 {
                 world
                     .set_block(BlockPos::new(x, 60 + x.div_euclid(4), z), Block::Stone)
@@ -816,13 +1194,15 @@ mod tests {
         }
         assert!(
             body.velocity[0] < -1.0,
-            "downhill gravity must move a coasting bike: {:?}",
-            body.velocity
+            "downhill gravity must move a coasting bike: {:?} at {:?}",
+            body.velocity,
+            body.position
         );
         assert!(body.position[0] < 16.0);
         assert!(craft.is_some());
         let wall_x = (body.position[0] / CELL_SIZE).floor() as i32 - 4;
-        for y in 58..85 {
+        let wall_floor = (body.position[1] / CELL_SIZE).floor() as i32 - 8;
+        for y in wall_floor..wall_floor + 40 {
             for z in -4..=4 {
                 world
                     .set_block(BlockPos::new(wall_x, y, z), Block::Stone)

@@ -17,7 +17,7 @@ use crate::{
     villages::VillageLife,
 };
 
-const SAVE_VERSION: u32 = 12;
+const SAVE_VERSION: u32 = 13;
 pub(crate) const MAX_EDITS: usize = 100_000;
 
 /// The sidecar remains on disk; this guard releases its OS lock on drop.
@@ -123,7 +123,7 @@ impl Simulation {
                 path.display()
             ))
         })?;
-        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SAVE_VERSION].contains(&save.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, SAVE_VERSION].contains(&save.version) {
             return Err(invalid(format!(
                 "Unsupported save version {}",
                 save.version
@@ -148,7 +148,7 @@ impl Simulation {
         };
         let world =
             World::from_generation_edits(save.seed, generation, &save.edits).map_err(invalid)?;
-        let villages = match save.villages {
+        let mut villages = match save.villages {
             Some(villages) => villages,
             None if !generation.has_settlements() => VillageLife::default(),
             None => {
@@ -228,9 +228,11 @@ impl Simulation {
         };
         activities.recover();
         activities.add_poi_plans(&world);
+        let gliders = crate::gliders::GliderService::new(&world);
+        villages.recover_whip_riders(&world, &gliders);
         Ok(Self {
             activities,
-            gliders: crate::gliders::GliderService::new(&world),
+            gliders,
             ecology,
             world,
             npc: save.npc,

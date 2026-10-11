@@ -6,6 +6,7 @@ use rubblekin_core::{
         MAX_AIRSHIP_SEATS, deck_position, initial_deck_position, ride_position,
     },
     economy::{WorkKind, WorkReward},
+    gliders::{GLIDER_SEATS, GliderDestination, GliderRide, seat_position},
     physics::{
         Body, MoveInput, character_position_is_clear, move_character_with_airships,
         move_character_with_obstacles, resolve_character_overlaps,
@@ -116,6 +117,16 @@ struct Resident {
     /// Travel changes how a resident reaches a goal, never their job or cargo.
     #[serde(default)]
     transit: Option<Transit>,
+    #[serde(default)]
+    whip: Option<WhipTransit>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WhipTransit {
+    origin: u32,
+    destination: u32,
+    waypoint: usize,
+    arriving: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,6 +239,7 @@ impl VillageLife {
                         hunger: 25.0 + route_index as f32 * 3.0,
                         energy: 85.0 - route_index as f32 * 2.0,
                         reason: "Heading to the next job".into(),
+                        glider_ride: None,
                         ride: None,
                         deck_position: None,
                     },
@@ -248,6 +260,7 @@ impl VillageLife {
                     farm_waypoint: 0,
                     farm_path: Vec::new(),
                     transit: None,
+                    whip: None,
                 });
             }
         }
@@ -679,7 +692,20 @@ impl VillageLife {
             };
             let valid_farm_path =
                 validate_farm_path(world, &plan.villages[expected.village], local, resident);
-            if resident.village != expected.village
+            let valid_whip = resident.whip.as_ref().is_none_or(|t| {
+                resident.trail.is_some()
+                    && matches!(resident.phase, Phase::ToTrade | Phase::Returning)
+                    && t.destination == travel_destination(plan, resident)
+                    && plan.villages.iter().any(|v| v.id == t.origin)
+                    && t.waypoint < rubblekin_core::gliders::station_approach(world, t.origin).len()
+                    && resident.transit.is_none()
+            }) && resident.snapshot.glider_ride.is_none_or(|r| {
+                resident.whip.as_ref().is_some_and(|t| !t.arriving)
+                    && r.seat < GLIDER_SEATS
+                    && r.carriage_id > 0
+            });
+            if !valid_whip
+                || resident.village != expected.village
                 || resident.route != expected.route
                 || resident.trail != expected.trail
                 || resident.snapshot.id != expected.snapshot.id
@@ -886,9 +912,10 @@ impl VillageLife {
 
     #[cfg(test)]
     pub fn tick_with_obstacles(&mut self, world: &World, dt: f32, external: &[[f32; 3]]) {
-        self.tick_internal(world, dt, external, None);
+        self.tick_internal(world, dt, external, None, None);
     }
 
+    #[cfg(test)]
     pub fn tick_with_transport(
         &mut self,
         world: &World,
@@ -898,7 +925,55 @@ impl VillageLife {
         time: f64,
         external_rides: &[AirshipRide],
     ) {
-        self.tick_internal(world, dt, external, Some((network, time, external_rides)));
+        self.tick_internal(
+            world,
+            dt,
+            external,
+            Some((network, time, external_rides)),
+            None,
+        );
+    }
+
+    pub fn glider_rides(&self) -> impl Iterator<Item = GliderRide> + '_ {
+        self.residents.iter().filter_map(|r| r.snapshot.glider_ride)
+    }
+
+    pub fn tick_with_whips(
+        &mut self,
+        world: &World,
+        dt: f32,
+        external: &[[f32; 3]],
+        service: &mut crate::glider_service::GliderService,
+        time: f64,
+        players: &[GliderRide],
+    ) {
+        self.tick_internal(world, dt, external, None, Some((service, time, players)));
+    }
+
+    /// Carriages are transient. Restart an interrupted leg at its departure
+    /// road, retaining the real trade cargo and job without depositing twice.
+    pub fn recover_whip_riders(
+        &mut self,
+        world: &World,
+        service: &crate::glider_service::GliderService,
+    ) {
+        for resident in &mut self.residents {
+            if resident.snapshot.glider_ride.take().is_some()
+                && let Some(transit) = &mut resident.whip
+                && let Some(station) = service
+                    .stations
+                    .iter()
+                    .find(|s| s.village_id == transit.origin)
+            {
+                let mut p = station.position;
+                p[1] = world.surface_height(p[0], p[2]);
+                resident.body = Body::new(p);
+                resident.snapshot.position = p;
+                resident.snapshot.target = Some(p);
+                transit.waypoint = service.approaches[&transit.origin].len().saturating_sub(1);
+                transit.arriving = false;
+            }
+        }
     }
 
     fn tick_internal(
@@ -907,6 +982,11 @@ impl VillageLife {
         dt: f32,
         external: &[[f32; 3]],
         transport: Option<(&AirshipNetwork, f64, &[AirshipRide])>,
+        mut whips: Option<(
+            &mut crate::glider_service::GliderService,
+            f64,
+            &[GliderRide],
+        )>,
     ) {
         if !dt.is_finite() || dt <= 0.0 {
             return;
@@ -956,6 +1036,11 @@ impl VillageLife {
             .iter()
             .map(|resident| resident.transit.as_ref().and_then(Transit::reserved_place))
             .collect();
+        let mut glider_rides: Vec<_> = self
+            .residents
+            .iter()
+            .map(|r| r.snapshot.glider_ride)
+            .collect();
         for (index, resident) in self.residents.iter_mut().enumerate() {
             let village = &plan.villages[resident.village];
             let route = &village.resident_routes[resident.route];
@@ -970,6 +1055,26 @@ impl VillageLife {
             resident.snapshot.hunger = (resident.snapshot.hunger + dt * 0.2).min(100.0);
             if resident.phase != Phase::Resting {
                 resident.snapshot.energy = (resident.snapshot.energy - dt * 0.12).max(0.0);
+            }
+            if let Some((service, time, players)) = whips.as_mut() {
+                let occupied: Vec<_> = players
+                    .iter()
+                    .copied()
+                    .chain(
+                        glider_rides
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, ride)| (i != index).then_some(*ride).flatten()),
+                    )
+                    .collect();
+                if advance_whip(
+                    world, plan, resident, dt, &obstacles, service, *time, &occupied,
+                ) {
+                    resident.snapshot.position = resident.body.position;
+                    positions[index] = resident.body.position;
+                    glider_rides[index] = resident.snapshot.glider_ride;
+                    continue;
+                }
             }
             if let Some((network, time, external_rides)) = transport {
                 let mut occupied = external_rides.to_vec();
@@ -1286,6 +1391,157 @@ fn path_distance(position: [f32; 3], path: &[[f32; 3]]) -> f32 {
             .windows(2)
             .map(|p| horizontal_distance(p[0], p[1]))
             .sum::<f32>()
+}
+
+/// A trade leg walks along the authored road to the station, shares four real
+/// seats, then walks from the arrival marker to its existing delivery target.
+#[allow(clippy::too_many_arguments)]
+fn advance_whip(
+    world: &World,
+    plan: &SettlementPlan,
+    resident: &mut Resident,
+    dt: f32,
+    obstacles: &[[f32; 3]],
+    service: &mut crate::glider_service::GliderService,
+    time: f64,
+    occupied: &[GliderRide],
+) -> bool {
+    if !matches!(resident.phase, Phase::ToTrade | Phase::Returning) || resident.trail.is_none() {
+        return false;
+    }
+    if resident.whip.is_none() {
+        let origin = travel_origin(plan, resident);
+        let destination = travel_destination(plan, resident);
+        let trail = &plan.trails[resident.trail.unwrap()];
+        let forward =
+            (trail.from == resident.snapshot.village_id) == (resident.phase == Phase::ToTrade);
+        let start = if forward { 0 } else { trail.points.len() - 1 };
+        // Existing walkers finish their current trail; no mid-route teleport.
+        if resident.waypoint != start || service.next_stop(origin, destination).is_none() {
+            return false;
+        }
+        let Some(path) = service.approaches.get(&origin).filter(|p| !p.is_empty()) else {
+            return false;
+        };
+        resident.whip = Some(WhipTransit {
+            origin,
+            destination,
+            waypoint: nearest_waypoint(resident.body.position, path),
+            arriving: false,
+        });
+    }
+    let mut transit = resident.whip.take().unwrap();
+    if let Some(ride) = resident.snapshot.glider_ride {
+        if let Some(flight) = service.flights.iter().find(|f| f.id == ride.carriage_id) {
+            let pose = flight.pose(time);
+            resident.body = Body::new(seat_position(pose, ride.seat));
+            resident.snapshot.action = ResidentAction::Delivering;
+            resident.snapshot.reason = if flight.started_at.is_none() {
+                "Aboard the whip carriage; departing shortly (players aboard choose Launch)"
+            } else {
+                "Flying by whip carriage with the trade cargo"
+            }
+            .into();
+            resident.snapshot.target = Some(flight.to);
+            if pose.landed {
+                resident.snapshot.glider_ride = None;
+                if let GliderDestination::Village(next) = flight.destination {
+                    transit.origin = next;
+                    transit.arriving = next == transit.destination;
+                    transit.waypoint = service
+                        .approaches
+                        .get(&next)
+                        .map_or(0, |path| nearest_waypoint(resident.body.position, path));
+                    resident.navigation = Navigation::default();
+                }
+            }
+        } else {
+            resident.snapshot.glider_ride = None;
+        }
+        resident.whip = Some(transit);
+        return true;
+    }
+    if transit.arriving {
+        let trail = &plan.trails[resident.trail.unwrap()];
+        let forward =
+            (trail.from == resident.snapshot.village_id) == (resident.phase == Phase::ToTrade);
+        let end = if forward { trail.points.len() - 1 } else { 0 };
+        // The normal trail arrival owns unloading, deposits and the return job.
+        resident.waypoint = end;
+        resident.snapshot.target = Some(trail.points[end]);
+        if arrived(resident.body.position, trail.points[end]) {
+            return false;
+        }
+        walk_toward(world, resident, trail.points[end], dt, obstacles);
+        resident.snapshot.reason = "Arrived by whip; walking to deliver the trade cargo".into();
+    } else if let Some(path) = service
+        .approaches
+        .get(&transit.origin)
+        .filter(|p| !p.is_empty())
+    {
+        transit.waypoint = transit.waypoint.min(path.len() - 1);
+        let target = path[transit.waypoint];
+        resident.snapshot.target = Some(target);
+        resident.snapshot.action = ResidentAction::Walking;
+        resident.snapshot.reason = "Walking along the road to the whip station".into();
+        if arrived(resident.body.position, target) {
+            if transit.waypoint + 1 < path.len() {
+                transit.waypoint += 1;
+            } else if let Some(next) = service.next_stop(transit.origin, transit.destination) {
+                let station = service
+                    .stations
+                    .iter()
+                    .find(|s| s.village_id == next)
+                    .unwrap();
+                let result = service.waiting_flight(
+                    world,
+                    transit.origin,
+                    GliderDestination::Village(next),
+                    station.name.clone(),
+                    station.landing_position,
+                    time,
+                    occupied,
+                );
+                match result {
+                    Ok(index) => {
+                        let flight = &service.flights[index];
+                        let seat = (0..GLIDER_SEATS).find(|seat| {
+                            !occupied
+                                .iter()
+                                .any(|r| r.carriage_id == flight.id && r.seat == *seat)
+                                && character_position_is_clear(
+                                    world,
+                                    seat_position(flight.pose(time), *seat),
+                                    obstacles,
+                                )
+                        });
+                        if let Some(seat) = seat {
+                            resident.snapshot.glider_ride = Some(GliderRide {
+                                carriage_id: flight.id,
+                                seat,
+                            });
+                            resident.body = Body::new(seat_position(flight.pose(time), seat));
+                            resident.snapshot.reason =
+                                "Boarded the whip carriage with trade cargo".into();
+                        } else {
+                            resident.snapshot.reason = "Waiting for a free carriage seat".into();
+                        }
+                    }
+                    Err(reason) => {
+                        resident.snapshot.reason = reason.into();
+                    }
+                }
+            }
+        } else {
+            walk_toward(world, resident, target, dt, obstacles);
+            if resident.stuck >= 8.0 {
+                resident.snapshot.action = ResidentAction::Blocked;
+                resident.snapshot.reason = "The road to the whip station is blocked".into();
+            }
+        }
+    }
+    resident.whip = Some(transit);
+    true
 }
 
 /// An inter-village job keeps its existing destination and cargo underneath a
@@ -2736,6 +2992,174 @@ mod tests {
     }
 
     #[test]
+    fn whip_trader_waits_for_a_real_free_seat_and_keeps_its_job() {
+        let world = World::generate(2_689_504_302, WorldGeneration::GeographyV6);
+        let plan = world.settlements().unwrap();
+        let mut life = VillageLife::new(&world);
+        let index = departing_trader(&world, &mut life);
+        let resident = &mut life.residents[index];
+        let mut service = crate::glider_service::GliderService::new(&world);
+        let origin = travel_origin(plan, resident);
+        let destination = travel_destination(plan, resident);
+        let path = &service.approaches[&origin];
+        resident.body = Body::new(*path.last().unwrap());
+        resident.whip = Some(WhipTransit {
+            origin,
+            destination,
+            waypoint: path.len() - 1,
+            arriving: false,
+        });
+        let next = service.next_stop(origin, destination).unwrap();
+        let station = service
+            .stations
+            .iter()
+            .find(|s| s.village_id == next)
+            .unwrap();
+        let flight = service
+            .waiting_flight(
+                &world,
+                origin,
+                GliderDestination::Village(next),
+                station.name.clone(),
+                station.landing_position,
+                0.0,
+                &[],
+            )
+            .unwrap();
+        let id = service.flights[flight].id;
+        let seats: Vec<_> = (0..GLIDER_SEATS)
+            .map(|seat| GliderRide {
+                carriage_id: id,
+                seat,
+            })
+            .collect();
+        let cargo = resident.snapshot.carrying.clone();
+        assert!(advance_whip(
+            &world,
+            plan,
+            resident,
+            0.05,
+            &[],
+            &mut service,
+            1.,
+            &seats
+        ));
+        assert!(resident.snapshot.glider_ride.is_none());
+        assert_eq!(resident.snapshot.carrying, cargo);
+        assert_eq!(resident.phase, Phase::ToTrade);
+        assert!(advance_whip(
+            &world,
+            plan,
+            resident,
+            0.05,
+            &[],
+            &mut service,
+            2.,
+            &seats[..3]
+        ));
+        assert_eq!(resident.snapshot.glider_ride, Some(seats[3]));
+        assert_eq!(resident.snapshot.carrying, cargo);
+    }
+
+    #[test]
+    fn whip_trader_walks_boards_flies_and_delivers_without_losing_cargo() {
+        let world = World::generate(2_689_504_302, WorldGeneration::GeographyV6);
+        let plan = world.settlements().unwrap();
+        let mut life = VillageLife::new(&world);
+        let index = departing_trader(&world, &mut life);
+        let mut service = crate::glider_service::GliderService::new(&world);
+        let destination = travel_destination(plan, &life.residents[index]);
+        let cargo = life.residents[index].snapshot.carrying.clone();
+        let mut boarded = false;
+        let mut flew = false;
+        let mut restored = false;
+        let mut arrived_at_destination = false;
+        for tick in 0..24_000 {
+            let time = tick as f64 * 0.05;
+            let resident = &mut life.residents[index];
+            if !advance_whip(&world, plan, resident, 0.05, &[], &mut service, time, &[]) {
+                advance_resident(&world, plan, resident, 0.05, &[]);
+            }
+            resident.snapshot.position = resident.body.position;
+            assert_eq!(resident.snapshot.carrying, cargo);
+            if let Some(ride) = resident.snapshot.glider_ride {
+                boarded = true;
+                let flight = service
+                    .flights
+                    .iter()
+                    .find(|f| f.id == ride.carriage_id)
+                    .unwrap();
+                if flight.started_at.is_some() && !flight.pose(time).landed {
+                    flew = true;
+                    if !restored {
+                        let bytes = serde_json::to_vec(&life).unwrap();
+                        let mut saved: VillageLife = serde_json::from_slice(&bytes).unwrap();
+                        assert!(saved.validate(&world));
+                        saved.recover_whip_riders(&world, &service);
+                        assert!(saved.glider_rides().next().is_none());
+                        assert_eq!(saved.residents[index].snapshot.carrying, cargo);
+                        assert!(character_position_is_clear(
+                            &world,
+                            saved.residents[index].body.position,
+                            &[]
+                        ));
+                        assert!(saved.validate(&world));
+                        let path = std::env::temp_dir().join(format!(
+                            "rubblekin-whip-restart-{}.json",
+                            std::process::id()
+                        ));
+                        let _ = std::fs::remove_file(&path);
+                        let mut sim = crate::persistence::Simulation::load(
+                            &path,
+                            world.seed,
+                            WorldGeneration::GeographyV6,
+                        )
+                        .unwrap();
+                        sim.villages = life.clone();
+                        sim.world_time = time;
+                        sim.save(&path).unwrap();
+                        let loaded = crate::persistence::Simulation::load(
+                            &path,
+                            0,
+                            WorldGeneration::GeographyV6,
+                        )
+                        .unwrap();
+                        assert_eq!(loaded.villages.residents[index].snapshot.carrying, cargo);
+                        assert!(loaded.villages.glider_rides().next().is_none());
+                        assert!(loaded.villages.validate(&loaded.world));
+                        std::fs::remove_file(path).unwrap();
+                        restored = true;
+                    }
+                }
+            }
+            let seats: Vec<_> = life.glider_rides().collect();
+            service.launch_traders(&world, time, &seats, &[]);
+            if life.residents[index].phase == Phase::Unloading {
+                arrived_at_destination = true;
+                break;
+            }
+        }
+        let resident = &life.residents[index];
+        assert!(
+            boarded && flew && restored && arrived_at_destination,
+            "boarded={boarded} flew={flew} arrived={arrived_at_destination}; resident={resident:?}"
+        );
+        let partner = plan
+            .villages
+            .iter()
+            .position(|v| v.id == destination)
+            .unwrap();
+        let before = life.villages[partner].snapshot.timber;
+        for _ in 0..100 {
+            life.tick_with_whips(&world, 0.05, &[], &mut service, 1300.0, &[]);
+        }
+        assert!(life.villages[partner].snapshot.timber >= before + 6.0);
+        assert!(life.villages[partner].trade_deliveries > 0);
+        assert_eq!(life.residents[index].phase, Phase::Returning);
+        assert!(life.validate(&world));
+    }
+
+    #[test]
     fn every_incident_landing_allows_physical_npc_boarding_and_alighting() {
         for seed in [42, 43] {
             let world = World::generate(seed, WorldGeneration::GeographyV3);
@@ -3680,7 +4104,7 @@ mod tests {
         ));
         let simulation = crate::persistence::Simulation {
             activities: crate::activities::Activities::default(),
-            gliders: crate::gliders::GliderService::default(),
+            gliders: crate::glider_service::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
@@ -3837,7 +4261,7 @@ mod tests {
             ));
             let simulation = crate::persistence::Simulation {
                 activities: crate::activities::Activities::default(),
-                gliders: crate::gliders::GliderService::default(),
+                gliders: crate::glider_service::GliderService::default(),
                 profiles: Default::default(),
                 consumed_resource_cells: Vec::new(),
                 ecology: crate::ecology::Ecology::default(),
@@ -3931,7 +4355,7 @@ mod tests {
         ));
         let simulation = crate::persistence::Simulation {
             activities: crate::activities::Activities::default(),
-            gliders: crate::gliders::GliderService::default(),
+            gliders: crate::glider_service::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),
@@ -4633,7 +5057,7 @@ mod tests {
         ));
         let sim = Simulation {
             activities: crate::activities::Activities::default(),
-            gliders: crate::gliders::GliderService::default(),
+            gliders: crate::glider_service::GliderService::default(),
             profiles: Default::default(),
             consumed_resource_cells: Vec::new(),
             ecology: crate::ecology::Ecology::default(),

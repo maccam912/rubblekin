@@ -149,6 +149,8 @@ pub(crate) fn validate_profiles(
                 && position[1] <= world.max_y() as f32 * CELL_SIZE + 64.0
                 && player.vehicle.is_none_or(|v| {
                     v.heading.is_finite()
+                        && v.tilt.is_finite()
+                        && v.tilt.abs() <= 0.96
                         && (0.0..std::f32::consts::TAU).contains(&v.heading)
                         && !player.gliding
                         && player.ride.is_none()

@@ -8,22 +8,8 @@ use rubblekin_core::{
 };
 use std::collections::BTreeMap;
 
-#[derive(Default)]
-pub(crate) struct GliderService {
-    pub stations: Vec<WhipStation>,
-    pub flights: Vec<GliderFlight>,
-    next_id: u64,
-    personal: BTreeMap<u64, (WhipStation, u64)>,
-}
-impl GliderService {
-    pub fn new(world: &rubblekin_core::world::World) -> Self {
-        Self {
-            stations: stations(world),
-            next_id: 1,
-            ..Self::default()
-        }
-    }
-}
+pub(crate) use crate::glider_service::GliderService;
+
 fn notice(connections: &mut BTreeMap<u64, Connection>, id: u64, text: &str) {
     connections
         .get_mut(&id)
@@ -198,64 +184,47 @@ pub(crate) fn handle(
                 notice(connections, id, "Move closer to the whip station to board.");
                 return;
             }
-            let existing = sim
-                .gliders
-                .flights
-                .iter()
-                .position(|f| f.station_id == station_id && f.started_at.is_none());
-            let index = if let Some(index) = existing {
-                index
-            } else {
-                if sim.gliders.flights.len() >= 32 {
-                    notice(
-                        connections,
-                        id,
-                        "All carriages are in use. Try again shortly.",
-                    );
-                    return;
-                }
-                let target = match destination {
-                    GliderDestination::Village(v) => sim
-                        .gliders
-                        .stations
-                        .iter()
-                        .find(|s| s.village_id == v && v != station_id)
-                        .map(|s| (s.name.clone(), s.landing_position)),
-                    GliderDestination::Player(other) => connections
-                        .get(&other)
-                        .filter(|c| !c.dead && other != id)
-                        .and_then(|c| c.player.as_ref())
-                        .map(|p| (format!("Meet {}", p.name), p.body.position)),
-                };
-                let Some((name, position)) = target else {
-                    notice(connections, id, "That destination is no longer available.");
-                    return;
-                };
-                let result = GliderFlight::plan(
-                    &sim.world,
-                    station,
-                    destination,
-                    name,
-                    position,
-                    sim.gliders.next_id,
-                    sim.world_time,
-                );
-                let flight = match result {
-                    Ok(f) => f,
-                    Err(reason) => {
-                        notice(connections, id, reason);
-                        return;
-                    }
-                };
-                sim.gliders.next_id += 1;
-                sim.gliders.flights.push(flight);
-                sim.gliders.flights.len() - 1
+            let target = match destination {
+                GliderDestination::Village(v) => sim
+                    .gliders
+                    .stations
+                    .iter()
+                    .find(|s| s.village_id == v && v != station_id)
+                    .map(|s| (s.name.clone(), s.landing_position)),
+                GliderDestination::Player(other) => connections
+                    .get(&other)
+                    .filter(|c| !c.dead && other != id)
+                    .and_then(|c| c.player.as_ref())
+                    .map(|p| (format!("Meet {}", p.name), p.body.position)),
             };
-            let flight = &sim.gliders.flights[index];
-            let occupied: Vec<_> = connections
+            let Some((name, target)) = target else {
+                notice(connections, id, "That destination is no longer available.");
+                return;
+            };
+            let occupied_rides: Vec<_> = connections
                 .values()
                 .filter(|c| !c.dead)
                 .filter_map(|c| c.player.as_ref().and_then(|p| p.glider_ride))
+                .chain(sim.villages.glider_rides())
+                .collect();
+            let index = match sim.gliders.waiting_flight(
+                &sim.world,
+                station_id,
+                destination,
+                name,
+                target,
+                sim.world_time,
+                &occupied_rides,
+            ) {
+                Ok(index) => index,
+                Err(reason) => {
+                    notice(connections, id, reason);
+                    return;
+                }
+            };
+            let flight = &sim.gliders.flights[index];
+            let occupied: Vec<_> = occupied_rides
+                .iter()
                 .filter(|r| r.carriage_id == flight.id)
                 .map(|r| r.seat)
                 .collect();
@@ -456,9 +425,10 @@ pub(crate) fn tick(connections: &mut BTreeMap<u64, Connection>, sim: &mut Simula
         .filter_map(|c| c.player.as_ref())
         .collect();
     sim.gliders.flights.retain(|f| {
-        if players
-            .iter()
-            .any(|p| p.glider_ride.is_some_and(|r| r.carriage_id == f.id))
+        if sim.villages.glider_rides().any(|r| r.carriage_id == f.id)
+            || players
+                .iter()
+                .any(|p| p.glider_ride.is_some_and(|r| r.carriage_id == f.id))
         {
             return true;
         }
@@ -503,6 +473,89 @@ mod tests {
         stops.swap(1, nearest);
         f
     }
+    #[test]
+    fn empty_carriage_can_change_target_but_occupied_trip_is_preserved() {
+        let mut f = fixture();
+        let origin = f.sim.gliders.stations[0].position;
+        let destination = GliderDestination::Village(f.sim.gliders.stations[1].village_id);
+        f.add_player(1, origin);
+        f.add_player(2, [origin[0] + 30.0, origin[1], origin[2]]);
+        board(&mut f, 1, destination);
+        let original = f.sim.gliders.flights[0].clone();
+        handle(1, GliderAction::Leave, &mut f.connections, &mut f.sim);
+        assert!(
+            f.connections[&1]
+                .player
+                .as_ref()
+                .unwrap()
+                .glider_ride
+                .is_none()
+        );
+        board(&mut f, 1, GliderDestination::Player(2));
+        assert_eq!(f.sim.gliders.flights.len(), 1);
+        assert_ne!(f.sim.gliders.flights[0].id, original.id);
+        assert_eq!(
+            f.sim.gliders.flights[0].destination,
+            GliderDestination::Player(2)
+        );
+        f.add_player(3, origin);
+        board(&mut f, 3, destination);
+        assert!(
+            f.connections[&3]
+                .player
+                .as_ref()
+                .unwrap()
+                .glider_ride
+                .is_none()
+        );
+        assert_eq!(
+            f.sim.gliders.flights[0].destination,
+            GliderDestination::Player(2)
+        );
+        board(&mut f, 3, GliderDestination::Player(2));
+        assert!(
+            f.connections[&3]
+                .player
+                .as_ref()
+                .unwrap()
+                .glider_ride
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn trader_launch_waits_for_players_before_automatic_departure() {
+        let mut f = fixture();
+        let station = f.sim.gliders.stations[0].clone();
+        let target = f.sim.gliders.stations[1].clone();
+        let index = f
+            .sim
+            .gliders
+            .waiting_flight(
+                &f.sim.world,
+                station.village_id,
+                GliderDestination::Village(target.village_id),
+                target.name.clone(),
+                target.landing_position,
+                0.0,
+                &[],
+            )
+            .unwrap();
+        let ride = GliderRide {
+            carriage_id: f.sim.gliders.flights[index].id,
+            seat: 0,
+        };
+        let player = GliderRide { seat: 1, ..ride };
+        f.sim
+            .gliders
+            .launch_traders(&f.sim.world, 4.0, &[ride], &[player]);
+        assert!(f.sim.gliders.flights[index].started_at.is_none());
+        f.sim
+            .gliders
+            .launch_traders(&f.sim.world, 4.0, &[ride], &[]);
+        assert_eq!(f.sim.gliders.flights[index].started_at, Some(4.0));
+    }
+
     #[test]
     fn emergency_station_is_personal_single_use_and_cleans_up_on_disconnect() {
         let mut f = fixture();

@@ -1772,6 +1772,14 @@ fn update_avatars(
         })
         .chain(std::iter::once(session.npc.position))
         .chain(session.residents.iter().map(|resident| {
+            if let Some(ride) = resident.glider_ride
+                && let Some(flight) = session.gliders.iter().find(|f| f.id == ride.carriage_id)
+            {
+                return rubblekin_core::gliders::seat_position(
+                    flight.pose(session.airship_clock.time),
+                    ride.seat,
+                );
+            }
             resident
                 .ride
                 .and_then(|ride| {
@@ -1986,7 +1994,9 @@ fn update_avatars(
         });
         if let Ok(mut transform) = transforms.get_mut(entity) {
             let previous = transform.translation;
-            transform.translation = if resident.ride.is_some() {
+            transform.translation = if resident.glider_ride.is_some() {
+                desired + Vec3::new(0., -0.30, 0.)
+            } else if resident.ride.is_some() {
                 desired
             } else {
                 smoothed_avatar_position(
@@ -2013,10 +2023,16 @@ fn update_avatars(
                 avatars.resident_deck_motion.remove(&resident.id);
                 previous.xz().distance_squared(transform.translation.xz()) > 0.000001
             };
-            if walking {
+            if walking && resident.glider_ride.is_none() {
                 moving.push(entity);
             }
-            if let Some(target) = resident.target {
+            if let Some(ride) = resident.glider_ride
+                && let Some(flight) = session.gliders.iter().find(|f| f.id == ride.carriage_id)
+            {
+                transform.rotation = Quat::from_rotation_y(
+                    flight.pose(session.airship_clock.time).yaw + std::f32::consts::PI,
+                );
+            } else if let Some(target) = resident.target {
                 let delta = Vec3::from_array(target) - transform.translation;
                 if delta.x * delta.x + delta.z * delta.z > 0.03 {
                     transform.rotation = Quat::from_rotation_y((-delta.x).atan2(-delta.z));
@@ -2110,6 +2126,22 @@ fn update_avatars(
             .players
             .iter()
             .find(|p| avatars.players.get(&p.id) == Some(&parent.parent()));
+        let seated_resident = session.residents.iter().any(|r| {
+            r.glider_ride.is_some() && avatars.residents.get(&r.id) == Some(&parent.parent())
+        });
+        if seated_resident {
+            if limb.arm {
+                transform.rotation = Quat::from_rotation_x(0.45);
+            } else {
+                let hip = Vec3::new(side * 0.13, 0.70, 0.);
+                let foot = Vec3::new(side * 0.13, 0.36, -0.55);
+                let leg = foot - hip;
+                transform.translation = (hip + foot) * 0.5;
+                transform.scale.y = leg.length();
+                transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Y, leg.normalize());
+            }
+            continue;
+        }
         if let Some(player) = player {
             let (seated, gliding) = if player.id == session.id {
                 (session.glider_ride.is_some(), session.gliding)

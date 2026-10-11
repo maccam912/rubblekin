@@ -747,6 +747,7 @@ mod tests {
             hunger: 75.,
             energy: 20.,
             reason: "Gathering ripe crops before carrying them to storage".into(),
+            glider_ride: None,
             ride: None,
             deck_position: None,
         });

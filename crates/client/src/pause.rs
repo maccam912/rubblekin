@@ -2027,6 +2027,7 @@ mod tests {
             let mut session = app.world_mut().resource_mut::<Session>();
             session.body = body.clone();
             session.vehicle = Some(Vehicle {
+                tilt: 0.0,
                 kind: VehicleKind::Bike,
                 heading: 0.,
             });

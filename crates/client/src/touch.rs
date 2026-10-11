@@ -1335,6 +1335,7 @@ mod tests {
         .unwrap();
         for ride in 0..5 {
             session.vehicle = VehicleKind::ALL.get(ride).map(|kind| Vehicle {
+                tilt: 0.0,
                 kind: *kind,
                 heading: 0.,
             });
@@ -1401,7 +1402,11 @@ mod tests {
             (VehicleKind::Bike, "Pedal hard"),
             (VehicleKind::Kayak, "Paddle hard"),
         ] {
-            session.vehicle = Some(Vehicle { kind, heading: 0. });
+            session.vehicle = Some(Vehicle {
+                tilt: 0.0,
+                kind,
+                heading: 0.,
+            });
             let layout = Layout::for_session(size, &session, false, None);
             assert_eq!(
                 layout

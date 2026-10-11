@@ -374,21 +374,29 @@ fn button(
             ));
         });
 }
+fn passenger_count(session: &Session, carriage_id: u64) -> usize {
+    session
+        .players
+        .iter()
+        .filter_map(|p| p.glider_ride)
+        .chain(session.residents.iter().filter_map(|r| r.glider_ride))
+        .filter(|r| r.carriage_id == carriage_id)
+        .count()
+}
+
 fn targets(session: &Session, station: &WhipStation) -> Vec<(String, GliderDestination)> {
     if let Some(waiting) = session
         .gliders
         .iter()
         .find(|f| f.station_id == station.village_id && f.started_at.is_none())
     {
-        let aboard = session
-            .players
-            .iter()
-            .filter(|p| p.glider_ride.is_some_and(|r| r.carriage_id == waiting.id))
-            .count();
-        return vec![(
-            format!("Join {} · {aboard} / 4 aboard", waiting.destination_name),
-            waiting.destination,
-        )];
+        let aboard = passenger_count(session, waiting.id);
+        if aboard > 0 {
+            return vec![(
+                format!("Join {} · {aboard} / 4 aboard", waiting.destination_name),
+                waiting.destination,
+            )];
+        }
     }
     let mut list: Vec<_> = session
         .players
@@ -884,11 +892,7 @@ pub(crate) fn refresh(
                 format!(
                     "{} · {} / 4 aboard",
                     f.destination_name,
-                    session
-                        .players
-                        .iter()
-                        .filter(|p| p.glider_ride.is_some_and(|r| r.carriage_id == f.id))
-                        .count()
+                    passenger_count(&session, f.id)
                 )
             },
         );
@@ -1094,6 +1098,51 @@ mod tests {
                 GliderDestination::Village(3)
             )]
         );
+        let ride = session.players[0].glider_ride;
+        session.players[0].glider_ride = None;
+        session.whip_stations = vec![
+            station.clone(),
+            WhipStation {
+                village_id: 3,
+                name: "Pinevale".into(),
+                ..station.clone()
+            },
+            WhipStation {
+                village_id: 4,
+                name: "Oakvale".into(),
+                ..station.clone()
+            },
+        ];
+        assert_eq!(
+            targets(&session, &station).len(),
+            2,
+            "an empty waiting carriage must not hide other towns"
+        );
+        session
+            .residents
+            .push(rubblekin_core::protocol::ResidentSnapshot {
+                id: 7,
+                village_id: 1,
+                name: "Trader".into(),
+                position: station.position,
+                role: rubblekin_core::protocol::ResidentRole::Trader,
+                action: rubblekin_core::protocol::ResidentAction::Delivering,
+                target: None,
+                carrying: None,
+                hunger: 25.,
+                energy: 85.,
+                reason: "Travelling".into(),
+                ride: None,
+                deck_position: None,
+                glider_ride: ride,
+            });
+        assert_eq!(passenger_count(&session, 2), 1);
+        assert_eq!(
+            targets(&session, &station)[0].0,
+            "Join Pinevale · 1 / 4 aboard"
+        );
+        session.players[0].glider_ride = ride;
+        assert_eq!(passenger_count(&session, 2), 2);
         session.glider_ride = session.players[0].glider_ride;
         assert!(travel_hint(&session, true).contains("Leave steps off"));
         assert!(travel_hint(&session, false).contains("Space steps off"));

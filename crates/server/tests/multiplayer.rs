@@ -3081,7 +3081,7 @@ fn wildlife_replicates_advances_without_clients_and_keeps_its_saved_population()
     server.stop().unwrap();
     let mut saved: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    assert_eq!(saved["version"], 12);
+    assert_eq!(saved["version"], 13);
     saved["ecology"]["animals"][0]["hunger"] = 12.345.into();
     fs::write(&config.save_path, serde_json::to_vec(&saved).unwrap()).unwrap();
     let server = spawn(config.clone()).unwrap();
@@ -3343,7 +3343,7 @@ fn personal_vehicles_are_authoritative_shared_read_only_for_observers_and_resume
     server.stop().unwrap();
     let saved: serde_json::Value =
         serde_json::from_slice(&fs::read(&config.save_path).unwrap()).unwrap();
-    assert_eq!(saved["version"], 12);
+    assert_eq!(saved["version"], 13);
     assert_eq!(saved["profiles"][profile]["vehicle"]["kind"], "Bike");
     let server = spawn(config).unwrap();
     let (mut rider, welcome) = Client::connect_profile(server.addr, profile);

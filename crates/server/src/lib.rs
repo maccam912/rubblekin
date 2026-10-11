@@ -7,6 +7,7 @@ mod airships;
 mod building;
 mod ecology;
 mod forage_work;
+mod glider_service;
 mod gliders;
 mod local_work;
 mod navigation;
@@ -542,16 +543,20 @@ fn run(
         resident_obstacles.push(sim.npc.snapshot.position);
         let passenger_seats: Vec<_> = connections
             .values()
-            .filter_map(|connection| connection.player.as_ref().and_then(|player| player.ride))
+            .filter(|c| !c.dead)
+            .filter_map(|c| c.player.as_ref().and_then(|p| p.glider_ride))
             .collect();
-        sim.villages.tick_with_transport(
+        sim.villages.tick_with_whips(
             &sim.world,
             DT,
             &resident_obstacles,
-            &airships,
+            &mut sim.gliders,
             next_world_time,
             &passenger_seats,
         );
+        let trader_seats: Vec<_> = sim.villages.glider_rides().collect();
+        sim.gliders
+            .launch_traders(&sim.world, next_world_time, &trader_seats, &passenger_seats);
         let inhabitants_elapsed = inhabitants_started.elapsed();
         let wildlife_started = Instant::now();
         let mut wildlife_people = player_positions;

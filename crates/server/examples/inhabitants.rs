@@ -3,6 +3,9 @@
 #[allow(dead_code)]
 #[path = "../src/airships.rs"]
 mod airships;
+#[allow(dead_code)]
+#[path = "../src/glider_service.rs"]
+mod glider_service;
 #[path = "../src/navigation.rs"]
 mod navigation;
 #[allow(dead_code)]
@@ -12,10 +15,7 @@ mod npc;
 #[path = "../src/villages.rs"]
 mod villages;
 
-use rubblekin_core::{
-    airships::AirshipNetwork,
-    world::{World, WorldGeneration},
-};
+use rubblekin_core::world::{World, WorldGeneration};
 use std::time::Instant;
 
 fn main() {
@@ -27,10 +27,10 @@ fn main() {
         "use10..3600 simulated seconds"
     );
     let world = World::generate(seed, WorldGeneration::GeographyV6);
-    let network = AirshipNetwork::try_new(&world).unwrap();
+    let mut network = glider_service::GliderService::new(&world);
     let mut life = villages::VillageLife::new(&world);
     let mut npc = npc::Forager::new(&world);
-    life.sync_airship_riders(&network, 0.);
+    life.disable_airships();
     life.resolve_overlaps(&world, &[npc.snapshot.position]);
     npc.resolve_overlaps(&world, &life.positions().collect::<Vec<_>>());
     let start = Instant::now();
@@ -40,12 +40,26 @@ fn main() {
     let mut village_ms = 0_f64;
     for tick in 1..=seconds * 20 {
         time += 0.05_f32 as f64;
-        life.sync_airship_riders(&network, time);
+
         let positions: Vec<_> = life.positions().collect();
         let before = Instant::now();
         npc.tick_with_obstacles(&world, 0.05, &positions);
         let middle = Instant::now();
-        life.tick_with_transport(&world, 0.05, &[npc.snapshot.position], &network, time, &[]);
+        life.tick_with_whips(
+            &world,
+            0.05,
+            &[npc.snapshot.position],
+            &mut network,
+            time,
+            &[],
+        );
+        let occupied: Vec<_> = life.glider_rides().collect();
+        network.launch_traders(&world, time, &occupied, &[]);
+        network.flights.retain(|f| {
+            occupied.iter().any(|r| r.carriage_id == f.id)
+                || f.started_at
+                    .is_none_or(|start| time < start + f.duration + 20.0)
+        });
         let after = Instant::now();
         npc_ms += middle.duration_since(before).as_secs_f64() * 1000.;
         village_ms += after.duration_since(middle).as_secs_f64() * 1000.;
@@ -70,6 +84,8 @@ fn main() {
                     "npc_mean_ms":npc_ms / count as f64,
                     "village_mean_ms":village_ms / count as f64,
                     "residents":life.residents().len(),
+                    "traders_aboard":occupied.len(),
+                    "carriages":network.flights.len(),
                     "state_fingerprint":format!("{fingerprint:016x}"),
                 })
             );

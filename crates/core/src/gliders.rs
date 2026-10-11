@@ -53,6 +53,30 @@ pub fn stations(world: &World) -> Vec<WhipStation> {
     })
 }
 
+/// Existing roads from the village centre to the roadside launch.
+pub fn station_approach(world: &World, village_id: u32) -> Vec<[f32; 3]> {
+    let Some(village) = world
+        .settlements()
+        .and_then(|p| p.villages.iter().find(|v| v.id == village_id))
+    else {
+        return Vec::new();
+    };
+    let port = crate::airships::port(world, village);
+    let Some(landing) = crate::airship_landings::landings(world, village, &port, 1)
+        .into_iter()
+        .next()
+    else {
+        return Vec::new();
+    };
+    let mut path = port.approach;
+    path.extend(landing.approach.into_iter().skip(1));
+    // Retired ship ramps are not active ground. Re-sample the road surface.
+    for p in &mut path {
+        p[1] = world.surface_height(p[0], p[2]);
+    }
+    path
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GliderDestination {
     Village(u32),

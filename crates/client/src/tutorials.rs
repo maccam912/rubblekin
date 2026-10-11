@@ -1371,7 +1371,11 @@ mod tests {
             let (mut app, _peer) = app();
             let lesson = vehicle_lesson(kind);
             app.world_mut().resource_mut::<Session>().vehicle =
-                Some(rubblekin_core::vehicles::Vehicle { kind, heading: 0. });
+                Some(rubblekin_core::vehicles::Vehicle {
+                    tilt: 0.0,
+                    kind,
+                    heading: 0.,
+                });
             app.update();
             assert_eq!(app.world().resource::<Tutorials>().active, Some(lesson));
             app.world_mut().resource_mut::<Session>().body.position[0] += 2.;
@@ -1433,7 +1437,11 @@ mod tests {
             app.world_mut().resource_mut::<TouchControls>().enabled = true;
             {
                 let mut session = app.world_mut().resource_mut::<Session>();
-                session.vehicle = Some(rubblekin_core::vehicles::Vehicle { kind, heading: 0. });
+                session.vehicle = Some(rubblekin_core::vehicles::Vehicle {
+                    tilt: 0.0,
+                    kind,
+                    heading: 0.,
+                });
                 session.status_until = 0.;
             }
             app.update();
@@ -1572,6 +1580,7 @@ mod tests {
             .start(Lesson::Building);
         app.world_mut().resource_mut::<Session>().vehicle =
             Some(rubblekin_core::vehicles::Vehicle {
+                tilt: 0.0,
                 kind: VehicleKind::Bike,
                 heading: 0.,
             });
